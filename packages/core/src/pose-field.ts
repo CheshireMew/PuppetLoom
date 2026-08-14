@@ -128,6 +128,25 @@ function applyEyePerspective(layer: LayerBinding, posed: Point, posedPivot: Poin
   };
 }
 
+function applyFaceSilhouette(field: CoherentPoseField, layer: LayerBinding, base: Point, posed: Point, yaw: number): Point {
+  if (layer.role !== "face") return posed;
+  const turn = clamp(yaw, -1, 1);
+  const amount = Math.abs(turn);
+  if (amount < 1e-9) return posed;
+  const localX = clamp((base.x - field.center.x) / Math.max(1e-6, field.radiusX), -1, 1);
+  const side = localX < -1e-6 ? -1 : localX > 1e-6 ? 1 : 0;
+  const edge = Math.abs(localX);
+  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+  const cheekWeight = clamp((v - 0.18) / 0.72, 0, 1);
+  const jawWeight = clamp((v - 0.55) / 0.45, 0, 1);
+  const farSide = Math.max(0, -turn * side);
+  const nearSide = Math.max(0, turn * side);
+  const direction = Math.sign(turn);
+  const cheekShift = direction * field.radiusX * edge * cheekWeight * (farSide * 0.18 + nearSide * 0.035);
+  const chinShift = direction * field.radiusX * (1 - edge) * jawWeight * amount * 0.08;
+  return { x: posed.x + cheekShift + chinShift, y: posed.y };
+}
+
 export function applyCoherentPoseField(
   field: CoherentPoseField,
   layer: LayerBinding,
@@ -140,5 +159,6 @@ export function applyCoherentPoseField(
   if (Math.abs(yawAngle) < 1e-9 && Math.abs(pitchAngle) < 1e-9) return { ...base };
   const posed = projectSurface(field, layer, base, yawAngle, pitchAngle);
   const posedPivot = projectSurface(field, layer, layer.pivot, yawAngle, pitchAngle);
-  return applyEyePerspective(layer, posed, posedPivot, yaw);
+  const perspective = applyEyePerspective(layer, posed, posedPivot, yaw);
+  return applyFaceSilhouette(field, layer, base, perspective, yaw);
 }

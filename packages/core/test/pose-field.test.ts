@@ -84,4 +84,17 @@ describe("coherent semantic pose field", () => {
     expect(posedRight.x - posedLeft.x).not.toBeCloseTo(right.x - left.x, 4);
     expect(posedLeft.y).not.toBeCloseTo(left.y, 4);
   });
+
+  it("pulls the far cheek inward and carries the lower face into the turn", () => {
+    const face = layer("face");
+    const leftCheek = { x: 0.36, y: 0.4 };
+    const rightCheek = { x: 0.64, y: 0.4 };
+    const chin = { x: 0.5, y: 0.49 };
+    const posedLeft = applyCoherentPoseField(field, face, leftCheek, 0.8, 0);
+    const posedRight = applyCoherentPoseField(field, face, rightCheek, 0.8, 0);
+    const posedChin = applyCoherentPoseField(field, face, chin, 0.8, 0);
+    expect(posedLeft.x - leftCheek.x).toBeGreaterThan(posedRight.x - rightCheek.x);
+    expect(posedRight.x - posedLeft.x).toBeLessThan(rightCheek.x - leftCheek.x);
+    expect(posedChin.x).toBeGreaterThan(chin.x);
+  });
 });

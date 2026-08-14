@@ -163,8 +163,8 @@ export class CalmMotionController {
     const desiredYaw = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "yaw") : 0) + microYaw) * tuning.amplitude));
     const desiredPitch = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch) * tuning.amplitude));
     const desiredRoll = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "roll") : 0) + microRoll) * tuning.amplitude));
-    const gazeX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.45 : 0) + microYaw * 0.7) * tuning.amplitude;
-    const gazeY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.2 : 0) + microPitch * 0.55) * tuning.amplitude;
+    const gazeTargetX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.25 : 0) + microYaw * 0.7) * tuning.amplitude;
+    const gazeTargetY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.05 : 0) + microPitch * 0.55) * tuning.amplitude;
     const delta = this.lastTime === 0 ? 1 / 60 : Math.max(1 / 240, Math.min(0.05, timeSeconds - this.lastTime));
     this.lastTime = timeSeconds;
 
@@ -174,6 +174,8 @@ export class CalmMotionController {
     const yaw = Math.max(-1, Math.min(1, this.trackedYaw.value));
     const pitch = Math.max(-1, Math.min(1, this.trackedPitch.value));
     const roll = Math.max(-1, Math.min(1, this.trackedRoll.value));
+    const gazeX = gazeTargetX - yaw * 0.55;
+    const gazeY = gazeTargetY - pitch * 0.42;
 
     advanceTracking(this.trackedBody, yaw * 0.38, delta, 0, Math.min(1, tuning.stability + 0.35));
     advanceTracking(this.trackedBodyRoll, roll * 0.4, delta, 0, Math.min(1, tuning.stability + 0.35));

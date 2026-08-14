@@ -41,6 +41,9 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...frameSteps)).toBeLessThan(0.04);
     const bodySteps = states.slice(1).map((state, index) => Math.abs(state.bodySway - states[index]!.bodySway));
     expect(Math.max(...bodySteps)).toBeLessThan(Math.max(...frameSteps));
+    const peakTurn = states.reduce((peak, state) => Math.abs(state.headYaw) > Math.abs(peak.headYaw) ? state : peak, states[0]!);
+    expect(Math.sign(peakTurn.gazeX)).toBe(Math.sign(peakTurn.headYaw));
+    expect(Math.abs(peakTurn.gazeX)).toBeLessThan(0.8);
   });
 
   it("moves the gaze before the head and lets the body follow later", () => {
