@@ -189,6 +189,7 @@ function disabledReasons(features: RuntimeFeatures, imported: ImportedPsd, level
   if (!features.gaze) reasons.push("缺少成对眼白或虹膜，已关闭视线移动。" );
   if (!features.hairPhysics) reasons.push("没有可用的头发图层，已关闭头发惯性。" );
   if (!features.blink) reasons.push("缺少闭眼图层，当前结果不启用眨眼。" );
+  if (!features.mouthMotion) reasons.push("缺少闭合、微张和张开三态嘴形，当前结果不启用嘴部开合。" );
   if (!features.bodyFollow) reasons.push("没有识别到脖子或上身，已关闭身体跟随。" );
   if (imported.layers.some((layer) => layer.role === "unknown")) reasons.push("未识别图层保持原样，不参与专用变形。" );
   return reasons;

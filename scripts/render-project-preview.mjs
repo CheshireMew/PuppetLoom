@@ -80,11 +80,18 @@ const encoder = spawn(ffmpeg, [
   "-row-mt", "1", "-metadata:s:v:0", "alpha_mode=1", outputPath
 ], { stdio: ["pipe", "ignore", "pipe"] });
 const encoderExit = waitForExit(encoder, "预览编码");
+const motionProbe = new CalmMotionController(project);
+let mouthPeak = { time: 0, value: 0 };
+for (let index = 0; index < frameCount; index += 1) {
+  const time = index / fps;
+  const value = motionProbe.sample(time).mouthOpen;
+  if (value > mouthPeak.value) mouthPeak = { time, value };
+}
 const eventPeaks = new CalmMotionController(project).events
   .map((event) => event.start + event.transition + event.hold * 0.5)
   .filter((time) => time < durationSeconds - 0.5)
   .slice(0, 3);
-const sampleTimes = [0, ...eventPeaks];
+const sampleTimes = [0, ...(mouthPeak.value > 0 ? [mouthPeak.time] : []), ...eventPeaks];
 const sampleIndices = new Set(sampleTimes.map((time) => Math.min(frameCount - 1, Math.round(time * fps))));
 const samples = [];
 
@@ -164,6 +171,10 @@ const report = {
   frameCount,
   previewSize,
   sampleTimes: sampleTimes.map((time) => Number(time.toFixed(2))),
+  mouthPeak: {
+    time: Number(mouthPeak.time.toFixed(2)),
+    value: Number(mouthPeak.value.toFixed(4))
+  },
   changedRatios: changeRatios.map((value) => Number(value.toFixed(6))),
   maximumChangedRatio: Number(Math.max(...changeRatios).toFixed(6))
 };

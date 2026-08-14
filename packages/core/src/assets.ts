@@ -174,6 +174,8 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
     }
   }
 
+  const blinkEnabled = ["left", "right"].every((side) => layers.some((layer) => layer.role === "eyeClosed" && layer.side === side));
+  const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant && layer.opacity > 0));
   const nextProject: PuppetLoomProject = {
     ...project,
     layers: layers.sort((a, b) => a.order - b.order),
@@ -181,10 +183,11 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
       ...project.runtime,
       features: {
         ...project.runtime.features,
-        blink: ["left", "right"].every((side) => layers.some((layer) => layer.role === "eyeClosed" && layer.side === side))
+        blink: blinkEnabled,
+        mouthMotion: mouthMotionEnabled
       }
     },
-    disabledReasons: project.disabledReasons.filter((reason) => !reason.includes("闭眼图层"))
+    disabledReasons: project.disabledReasons.filter((reason) => !(blinkEnabled && reason.includes("闭眼图层")) && !(mouthMotionEnabled && reason.includes("三态嘴形")))
   };
 
   if (accepted.length > 0) {
@@ -202,7 +205,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
         enabledFeatures: string[];
         disabledFeatures: string[];
       };
-      const features = Object.entries(nextProject.runtime.features).filter(([name]) => name !== "mouthMotion");
+      const features = Object.entries(nextProject.runtime.features);
       report.layerCount = nextProject.layers.length;
       report.enabledFeatures = features.filter(([, enabled]) => enabled).map(([name]) => name);
       report.disabledFeatures = features.filter(([, enabled]) => !enabled).map(([name]) => name);

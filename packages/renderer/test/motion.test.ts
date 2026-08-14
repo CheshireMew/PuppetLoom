@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import { CalmMotionController } from "../src/motion.js";
 import { layersInRenderOrder, opacityFor } from "../src/renderer.js";
 
-function fixtureProject(seed = 42): PuppetLoomProject {
+function fixtureProject(seed = 42, mouthMotion = false): PuppetLoomProject {
   return {
     runtime: {
       seed,
       profile: "calm-v1",
-      features: { headTurn: true, bodyFollow: true, gaze: true, hairPhysics: true, blink: false, mouthMotion: false },
+      features: { headTurn: true, bodyFollow: true, gaze: true, hairPhysics: true, blink: false, mouthMotion },
       envelope: { headYaw: 0.12, headPitch: 0.08, headRollDegrees: 4, bodySway: 0.02, bodyRollDegrees: 2, breath: 0.018, gazeX: 0.2, gazeY: 0.12, globalScale: 1 }
     }
   } as PuppetLoomProject;
@@ -56,6 +56,16 @@ describe("calm autonomous timeline", () => {
     controller.reset();
     const duringTurn = controller.sample(first.start + first.transition * 0.55);
     expect(Math.abs(duringTurn.headYaw)).toBeGreaterThan(Math.abs(duringTurn.bodySway));
+  });
+
+  it("opens and closes the mouth occasionally instead of chattering continuously", () => {
+    const controller = new CalmMotionController(fixtureProject(42, true));
+    const states = Array.from({ length: 1200 }, (_, index) => controller.sample(index / 60));
+    expect(states.some((state) => state.mouthOpen > 0.8)).toBe(true);
+    expect(states.some((state) => state.mouthOpen === 0)).toBe(true);
+    expect(states.filter((state) => state.mouthOpen > 0).length / states.length).toBeLessThan(0.3);
+    const steps = states.slice(1).map((state, index) => Math.abs(state.mouthOpen - states[index]!.mouthOpen));
+    expect(Math.max(...steps)).toBeLessThan(0.14);
   });
 });
 

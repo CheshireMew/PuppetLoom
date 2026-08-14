@@ -114,6 +114,23 @@ function blinkValue(time: number, seed: number): number {
   return 0;
 }
 
+function mouthValue(time: number, seed: number): number {
+  const random = mulberry32(seed ^ 0x6a09e667);
+  let cursor = 2.2 + random() * 1.2;
+  while (cursor <= time) {
+    const duration = 1.2 + random() * 0.3;
+    const peak = 0.94 + random() * 0.06;
+    if (time <= cursor + duration) {
+      const phase = (time - cursor) / duration;
+      if (phase < 0.3) return peak * smoothstep(phase / 0.3);
+      if (phase < 0.5) return peak;
+      return peak * (1 - smoothstep((phase - 0.5) / 0.5));
+    }
+    cursor += 5.8 + random() * 3;
+  }
+  return 0;
+}
+
 export class CalmMotionController {
   readonly project: PuppetLoomProject;
   readonly events: MotionEvent[];
@@ -213,7 +230,7 @@ export class CalmMotionController {
       accessoryX: this.project.runtime.features.hairPhysics ? this.accessory.x : 0,
       accessoryY: this.project.runtime.features.hairPhysics ? this.accessory.y : 0,
       blink: this.project.runtime.features.blink ? blinkValue(timeSeconds, this.project.runtime.seed) : 0,
-      mouthOpen: 0
+      mouthOpen: this.project.runtime.features.mouthMotion ? mouthValue(timeSeconds, this.project.runtime.seed) : 0
     };
   }
 }

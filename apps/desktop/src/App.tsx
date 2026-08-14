@@ -194,7 +194,7 @@ function Creator(): React.JSX.Element {
             <button onClick={() => void choose("output")}>选择目录</button>
           </section>
           <button className="primary" disabled={!ready} onClick={() => void create()}>{busy ? "正在创建并验证…" : "创建角色项目"}</button>
-          <p className="policy">嘴部保持不动；缺少闭眼素材不会阻塞创建。程序会先缩小动作范围，必要时自动降级绑定。</p>
+          <p className="policy">缺少三态嘴形时嘴部保持不动；接入后只偶发一次缓慢开合，不连续无声说话。缺少闭眼素材不会阻塞创建。</p>
         </section>
         <aside className="status-panel">
           <h2>自动检查</h2>

@@ -103,7 +103,7 @@ async function writePoseSheet(output: string, imported: ImportedPsd, project: Pu
 }
 
 function buildReport(project: PuppetLoomProject, recognized: number, warnings: string[], assetRequestCount: number): BuildReport {
-  const featureEntries = Object.entries(project.runtime.features).filter(([key]) => key !== "mouthMotion");
+  const featureEntries = Object.entries(project.runtime.features);
   return {
     version: 1,
     project: project.name,

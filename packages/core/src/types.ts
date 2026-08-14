@@ -113,7 +113,7 @@ export interface RuntimeFeatures {
   gaze: boolean;
   hairPhysics: boolean;
   blink: boolean;
-  mouthMotion: false;
+  mouthMotion: boolean;
 }
 
 export interface CoherentPoseField {
