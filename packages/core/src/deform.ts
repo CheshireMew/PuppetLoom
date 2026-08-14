@@ -47,6 +47,8 @@ function breathInfluence(layer: LayerBinding): number {
 function physicsOffset(layer: LayerBinding, state: MotionState): Point {
   if (layer.role === "backHair") return { x: state.backHairX, y: state.backHairY };
   if (layer.role === "headwear" || layer.role === "ear") return { x: state.earX, y: state.earY };
+  if (layer.role === "topWear" || layer.role === "bottomWear") return { x: state.clothX, y: state.clothY };
+  if (layer.role === "tail") return { x: state.tailX, y: state.tailY };
   if (layer.role === "accessory") return { x: state.accessoryX, y: state.accessoryY };
   return { x: state.hairX, y: state.hairY };
 }
@@ -54,12 +56,28 @@ function physicsOffset(layer: LayerBinding, state: MotionState): Point {
 function secondaryFree(layer: LayerBinding, base: Point): number {
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+  if (layer.role === "frontHair") return smoothstep01((v - 0.36) / 0.64) ** 2;
   if (layer.role === "headwear" || layer.role === "ear") {
     const outer = smoothstep01((Math.abs(u - 0.5) - 0.18) / 0.32);
     const belowBand = smoothstep01((v - 0.18) / 0.72);
     return outer * belowBand;
   }
+  if (layer.role === "tail") {
+    const distanceFromRoot = Math.hypot((u - 0.03) * 0.9, (v - 0.08) * 0.74);
+    return smoothstep01((distanceFromRoot - 0.14) / 0.68);
+  }
+  if (layer.role === "topWear") return smoothstep01((v - 0.52) / 0.48) ** 2;
+  if (layer.role === "bottomWear") return smoothstep01((v - 0.12) / 0.88) ** 2;
   return v * v;
+}
+
+function ahogeFree(layer: LayerBinding, base: Point): number {
+  if (layer.role !== "frontHair") return 0;
+  const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
+  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+  const center = 1 - smoothstep01((Math.abs(u - 0.5) - 0.1) / 0.27);
+  const aboveRoot = smoothstep01((0.38 - v) / 0.34);
+  return center * aboveRoot;
 }
 
 function hasSidePerspective(layer: LayerBinding): boolean {
@@ -132,15 +150,31 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
 
   if (layer.weights.physics > 0) {
     const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
+    const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
     const free = secondaryFree(layer, base);
     const physics = physicsOffset(layer, state);
     const flexibleFeature = layer.role === "headwear" || layer.role === "ear";
-    const flexibility = flexibleFeature ? 1.35 : 1;
+    const clothFeature = layer.role === "topWear" || layer.role === "bottomWear";
+    const tailFeature = layer.role === "tail";
+    const flexibility = flexibleFeature ? 1.35 : tailFeature ? 1.12 : clothFeature ? 4 : 1;
     point.x += physics.x * faceWidth * 1.6 * flexibility * layer.weights.physics * free;
     point.y += physics.y * faceHeight * 0.84 * flexibility * layer.weights.physics * free;
     if (layer.role === "frontHair" || layer.role === "backHair" || layer.role === "sideHair" || flexibleFeature) {
       const twist = flexibleFeature ? 0.22 : 0.14;
       point.y += physics.x * (u - 0.5) * faceHeight * twist * layer.weights.physics * free;
+    }
+    if (clothFeature) {
+      point.y += physics.x * (u - 0.5) * faceHeight * 0.08 * layer.weights.physics * free;
+    }
+    if (tailFeature) {
+      point.y += physics.x * (u - 0.03) * faceHeight * 0.34 * layer.weights.physics * free;
+      point.x -= physics.y * (v - 0.08) * faceWidth * 0.28 * layer.weights.physics * free;
+    }
+    if (layer.role === "frontHair") {
+      const ahoge = ahogeFree(layer, base);
+      point.x += state.ahogeX * faceWidth * 1.9 * layer.weights.physics * ahoge;
+      point.y += state.ahogeY * faceHeight * 0.9 * layer.weights.physics * ahoge;
+      point.y += state.ahogeX * (u - 0.5) * faceHeight * 0.24 * layer.weights.physics * ahoge;
     }
   }
 
@@ -162,10 +196,16 @@ export const neutralMotionState: MotionState = {
   breath: 0,
   hairX: 0,
   hairY: 0,
+  ahogeX: 0,
+  ahogeY: 0,
   backHairX: 0,
   backHairY: 0,
   earX: 0,
   earY: 0,
+  clothX: 0,
+  clothY: 0,
+  tailX: 0,
+  tailY: 0,
   accessoryX: 0,
   accessoryY: 0,
   blink: 0,

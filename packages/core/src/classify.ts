@@ -27,7 +27,8 @@ const roleMatchers: Array<{ role: SemanticRole; patterns: RegExp[] }> = [
   { role: "mouth", patterns: [/(^|[^a-z])mouth([^a-z]|$)/, /嘴/, /口/] },
   { role: "ear", patterns: [/(^|[^a-z])ears?([^a-z]|$)/, /耳/] },
   { role: "neck", patterns: [/(^|[^a-z])neck([^a-z]|$)/, /脖子/, /颈/, /首/] },
-  { role: "accessory", patterns: [/accessory/, /ornament/, /attachment/, /(^|[^a-z])tail([^a-z]|$)/, /尾巴/, /尻尾/, /しっぽ/, /饰品/, /配件/, /装饰/] }
+  { role: "tail", patterns: [/(^|[^a-z])tail([^a-z]|$)/, /尾巴/, /尻尾/, /しっぽ/] },
+  { role: "accessory", patterns: [/accessory/, /ornament/, /attachment/, /饰品/, /配件/, /装饰/] }
 ];
 
 export function normalizeLayerName(name: string): string {
@@ -85,6 +86,7 @@ export function roleLabel(role: SemanticRole): string {
     leg: "腿",
     foot: "脚",
     headwear: "头饰",
+    tail: "尾巴",
     accessory: "饰品",
     unknown: "未识别"
   };

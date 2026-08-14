@@ -23,6 +23,8 @@ npm run test:performance
 - `test:visual`：直接导出 WebGL 画布的两帧 PNG，确认画布同时存在透明与可见像素，并确认自主运动让前后帧发生变化。Windows 系统截窗会把透明区保存为不透明黑色，因此不作为 Alpha 真源。
 - `test:performance`：运行 1280×1280、23 层项目，预热后采样 329 帧；要求平均帧率至少 57 FPS，95 分位帧时不超过 25 ms，并确认 WebGL2 可用。
 
+真实项目还可执行 `node scripts/report-secondary-motion.mjs <project-dir> 26`。它以 60 Hz 采样呆毛、前后发、耳朵、衣摆、尾巴和饰品，分别报告状态峰值、固定区与自由端像素位移，并用当前变形代码重新检查 13 个安全姿态。
+
 所有运行产物写入 `test/artifacts`，该目录默认不提交。测试不会删除用户文件或清空目录；每轮使用新的带时间戳子目录。
 
 ## 当前机器验收基线

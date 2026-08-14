@@ -42,7 +42,11 @@ function meshDensity(layer: ImportedLayer): { rows: number; cols: number } {
   if (fineRoles.has(layer.role)) return { rows: 4, cols: 4 };
   const cols = Math.max(4, Math.min(14, Math.ceil(layer.bounds.width / 72) + 2));
   const rows = Math.max(4, Math.min(14, Math.ceil(layer.bounds.height / 72) + 2));
-  if (layer.role === "face" || hairRoles.has(layer.role)) return { rows: Math.max(rows, 8), cols: Math.max(cols, 8) };
+  if (layer.role === "frontHair") return { rows: Math.max(rows, 12), cols: Math.max(cols, 10) };
+  if (layer.role === "backHair" || layer.role === "sideHair") return { rows: Math.max(rows, 10), cols: Math.max(cols, 10) };
+  if (layer.role === "headwear") return { rows: Math.max(rows, 8), cols: Math.max(cols, 10) };
+  if (layer.role === "tail" || layer.role === "bottomWear") return { rows: Math.max(rows, 10), cols: Math.max(cols, 10) };
+  if (layer.role === "face") return { rows: Math.max(rows, 8), cols: Math.max(cols, 8) };
   return { rows, cols };
 }
 
@@ -72,6 +76,7 @@ export function makeGridMesh(bounds: Rect, rows: number, cols: number): MeshBind
 
 function pivotFor(role: SemanticRole, bounds: Rect): Point {
   if (hairRoles.has(role)) return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.15 });
+  if (role === "tail") return roundPoint({ x: bounds.x + bounds.width * 0.03, y: bounds.y + bounds.height * 0.08 });
   if (role === "arm" || role === "hand") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.08 });
   if (role === "leg" || role === "foot") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.05 });
   return roundPoint(rectCenter(bounds));
@@ -84,6 +89,9 @@ function weightsFor(role: SemanticRole, level: RigLevel, insideHead: boolean): L
   if (role === "headwear" || role === "ear") return { head: 1, body: 0, gaze: 0, physics: level === "semantic" ? 0.55 : 0.2 };
   if (headRoles.has(role) || (role === "unknown" && insideHead)) return { head: 1, body: 0, gaze: 0, physics: 0 };
   if (role === "neck") return { head: level === "semantic" ? 0.35 : 0.7, body: level === "semantic" ? 0.65 : 0.3, gaze: 0, physics: 0 };
+  if (role === "tail") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.75 : 0.3 };
+  if (role === "bottomWear") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.3 : 0.12 };
+  if (role === "topWear") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.1 : 0.04 };
   if (role === "accessory") return { head: insideHead ? 0.75 : 0, body: insideHead ? 0.25 : 1, gaze: 0, physics: level === "semantic" ? 0.65 : 0.25 };
   return { head: 0, body: 1, gaze: 0, physics: 0 };
 }
@@ -177,7 +185,7 @@ function featuresFor(imported: ImportedPsd, level: RigLevel): RuntimeFeatures {
     headTurn: level !== "minimal",
     bodyFollow: layers.some((layer) => layer.role === "topWear" || layer.role === "neck"),
     gaze: level === "semantic" && paired("eyeWhite") && paired("iris"),
-    hairPhysics: level !== "minimal" && layers.some((layer) => hairRoles.has(layer.role) || layer.role === "headwear" || layer.role === "ear"),
+    hairPhysics: level !== "minimal" && layers.some((layer) => hairRoles.has(layer.role) || layer.role === "headwear" || layer.role === "ear" || layer.role === "tail" || layer.role === "topWear" || layer.role === "bottomWear" || layer.role === "accessory"),
     blink: paired("eyeClosed"),
     mouthMotion: false
   };
@@ -187,7 +195,7 @@ function disabledReasons(features: RuntimeFeatures, imported: ImportedPsd, level
   const reasons: string[] = [];
   if (level !== "semantic") reasons.push("脸部语义不完整，已采用保守绑定。" );
   if (!features.gaze) reasons.push("缺少成对眼白或虹膜，已关闭视线移动。" );
-  if (!features.hairPhysics) reasons.push("没有可用的头发图层，已关闭头发惯性。" );
+  if (!features.hairPhysics) reasons.push("没有可用的头发、耳朵、衣摆、尾巴或饰品图层，已关闭次级运动。" );
   if (!features.blink) reasons.push("缺少闭眼图层，当前结果不启用眨眼。" );
   if (!features.mouthMotion) reasons.push("缺少闭合、微张和张开三态嘴形，当前结果不启用嘴部开合。" );
   if (!features.bodyFollow) reasons.push("没有识别到脖子或上身，已关闭身体跟随。" );

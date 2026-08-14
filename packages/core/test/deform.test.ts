@@ -40,6 +40,20 @@ function eyeLayer(role: SemanticRole): LayerBinding {
   };
 }
 
+function secondaryLayer(role: SemanticRole, bounds = { x: 0.35, y: 0.15, width: 0.3, height: 0.35 }): LayerBinding {
+  return {
+    ...eyeLayer(role),
+    bounds,
+    pivot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.1 },
+    mesh: makeGridMesh(bounds, 10, 10),
+    weights: { head: 0, body: 0, gaze: 0, physics: 1 }
+  };
+}
+
+function movement(from: { x: number; y: number }, to: { x: number; y: number }): number {
+  return Math.hypot(to.x - from.x, to.y - from.y);
+}
+
 describe("blink deformation", () => {
   it("briefly closes the height of open eye artwork around its own center", () => {
     const layer = eyeLayer("eyelash");
@@ -53,5 +67,33 @@ describe("blink deformation", () => {
     const layer = eyeLayer("eyeClosed");
     const point = { x: 0.45, y: 0.2 };
     expect(deformPoint(project, layer, point, { ...neutralMotionState, blink: 1 })).toEqual(point);
+  });
+});
+
+describe("secondary motion anchoring", () => {
+  it("pins the ahoge root while moving its tip independently from the bangs", () => {
+    const layer = secondaryLayer("frontHair");
+    const tip = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y };
+    const root = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y + layer.bounds.height * 0.38 };
+    const state = { ...neutralMotionState, ahogeX: 0.05 };
+    expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(movement(root, deformPoint(project, layer, root, state)) * 5);
+  });
+
+  it("pins the skirt waist and moves only the lower hem", () => {
+    const layer = secondaryLayer("bottomWear");
+    const waist = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y };
+    const hem = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y + layer.bounds.height };
+    const state = { ...neutralMotionState, clothX: 0.05 };
+    expect(movement(waist, deformPoint(project, layer, waist, state))).toBeLessThan(1e-8);
+    expect(movement(hem, deformPoint(project, layer, hem, state))).toBeGreaterThan(0.001);
+  });
+
+  it("pins the tail root and gradually releases its far end", () => {
+    const layer = secondaryLayer("tail");
+    const root = { x: layer.bounds.x + layer.bounds.width * 0.03, y: layer.bounds.y + layer.bounds.height * 0.08 };
+    const tip = { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y + layer.bounds.height * 0.55 };
+    const state = { ...neutralMotionState, tailX: 0.05 };
+    expect(movement(root, deformPoint(project, layer, root, state))).toBeLessThan(1e-8);
+    expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(0.001);
   });
 });

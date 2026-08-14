@@ -31,10 +31,13 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.headYaw) > 0.5)).toBe(true);
     expect(states.some((state) => Math.abs(state.bodySway) > 0.01)).toBe(true);
     expect(states.every((state) => Number.isFinite(state.hairX))).toBe(true);
-    expect(states.every((state) => Number.isFinite(state.backHairX) && Number.isFinite(state.earX) && Number.isFinite(state.accessoryX))).toBe(true);
+    expect(states.every((state) => Number.isFinite(state.ahogeX) && Number.isFinite(state.backHairX) && Number.isFinite(state.earX))).toBe(true);
+    expect(states.every((state) => Number.isFinite(state.clothX) && Number.isFinite(state.tailX) && Number.isFinite(state.accessoryX))).toBe(true);
     expect(states.some((state) => Math.abs(state.hairX - state.backHairX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.hairX - state.earX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.backHairX - state.accessoryX) > 0.001)).toBe(true);
+    expect(states.some((state) => Math.abs(state.ahogeX - state.hairX) > 0.001)).toBe(true);
+    expect(states.some((state) => Math.abs(state.tailX - state.clothX) > 0.001)).toBe(true);
     expect(states.every((state) => Math.abs(state.headYaw) <= 1 && Math.abs(state.headPitch) <= 1)).toBe(true);
     expect(states.some((state) => state.headPitch > 0.12)).toBe(true);
     const frameSteps = states.slice(1).map((state, index) => Math.abs(state.headYaw - states[index]!.headYaw));
@@ -44,6 +47,15 @@ describe("calm autonomous timeline", () => {
     const peakTurn = states.reduce((peak, state) => Math.abs(state.headYaw) > Math.abs(peak.headYaw) ? state : peak, states[0]!);
     expect(Math.sign(peakTurn.gazeX)).toBe(Math.sign(peakTurn.headYaw));
     expect(Math.abs(peakTurn.gazeX)).toBeLessThan(0.8);
+  });
+
+  it("keeps secondary parts gently moving between deliberate head turns", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    const states = Array.from({ length: 105 }, (_, index) => controller.sample(index / 60));
+    expect(states.some((state) => Math.abs(state.ahogeX) > 0.0001)).toBe(true);
+    expect(states.some((state) => Math.abs(state.clothX) > 0.0001)).toBe(true);
+    expect(states.some((state) => Math.abs(state.tailX) > 0.0001)).toBe(true);
+    expect(Math.max(...states.map((state) => Math.abs(state.tailX)))).toBeLessThan(0.08);
   });
 
   it("moves the gaze before the head and lets the body follow later", () => {

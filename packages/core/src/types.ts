@@ -25,6 +25,7 @@ export type SemanticRole =
   | "leg"
   | "foot"
   | "headwear"
+  | "tail"
   | "accessory"
   | "unknown";
 
@@ -316,10 +317,16 @@ export interface MotionState {
   breath: number;
   hairX: number;
   hairY: number;
+  ahogeX: number;
+  ahogeY: number;
   backHairX: number;
   backHairY: number;
   earX: number;
   earY: number;
+  clothX: number;
+  clothY: number;
+  tailX: number;
+  tailY: number;
   accessoryX: number;
   accessoryY: number;
   blink: number;

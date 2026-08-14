@@ -28,7 +28,7 @@ export const puppetLoomProjectSchema = z.object({
       sourceName: z.string(),
       sourcePath: z.array(z.string()),
       role: z.enum([
-        "backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "accessory", "unknown"
+        "backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "tail", "accessory", "unknown"
       ]),
       side: z.enum(["left", "right", "center"]),
       order: z.number().int(),

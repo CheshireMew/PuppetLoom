@@ -9,8 +9,8 @@ describe("layer name classification", () => {
     ["後ろ髪", "backHair", "center"],
     ["衣服", "topWear", "center"],
     ["闭眼-left", "eyeClosed", "left"],
-    ["tail", "accessory", "center"],
-    ["鲸鱼尾巴", "accessory", "center"],
+    ["tail", "tail", "center"],
+    ["鲸鱼尾巴", "tail", "center"],
     ["mystery layer", "unknown", "center"]
   ])("classifies %s", (name, role, side) => {
     expect(classifyLayerName(name)).toMatchObject({ role, side });

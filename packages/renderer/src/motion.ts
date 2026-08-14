@@ -138,14 +138,18 @@ export class CalmMotionController {
   private previousHead = 0;
   private previousPitch = 0;
   private previousRoll = 0;
+  private previousBody = 0;
   private readonly trackedYaw: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedPitch: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedBody: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedBodyRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly frontHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
+  private readonly ahoge: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly backHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly ear: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
+  private readonly cloth: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
+  private readonly tail: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly accessory: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
 
   constructor(project: PuppetLoomProject) {
@@ -158,11 +162,12 @@ export class CalmMotionController {
     this.previousHead = 0;
     this.previousPitch = 0;
     this.previousRoll = 0;
+    this.previousBody = 0;
     for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyRoll]) {
       axis.value = 0;
       axis.velocity = 0;
     }
-    for (const spring of [this.frontHair, this.backHair, this.ear, this.accessory]) {
+    for (const spring of [this.frontHair, this.ahoge, this.backHair, this.ear, this.cloth, this.tail, this.accessory]) {
       spring.x = 0;
       spring.y = 0;
       spring.velocityX = 0;
@@ -200,14 +205,21 @@ export class CalmMotionController {
     const headVelocity = Math.max(-2.5, Math.min(2.5, (yaw - this.previousHead) / delta));
     const pitchVelocity = Math.max(-2.5, Math.min(2.5, (pitch - this.previousPitch) / delta));
     const rollVelocity = Math.max(-2.5, Math.min(2.5, (roll - this.previousRoll) / delta));
+    const bodyVelocity = Math.max(-1.2, Math.min(1.2, (this.trackedBody.value - this.previousBody) / delta));
     this.previousHead = yaw;
     this.previousPitch = pitch;
     this.previousRoll = roll;
+    this.previousBody = this.trackedBody.value;
     const lateralVelocity = headVelocity + rollVelocity * 0.18;
-    advanceSpring(this.frontHair, lateralVelocity, pitchVelocity, delta, 28, 9.5, 0.3);
-    advanceSpring(this.backHair, lateralVelocity, pitchVelocity, delta, 16, 6.7, 0.48);
-    advanceSpring(this.ear, lateralVelocity, pitchVelocity, delta, 22, 7.8, 0.4);
-    advanceSpring(this.accessory, lateralVelocity, pitchVelocity, delta, 8.5, 4.6, 0.68);
+    const breezeX = Math.sin(timeSeconds * 0.72 + phase) * 0.11 + Math.sin(timeSeconds * 0.31 + phase * 0.73) * 0.045;
+    const breezeY = Math.sin(timeSeconds * 0.53 + phase * 1.37) * 0.05;
+    advanceSpring(this.frontHair, lateralVelocity + breezeX * 0.32, pitchVelocity + breezeY * 0.22, delta, 28, 9.5, 0.3);
+    advanceSpring(this.ahoge, lateralVelocity * 0.38 + breezeX * 1.05, pitchVelocity * 0.28 + breezeY * 0.75, delta, 13, 5.6, 0.52);
+    advanceSpring(this.backHair, lateralVelocity * 0.86 + breezeX * 0.45, pitchVelocity * 0.82 + breezeY * 0.35, delta, 16, 6.7, 0.48);
+    advanceSpring(this.ear, lateralVelocity * 0.72 + breezeX * 0.24, pitchVelocity * 0.55 + breezeY * 0.18, delta, 22, 7.8, 0.4);
+    advanceSpring(this.cloth, bodyVelocity * 0.62 + breezeX * 0.3, pitchVelocity * 0.08 + breezeY * 0.16, delta, 14, 7.2, 0.35);
+    advanceSpring(this.tail, bodyVelocity * 0.75 + breezeX * 0.9, pitchVelocity * 0.12 + breezeY * 0.4, delta, 6.5, 4.4, 0.68);
+    advanceSpring(this.accessory, lateralVelocity * 0.7 + breezeX * 0.55, pitchVelocity * 0.65 + breezeY * 0.42, delta, 8.5, 4.6, 0.68);
 
     const breathPeriod = 5.1 + ((this.project.runtime.seed % 17) / 17) * 0.7;
     const breath = Math.sin((timeSeconds / breathPeriod) * Math.PI * 2 - Math.PI * 0.5);
@@ -223,10 +235,16 @@ export class CalmMotionController {
       breath,
       hairX: this.project.runtime.features.hairPhysics ? this.frontHair.x : 0,
       hairY: this.project.runtime.features.hairPhysics ? this.frontHair.y : 0,
+      ahogeX: this.project.runtime.features.hairPhysics ? this.ahoge.x : 0,
+      ahogeY: this.project.runtime.features.hairPhysics ? this.ahoge.y : 0,
       backHairX: this.project.runtime.features.hairPhysics ? this.backHair.x : 0,
       backHairY: this.project.runtime.features.hairPhysics ? this.backHair.y : 0,
       earX: this.project.runtime.features.hairPhysics ? this.ear.x : 0,
       earY: this.project.runtime.features.hairPhysics ? this.ear.y : 0,
+      clothX: this.project.runtime.features.hairPhysics ? this.cloth.x : 0,
+      clothY: this.project.runtime.features.hairPhysics ? this.cloth.y : 0,
+      tailX: this.project.runtime.features.hairPhysics ? this.tail.x : 0,
+      tailY: this.project.runtime.features.hairPhysics ? this.tail.y : 0,
       accessoryX: this.project.runtime.features.hairPhysics ? this.accessory.x : 0,
       accessoryY: this.project.runtime.features.hairPhysics ? this.accessory.y : 0,
       blink: this.project.runtime.features.blink ? blinkValue(timeSeconds, this.project.runtime.seed) : 0,
