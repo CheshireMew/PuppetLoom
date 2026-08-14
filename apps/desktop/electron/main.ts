@@ -9,11 +9,22 @@ const electronDirectory = dirname(fileURLToPath(import.meta.url));
 const preload = join(electronDirectory, "preload.cjs");
 const rendererPage = resolve(electronDirectory, "../renderer/index.html");
 const viewerStates = new Map<number, ViewerState>();
+const viewerProjects = new Map<number, string>();
 
-function queryProjectArgument(): string | undefined {
-  const index = process.argv.indexOf("--project");
-  const candidate = index >= 0 ? process.argv[index + 1] : undefined;
+function queryProjectArgument(commandLine = process.argv): string | undefined {
+  const index = commandLine.indexOf("--project");
+  const candidate = index >= 0 ? commandLine[index + 1] : undefined;
   return candidate ? resolve(candidate) : undefined;
+}
+
+function samePath(left: string, right: string): boolean {
+  return resolve(left).toLocaleLowerCase() === resolve(right).toLocaleLowerCase();
+}
+
+function projectFromAdditionalData(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const project = (value as Record<string, unknown>).project;
+  return typeof project === "string" && project ? resolve(project) : undefined;
 }
 
 function ownerWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | undefined {
@@ -39,6 +50,19 @@ function publishState(window: BrowserWindow, next: ViewerState): ViewerState {
   viewerStates.set(window.id, next);
   if (!window.isDestroyed()) window.webContents.send("viewer:state", next);
   return next;
+}
+
+function bringForward(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  const current = stateFor(window);
+  if (current.clickThrough) {
+    window.setIgnoreMouseEvents(false, { forward: true });
+    publishState(window, { ...current, clickThrough: false });
+  }
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.moveTop();
+  window.focus();
 }
 
 function controlViewer(window: BrowserWindow, action: string): ViewerState | null {
@@ -71,7 +95,15 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
 }
 
 async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
-  const project = await loadProject(projectDirectory);
+  const resolvedProject = resolve(projectDirectory);
+  for (const [id, directory] of viewerProjects) {
+    const existing = BrowserWindow.fromId(id);
+    if (existing && samePath(directory, resolvedProject)) {
+      bringForward(existing);
+      return existing;
+    }
+  }
+  const project = await loadProject(resolvedProject);
   const height = 720;
   const width = Math.max(300, Math.round(height * project.canvas.width / project.canvas.height));
   const window = new BrowserWindow({
@@ -91,8 +123,12 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
   });
   window.setAspectRatio(project.canvas.width / project.canvas.height);
   stateFor(window);
-  window.once("closed", () => viewerStates.delete(window.id));
-  await window.loadFile(rendererPage, { query: { viewer: "1", project: projectDirectory } });
+  viewerProjects.set(window.id, resolvedProject);
+  window.once("closed", () => {
+    viewerStates.delete(window.id);
+    viewerProjects.delete(window.id);
+  });
+  await window.loadFile(rendererPage, { query: { viewer: "1", project: resolvedProject } });
   return window;
 }
 
@@ -110,7 +146,30 @@ function createControlWindow(): BrowserWindow {
   return window;
 }
 
-app.whenReady().then(async () => {
+const initialProject = queryProjectArgument();
+const automatedExit = Number(process.env.PUPPETLOOM_E2E_EXIT_AFTER_MS ?? 0);
+const allowMultipleInstances = process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || (Number.isFinite(automatedExit) && automatedExit > 0);
+const hasInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock({ project: initialProject ?? "" });
+
+if (!hasInstanceLock) app.quit();
+
+if (hasInstanceLock && !allowMultipleInstances) {
+  app.on("second-instance", (_event, commandLine, _workingDirectory, additionalData) => {
+    const fromData = projectFromAdditionalData(additionalData);
+    const project = fromData ?? queryProjectArgument(commandLine);
+    void app.whenReady().then(async () => {
+      if (project) {
+        await createViewer(project);
+        return;
+      }
+      const control = BrowserWindow.getAllWindows().find((window) => !viewerProjects.has(window.id));
+      if (control) bringForward(control);
+      else createControlWindow();
+    });
+  });
+}
+
+if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("dialog:psd", (event) => chooseFile(event, [{ name: "Photoshop document", extensions: ["psd"] }]));
   ipcMain.handle("dialog:reference", (event) => chooseFile(event, [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }]));
   ipcMain.handle("dialog:output", async (event) => {
@@ -164,10 +223,9 @@ app.whenReady().then(async () => {
     }
   });
 
-  const project = queryProjectArgument();
+  const project = initialProject;
   if (project) await createViewer(project);
   else createControlWindow();
-  const automatedExit = Number(process.env.PUPPETLOOM_E2E_EXIT_AFTER_MS ?? 0);
   if (Number.isFinite(automatedExit) && automatedExit >= 250) setTimeout(() => app.quit(), automatedExit);
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createControlWindow();

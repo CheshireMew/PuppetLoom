@@ -9,7 +9,7 @@ await mkdir(resolve("test/artifacts"), { recursive: true });
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js")],
   cwd: root,
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1" }
 });
 
 try {
@@ -26,6 +26,9 @@ try {
   await viewer.getByTestId("viewer").waitFor();
   await viewer.locator("canvas").waitFor({ state: "visible" });
   await viewer.waitForFunction(() => document.querySelector("canvas")?.width && document.querySelector("canvas")?.height);
+
+  const duplicate = await control.evaluate((projectDirectory) => window.puppetloom.launchViewer(projectDirectory), output);
+  if (duplicate.id !== launched.id) throw new Error(`重复打开同一项目创建了多个窗口：${JSON.stringify({ first: launched.id, duplicate: duplicate.id })}`);
 
   const browserWindow = await electronApp.browserWindow(viewer);
   const nativeState = await browserWindow.evaluate((window) => ({

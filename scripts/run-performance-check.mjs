@@ -10,7 +10,7 @@ await createProject({ input: resolve("test/fixtures/performance-23.psd"), output
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js"), "--project", output],
   cwd: resolve("."),
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1" }
 });
 
 try {

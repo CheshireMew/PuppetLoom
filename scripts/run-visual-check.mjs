@@ -14,7 +14,7 @@ await createProject({ input: resolve("test/fixtures/semantic.psd"), output, seed
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js"), "--project", output],
   cwd: resolve("."),
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1" }
 });
 
 try {
