@@ -48,11 +48,25 @@ export const puppetLoomProjectSchema = z.object({
   }),
   runtime: z.object({
     seed: z.number().int(),
-    profile: z.literal("calm-v1"),
+    profile: z.enum(["calm-v1", "coherent-v1"]),
     envelope: z.object({
       headYaw: z.number().nonnegative(), headPitch: z.number().nonnegative(), headRollDegrees: z.number().nonnegative(), bodySway: z.number().nonnegative(), bodyRollDegrees: z.number().nonnegative(), gazeX: z.number().nonnegative(), gazeY: z.number().nonnegative(), breath: z.number().nonnegative(), globalScale: z.number().positive()
     }),
-    features: z.object({ headTurn: z.boolean(), bodyFollow: z.boolean(), gaze: z.boolean(), hairPhysics: z.boolean(), blink: z.boolean(), mouthMotion: z.literal(false) })
+    features: z.object({ headTurn: z.boolean(), bodyFollow: z.boolean(), gaze: z.boolean(), hairPhysics: z.boolean(), blink: z.boolean(), mouthMotion: z.literal(false) }),
+    poseField: z.object({
+      kind: z.literal("ellipsoid-v1"),
+      center: pointSchema,
+      radiusX: z.number().positive(),
+      radiusY: z.number().positive(),
+      maxYawRadians: z.number().positive(),
+      maxPitchRadians: z.number().positive(),
+      perspective: z.number().min(0).max(0.5)
+    }).optional(),
+    motionTuning: z.object({
+      amplitude: z.number().min(0).max(1.5),
+      response: z.number().min(0).max(1),
+      stability: z.number().min(0).max(1)
+    }).optional()
   }),
   quality: z.object({
     neutralSimilarity: z.number().min(-1).max(1).optional(),

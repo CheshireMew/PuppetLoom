@@ -1,4 +1,5 @@
 import { clamp } from "./math.js";
+import { applyCoherentPoseField } from "./pose-field.js";
 import type { LayerBinding, MotionState, Point, PuppetLoomProject } from "./types.js";
 
 function rotate(point: Point, pivot: Point, radians: number): Point {
@@ -93,24 +94,27 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
 
   if (layer.weights.head > 0) {
     const headWeight = layer.weights.head;
-    if (layer.side !== "center" && hasSidePerspective(layer)) {
-      const side = layer.side === "left" ? 1 : -1;
-      const perspectiveScale = 1 + yaw * side * 0.045 * headWeight;
-      point.x = layer.pivot.x + (point.x - layer.pivot.x) * perspectiveScale;
+    if (project.runtime.poseField) point = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch);
+    else {
+      if (layer.side !== "center" && hasSidePerspective(layer)) {
+        const side = layer.side === "left" ? 1 : -1;
+        const perspectiveScale = 1 + yaw * side * 0.045 * headWeight;
+        point.x = layer.pivot.x + (point.x - layer.pivot.x) * perspectiveScale;
+      }
+      const horizontalCompression = 1 - Math.abs(yaw) * 0.055 * headWeight;
+      point.x = headPivot.x + (point.x - headPivot.x) * horizontalCompression;
+      const upperHeadLever = clamp((headPivot.y - base.y) / Math.max(0.1, faceHeight * 1.35), 0, 1);
+      point.x += yaw * faceWidth * (0.028 + featureParallax(layer) * 0.07 + upperHeadLever * 0.012) * headWeight;
+      if (layer.role === "face") {
+        const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
+        const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+        const center = 1 - Math.abs(u * 2 - 1);
+        const cheekAndChin = smoothstep01((v - 0.12) / 0.78);
+        point.x += yaw * faceWidth * (0.012 + center * cheekAndChin * 0.014) * headWeight;
+        point.y += pitch * faceHeight * smoothstep01((v - 0.36) / 0.64) * 0.01 * headWeight;
+      }
+      point.y += pitch * faceHeight * (0.012 + upperHeadLever * 0.009 + pitchParallax(layer) * 0.011) * headWeight;
     }
-    const horizontalCompression = 1 - Math.abs(yaw) * 0.055 * headWeight;
-    point.x = headPivot.x + (point.x - headPivot.x) * horizontalCompression;
-    const upperHeadLever = clamp((headPivot.y - base.y) / Math.max(0.1, faceHeight * 1.35), 0, 1);
-    point.x += yaw * faceWidth * (0.028 + featureParallax(layer) * 0.07 + upperHeadLever * 0.012) * headWeight;
-    if (layer.role === "face") {
-      const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
-      const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-      const center = 1 - Math.abs(u * 2 - 1);
-      const cheekAndChin = smoothstep01((v - 0.12) / 0.78);
-      point.x += yaw * faceWidth * (0.012 + center * cheekAndChin * 0.014) * headWeight;
-      point.y += pitch * faceHeight * smoothstep01((v - 0.36) / 0.64) * 0.01 * headWeight;
-    }
-    point.y += pitch * faceHeight * (0.012 + upperHeadLever * 0.009 + pitchParallax(layer) * 0.011) * headWeight;
     point = rotate(point, headPivot, headRoll * headWeight);
   }
 

@@ -114,11 +114,29 @@ export interface RuntimeFeatures {
   mouthMotion: false;
 }
 
+export interface CoherentPoseField {
+  kind: "ellipsoid-v1";
+  center: Point;
+  radiusX: number;
+  radiusY: number;
+  maxYawRadians: number;
+  maxPitchRadians: number;
+  perspective: number;
+}
+
+export interface MotionTuning {
+  amplitude: number;
+  response: number;
+  stability: number;
+}
+
 export interface RuntimeSettings {
   seed: number;
-  profile: "calm-v1";
+  profile: "calm-v1" | "coherent-v1";
   envelope: MotionEnvelope;
   features: RuntimeFeatures;
+  poseField?: CoherentPoseField;
+  motionTuning?: MotionTuning;
 }
 
 export interface SourceDescriptor {

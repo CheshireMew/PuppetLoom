@@ -29,7 +29,7 @@ The MIT license text is reproduced in `docs/licenses/ag-psd-MIT.txt`.
 
 ## Third demonstration project
 
-The unpublished project shown in the Bilibili video “即刻出道！零基础半小时也能做出可直播的皮套！” informed product requirements such as semantic control points, affected-layer groups, and conservative anti-separation limits. No source code from that project is available or included.
+The unpublished project shown in the Bilibili video “即刻出道！零基础半小时也能做出可直播的皮套！” informed the independently implemented coherent-pose design: one semantic head pose drives affected face layers, while grouped hair, body, and accessories follow through filtered response and separate inertia. It also informed conservative anti-separation limits. No source code, model weights, or assets from that project are available or included.
 
 ## Artwork
 

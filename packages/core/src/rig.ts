@@ -6,6 +6,7 @@ import type {
   LayerWeights,
   MeshBinding,
   MotionEnvelope,
+  CoherentPoseField,
   Point,
   PuppetLoomProject,
   Rect,
@@ -145,6 +146,24 @@ function envelopeFor(level: RigLevel): MotionEnvelope {
   return { headYaw: 0, headPitch: 0, headRollDegrees: 0.8, bodySway: 0.0045, bodyRollDegrees: 0.6, gazeX: 0, gazeY: 0, breath: 0.0025, globalScale: 1 };
 }
 
+function poseFieldFor(anchors: AnchorGraph, level: RigLevel): CoherentPoseField | undefined {
+  if (level === "minimal" || !anchors.forehead || !anchors.chin || !anchors.cheekLeft || !anchors.cheekRight) return undefined;
+  const faceWidth = Math.max(0.07, Math.abs(anchors.cheekLeft.x - anchors.cheekRight.x) / 0.64);
+  const faceHeight = Math.max(0.09, Math.abs(anchors.chin.y - anchors.forehead.y) / 0.78);
+  return {
+    kind: "ellipsoid-v1",
+    center: roundPoint({
+      x: anchors.nose?.x ?? (anchors.cheekLeft.x + anchors.cheekRight.x) * 0.5,
+      y: (anchors.forehead.y + anchors.chin.y) * 0.5
+    }),
+    radiusX: Number((faceWidth * 0.5).toFixed(6)),
+    radiusY: Number((faceHeight * 0.5).toFixed(6)),
+    maxYawRadians: level === "semantic" ? 0.3 : 0.14,
+    maxPitchRadians: level === "semantic" ? 0.2 : 0.1,
+    perspective: level === "semantic" ? 0.1 : 0.05
+  };
+}
+
 function featuresFor(imported: ImportedPsd, level: RigLevel): RuntimeFeatures {
   const layers = imported.layers;
   const paired = (role: SemanticRole) => layers.some((layer) => layer.role === role && layer.side === "left") && layers.some((layer) => layer.role === role && layer.side === "right");
@@ -214,6 +233,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     };
   });
   const features = featuresFor(imported, level);
+  const poseField = poseFieldFor(anchors, level);
   return {
     version: 1,
     name: input.name,
@@ -224,9 +244,10 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     anchors,
     runtime: {
       seed: input.seed,
-      profile: "calm-v1",
+      profile: poseField ? "coherent-v1" : "calm-v1",
       envelope: envelopeFor(level),
-      features
+      features,
+      ...(poseField ? { poseField, motionTuning: { amplitude: 1, response: 0.72, stability: 0.42 } } : {})
     },
     quality: { poseValidations: [], safetyScale: 1, issues: [] },
     disabledReasons: disabledReasons(features, imported, level)

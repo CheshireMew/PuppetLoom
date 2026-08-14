@@ -6,6 +6,7 @@ export * from "./math.js";
 export * from "./offline-render.js";
 export * from "./project.js";
 export * from "./psd.js";
+export * from "./pose-field.js";
 export * from "./rig.js";
 export * from "./safety.js";
 export * from "./types.js";

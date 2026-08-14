@@ -35,6 +35,9 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.hairX - state.backHairX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.hairX - state.earX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.backHairX - state.accessoryX) > 0.001)).toBe(true);
+    expect(states.every((state) => Math.abs(state.headYaw) <= 1 && Math.abs(state.headPitch) <= 1)).toBe(true);
+    const frameSteps = states.slice(1).map((state, index) => Math.abs(state.headYaw - states[index]!.headYaw));
+    expect(Math.max(...frameSteps)).toBeLessThan(0.04);
   });
 
   it("moves the gaze before the head and lets the body follow later", () => {

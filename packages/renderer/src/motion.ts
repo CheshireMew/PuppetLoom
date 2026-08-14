@@ -17,6 +17,11 @@ interface SpringState {
   velocityY: number;
 }
 
+interface TrackingAxis {
+  value: number;
+  velocity: number;
+}
+
 function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -85,6 +90,15 @@ function advanceSpring(
   spring.y += spring.velocityY * delta;
 }
 
+function advanceTracking(axis: TrackingAxis, target: number, delta: number, response: number, stability: number): void {
+  const angularFrequency = 5 + Math.max(0, Math.min(1, response)) * 8;
+  const dampingRatio = 0.72 + Math.max(0, Math.min(1, stability)) * 0.38;
+  const acceleration = (target - axis.value) * angularFrequency * angularFrequency
+    - 2 * dampingRatio * angularFrequency * axis.velocity;
+  axis.velocity += acceleration * delta;
+  axis.value += axis.velocity * delta;
+}
+
 function blinkValue(time: number, seed: number): number {
   const random = mulberry32(seed ^ 0x9e3779b9);
   let cursor = 2 + random() * 2.5;
@@ -107,6 +121,9 @@ export class CalmMotionController {
   private smoothedBodyRoll = 0;
   private previousHead = 0;
   private previousPitch = 0;
+  private readonly trackedYaw: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedPitch: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly frontHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly backHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly ear: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
@@ -123,6 +140,10 @@ export class CalmMotionController {
     this.smoothedBodyRoll = 0;
     this.previousHead = 0;
     this.previousPitch = 0;
+    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll]) {
+      axis.value = 0;
+      axis.velocity = 0;
+    }
     for (const spring of [this.frontHair, this.backHair, this.ear, this.accessory]) {
       spring.x = 0;
       spring.y = 0;
@@ -137,13 +158,21 @@ export class CalmMotionController {
     const microYaw = Math.sin(timeSeconds * 0.55 + phase) * 0.018 + Math.sin(timeSeconds * 0.19 + phase * 0.7) * 0.012;
     const microPitch = Math.sin(timeSeconds * 0.37 + phase * 1.3) * 0.01;
     const microRoll = Math.sin(timeSeconds * 0.29 + phase * 0.45) * 0.008;
-    const yaw = Math.max(-1, Math.min(1, (active ? eventValue(active, timeSeconds, "yaw") : 0) + microYaw));
-    const pitch = Math.max(-1, Math.min(1, (active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch));
-    const roll = Math.max(-1, Math.min(1, (active ? eventValue(active, timeSeconds, "roll") : 0) + microRoll));
-    const gazeX = (active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.45 : 0) + microYaw * 0.7;
-    const gazeY = (active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.2 : 0) + microPitch * 0.55;
+    const tuning = this.project.runtime.motionTuning ?? { amplitude: 1, response: 0.72, stability: 0.42 };
+    const desiredYaw = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "yaw") : 0) + microYaw) * tuning.amplitude));
+    const desiredPitch = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch) * tuning.amplitude));
+    const desiredRoll = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "roll") : 0) + microRoll) * tuning.amplitude));
+    const gazeX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.45 : 0) + microYaw * 0.7) * tuning.amplitude;
+    const gazeY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.2 : 0) + microPitch * 0.55) * tuning.amplitude;
     const delta = this.lastTime === 0 ? 1 / 60 : Math.max(1 / 240, Math.min(0.05, timeSeconds - this.lastTime));
     this.lastTime = timeSeconds;
+
+    advanceTracking(this.trackedYaw, desiredYaw, delta, tuning.response, tuning.stability);
+    advanceTracking(this.trackedPitch, desiredPitch, delta, tuning.response, tuning.stability);
+    advanceTracking(this.trackedRoll, desiredRoll, delta, tuning.response, tuning.stability);
+    const yaw = Math.max(-1, Math.min(1, this.trackedYaw.value));
+    const pitch = Math.max(-1, Math.min(1, this.trackedPitch.value));
+    const roll = Math.max(-1, Math.min(1, this.trackedRoll.value));
 
     const bodyBlend = 1 - Math.exp(-delta / 0.68);
     this.smoothedBody += (yaw * 0.38 - this.smoothedBody) * bodyBlend;
