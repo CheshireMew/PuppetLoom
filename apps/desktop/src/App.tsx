@@ -1,0 +1,222 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { BuildReport, InspectionReport, PuppetLoomProject } from "@puppetloom/core";
+import { PuppetRenderer } from "@puppetloom/renderer";
+import type { ViewerState } from "../electron/global.js";
+
+type ViewerAction = "pause" | "top" | "click-through" | "larger" | "smaller" | "close";
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.Element {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const renderer = useRef<PuppetRenderer | undefined>(undefined);
+  const [project, setProject] = useState<PuppetLoomProject>();
+  const [state, setState] = useState<ViewerState>({ paused: false, alwaysOnTop: true, clickThrough: false, scale: 1 });
+  const [error, setError] = useState("");
+
+  useEffect(() => window.puppetloom.onViewerState((next) => {
+    setState(next);
+    renderer.current?.setPaused(next.paused);
+  }), []);
+
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const loaded = await window.puppetloom.readProject(projectDirectory);
+        if (disposed || !canvas.current) return;
+        setProject(loaded);
+        renderer.current = await PuppetRenderer.create(canvas.current, loaded, (layer) => window.puppetloom.readAsset(projectDirectory, layer));
+        renderer.current.start();
+      } catch (cause) {
+        setError(messageOf(cause));
+      }
+    })();
+    return () => {
+      disposed = true;
+      renderer.current?.dispose();
+    };
+  }, [projectDirectory]);
+
+  async function act(action: ViewerAction): Promise<void> {
+    const next = await window.puppetloom.viewerAction(action);
+    if (next) {
+      setState(next);
+      renderer.current?.setPaused(next.paused);
+    }
+  }
+
+  return (
+    <main className="viewer" data-testid="viewer" aria-label={project?.name ?? "PuppetLoom viewer"}>
+      <canvas ref={canvas} className="puppet-canvas" />
+      <div className="drag-strip" title="拖动角色窗口"><span>{project?.name ?? "加载中"}</span></div>
+      <nav className="viewer-controls" aria-label="角色窗口控制">
+        <button onClick={() => act("smaller")} title="缩小">−</button>
+        <button onClick={() => act("larger")} title="放大">＋</button>
+        <button onClick={() => act("pause")} title="暂停或继续">{state.paused ? "继续" : "暂停"}</button>
+        <button onClick={() => act("top")} title="切换置顶">{state.alwaysOnTop ? "取消置顶" : "置顶"}</button>
+        <button onClick={() => act("click-through")} title="启用后按 Ctrl+Shift+P 恢复鼠标">穿透</button>
+        <button onClick={() => act("close")} title="关闭">×</button>
+      </nav>
+      {state.clickThrough && <div className="shortcut-hint">Ctrl+Shift+P 恢复鼠标</div>}
+      {error && <div className="viewer-error">{error}</div>}
+    </main>
+  );
+}
+
+function DropField({ label, value, accept, optional, onPick, onDrop }: {
+  label: string;
+  value: string;
+  accept: string;
+  optional?: boolean;
+  onPick: () => Promise<void>;
+  onDrop: (path: string) => void;
+}): React.JSX.Element {
+  const [dragging, setDragging] = useState(false);
+  return (
+    <section
+      className={`drop-field ${dragging ? "is-dragging" : ""}`}
+      onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        const file = event.dataTransfer.files[0];
+        if (!file || !file.name.toLowerCase().match(accept)) return;
+        onDrop(window.puppetloom.pathForFile(file));
+      }}
+    >
+      <div><strong>{label}</strong>{optional && <span className="optional">可选</span>}</div>
+      <p>{value || "拖到这里，或从本机选择"}</p>
+      <button onClick={() => void onPick()}>选择文件</button>
+    </section>
+  );
+}
+
+function Report({ report }: { report: BuildReport }): React.JSX.Element {
+  return (
+    <section className="report" data-testid="build-report">
+      <div><span>绑定等级</span><strong>{report.rigLevel}</strong></div>
+      <div><span>安全缩放</span><strong>{report.safetyScale.toFixed(2)}</strong></div>
+      <div><span>保留图层</span><strong>{report.layerCount}</strong></div>
+      <div><span>素材请求</span><strong>{report.assetRequestCount}</strong></div>
+      <p>启用：{report.enabledFeatures.join("、") || "仅安全整体运动"}</p>
+      {report.disabledFeatures.length > 0 && <p>禁用：{report.disabledFeatures.join("、")}</p>}
+      {report.warnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
+    </section>
+  );
+}
+
+function Creator(): React.JSX.Element {
+  const [input, setInput] = useState("");
+  const [reference, setReference] = useState("");
+  const [output, setOutput] = useState("");
+  const [inspection, setInspection] = useState<InspectionReport>();
+  const [report, setReport] = useState<BuildReport>();
+  const [projectDirectory, setProjectDirectory] = useState("");
+  const [viewerId, setViewerId] = useState<number>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!input) { setInspection(undefined); return; }
+    const timer = window.setTimeout(() => {
+      void window.puppetloom.inspect(input).then(setInspection).catch((cause) => setError(messageOf(cause)));
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [input]);
+
+  const ready = useMemo(() => Boolean(input && output && !busy), [input, output, busy]);
+
+  async function choose(kind: "psd" | "reference" | "output"): Promise<void> {
+    const result = kind === "psd" ? await window.puppetloom.choosePsd() : kind === "reference" ? await window.puppetloom.chooseReference() : await window.puppetloom.chooseOutput();
+    if (!result) return;
+    if (kind === "psd") setInput(result);
+    else if (kind === "reference") setReference(result);
+    else setOutput(result);
+  }
+
+  async function create(): Promise<void> {
+    if (!ready) return;
+    setBusy(true); setError(""); setReport(undefined);
+    try {
+      const result = await window.puppetloom.create({ input, output, ...(reference ? { reference } : {}), seed: 42 });
+      setReport(result.report);
+      setProjectDirectory(result.outputDirectory);
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openExisting(): Promise<void> {
+    const directory = await window.puppetloom.chooseProject();
+    if (!directory) return;
+    try {
+      await window.puppetloom.readProject(directory);
+      setProjectDirectory(directory);
+      const launched = await window.puppetloom.launchViewer(directory);
+      setViewerId(launched.id);
+    } catch (cause) { setError(messageOf(cause)); }
+  }
+
+  async function launch(): Promise<void> {
+    if (!projectDirectory) return;
+    const launched = await window.puppetloom.launchViewer(projectDirectory);
+    setViewerId(launched.id);
+  }
+
+  return (
+    <main className="app-shell" data-testid="creator">
+      <header>
+        <div className="mark">PL</div>
+        <div><h1>PuppetLoom</h1><p>分层 PSD 进去，一个克制、稳定、会自己动的角色出来。</p></div>
+        <button className="secondary open-project" onClick={() => void openExisting()}>打开已有项目</button>
+      </header>
+      <div className="workflow">
+        <section className="inputs">
+          <h2>角色素材</h2>
+          <DropField label="See-through 分层 PSD" value={input} accept="\\.psd$" onPick={() => choose("psd")} onDrop={setInput} />
+          <DropField label="原始角色图" value={reference} accept="\\.(png|jpe?g|webp)$" optional onPick={() => choose("reference")} onDrop={setReference} />
+          <section className="output-field">
+            <div><strong>项目输出目录</strong><p>{output || "请选择一个新目录或空目录"}</p></div>
+            <button onClick={() => void choose("output")}>选择目录</button>
+          </section>
+          <button className="primary" disabled={!ready} onClick={() => void create()}>{busy ? "正在创建并验证…" : "创建角色项目"}</button>
+          <p className="policy">嘴部保持不动；缺少闭眼素材不会阻塞创建。程序会先缩小动作范围，必要时自动降级绑定。</p>
+        </section>
+        <aside className="status-panel">
+          <h2>自动检查</h2>
+          {!inspection && !report && <div className="empty-state">放入 PSD 后，这里会显示识别结果、绑定等级和禁用功能。</div>}
+          {inspection && !report && <section className="inspection">
+            <div><span>画布</span><strong>{inspection.canvas.width} × {inspection.canvas.height}</strong></div>
+            <div><span>可见图层</span><strong>{inspection.visibleLayerCount}</strong></div>
+            <div><span>识别图层</span><strong>{inspection.recognizedLayerCount}</strong></div>
+            <div><span>建议绑定</span><strong>{inspection.suggestedRigLevel}</strong></div>
+            {inspection.warnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
+          </section>}
+          {report && <Report report={report} />}
+          {projectDirectory && <section className="result-actions">
+            <p>项目已写入：<br/><code>{projectDirectory}</code></p>
+            <button className="primary" onClick={() => void launch()}>打开透明角色窗口</button>
+            {viewerId !== undefined && <div className="remote-controls">
+              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}>暂停 / 继续</button>
+              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "click-through")}>鼠标穿透</button>
+              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "top")}>切换置顶</button>
+            </div>}
+          </section>}
+          {error && <div className="error" role="alert">{error}</div>}
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+export function App(): React.JSX.Element {
+  const params = new URLSearchParams(window.location.search);
+  const project = params.get("project");
+  return params.get("viewer") === "1" && project ? <Viewer projectDirectory={project} /> : <Creator />;
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vite/
+coverage/
+test/artifacts/*
+!test/artifacts/.gitkeep
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+workspace/
+local-fixtures/
+*.puppetloom.local.json

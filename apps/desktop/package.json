@@ -1,0 +1,22 @@
+{
+  "name": "@puppetloom/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.electron.json && vite build",
+    "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
+  },
+  "dependencies": {
+    "@puppetloom/core": "0.1.0",
+    "@puppetloom/renderer": "0.1.0",
+    "@vitejs/plugin-react": "^5.0.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9"
+  }
+}

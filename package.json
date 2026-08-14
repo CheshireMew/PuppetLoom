@@ -1,0 +1,37 @@
+{
+  "name": "puppetloom",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Turn a layered character PSD into a safe, autonomous 2D puppet.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/renderer && npm run build -w @puppetloom/cli && npm run build -w @puppetloom/desktop",
+    "typecheck": "npm run typecheck -w @puppetloom/core && npm run typecheck -w @puppetloom/renderer && npm run typecheck -w @puppetloom/cli && npm run typecheck -w @puppetloom/desktop",
+    "test": "vitest run --config vitest.config.ts",
+    "test:unit": "vitest run --config vitest.config.ts packages",
+    "test:integration": "vitest run --config vitest.config.ts test",
+    "test:e2e": "node scripts/run-electron-e2e.mjs",
+    "test:visual": "node scripts/run-visual-check.mjs",
+    "test:performance": "node scripts/run-performance-check.mjs",
+    "preview": "node scripts/render-project-preview.mjs",
+    "fixtures": "node scripts/generate-fixtures.mjs",
+    "desktop": "npm run build && electron apps/desktop/dist/electron/main.js",
+    "cli": "node apps/cli/dist/index.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.3.0",
+    "electron": "^37.3.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

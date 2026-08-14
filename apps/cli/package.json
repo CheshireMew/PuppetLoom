@@ -1,0 +1,18 @@
+{
+  "name": "@puppetloom/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "puppetloom": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@puppetloom/core": "0.1.0",
+    "commander": "^14.0.0"
+  }
+}
