@@ -1,4 +1,4 @@
-import type { BuildReport, InspectionReport, LayerBinding, PuppetLoomProject, VerifyResult } from "@puppetloom/core";
+import type { BuildReport, InspectionReport, LayerBinding, MotionState, PuppetLoomProject, VerifyResult } from "@puppetloom/core";
 
 export interface DesktopCreateRequest {
   input: string;
@@ -40,6 +40,7 @@ export interface PuppetLoomDesktopApi {
 declare global {
   interface Window {
     puppetloom: PuppetLoomDesktopApi;
+    puppetloomRenderTestPose?: (state: Partial<MotionState>) => boolean;
   }
 }
 

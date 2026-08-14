@@ -235,6 +235,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       mesh: makeGridMesh(bounds, density.rows, density.cols),
       weights,
       ...(clipLayerId ? { clipLayerId } : {}),
+      ...(layer.role === "mouth" ? { mouthVariant: "closed" as const } : {}),
       parentGroup
     };
   });

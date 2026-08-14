@@ -44,16 +44,50 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
       side,
       sourceLayerIds: sourceLayers.map((layer) => layer.id),
       crop,
+      reference: { path: `requests/references/${id}.png` },
       output: { path: `supplements/${id}.png`, width: crop.width, height: crop.height, transparent: true },
-      prompt: `Draw only the ${side} closed eyelid for the same anime character. Preserve the exact line weight, color, camera angle, and eye position from the supplied crop. Return a transparent PNG containing only the closed eyelid artwork.`,
+      prompt: `Using the reference crop, draw only this character's ${side} eye gently closed in the same position and style. Put only the eyelid and lashes on a clean pure white background.`,
       constraints: [
-        "不得改变脸型、眉毛、皮肤、头发或另一只眼睛。",
-        "不得生成整张脸或带背景的图片。",
-        "闭眼线条必须位于原睫毛区域，并保持原角色画风。",
-        "输出画布尺寸和请求完全一致，目标之外保持透明。"
+        "不得包含皮肤、眉毛、头发或另一只眼睛。",
+        "生图阶段使用纯白背景，接入前抠成真实透明 PNG。"
       ],
       validation: { requireAlpha: true, minOpaqueCoverage: 0.002, maxOpaqueCoverage: 0.32 }
     });
+  }
+
+  const closedMouth = project.layers.find((layer) => layer.role === "mouth" && (layer.mouthVariant === "closed" || layer.mouthVariant === undefined));
+  const face = project.layers.find((layer) => layer.role === "face");
+  if (closedMouth) {
+    const faceWidth = (face?.bounds.width ?? Math.max(closedMouth.bounds.width * 7, 0.04)) * project.canvas.width;
+    const faceHeight = (face?.bounds.height ?? Math.max(closedMouth.bounds.height * 14, 0.04)) * project.canvas.height;
+    const cropWidth = Math.max(40, Math.round(faceWidth * 0.42));
+    const cropHeight = Math.max(28, Math.round(faceHeight * 0.2));
+    const centerX = closedMouth.pivot.x * project.canvas.width;
+    const centerY = closedMouth.pivot.y * project.canvas.height;
+    const x = Math.max(0, Math.min(project.canvas.width - cropWidth, Math.round(centerX - cropWidth * 0.5)));
+    const y = Math.max(0, Math.min(project.canvas.height - cropHeight, Math.round(centerY - cropHeight * 0.5)));
+    const crop = { x, y, width: cropWidth, height: cropHeight };
+    for (const variant of ["slight", "open"] as const) {
+      if (project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
+      const id = variant === "slight" ? "mouth-slight" : "mouth-open-small";
+      const description = variant === "slight" ? "slightly open" : "open a small, natural amount";
+      requests.push({
+        id,
+        kind: "mouth-shape",
+        side: "center",
+        variant,
+        sourceLayerIds: [closedMouth.id],
+        crop,
+        reference: { path: `requests/references/${id}.png` },
+        output: { path: `supplements/${id}.png`, width: crop.width, height: crop.height, transparent: true },
+        prompt: `Using the reference crop, draw only this character's mouth ${description} in the same position and style. Put only the mouth on a clean pure white background.`,
+        constraints: [
+          "不得包含脸、鼻子、头发或背景。",
+          "保持中立表情，不露齿；接入前抠成真实透明 PNG。"
+        ],
+        validation: { requireAlpha: true, minOpaqueCoverage: 0.002, maxOpaqueCoverage: 0.35 }
+      });
+    }
   }
   return { version: 1, optional: true, requests };
 }
@@ -76,16 +110,19 @@ function supplementalLayer(request: AssetRequest, project: PuppetLoomProject, ex
     id: request.id,
     sourceName: request.id,
     sourcePath: ["supplements", request.id],
-    role: "eyeClosed",
+    role: request.kind === "closed-eye" ? "eyeClosed" : "mouth",
     side: request.side,
-    order: existing.order + 1,
-    opacity: 0,
+    order: request.kind === "closed-eye"
+      ? Math.max(...project.layers.filter((layer) => layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash").map((layer) => layer.order), existing.order)
+      : existing.order,
+    opacity: 1,
     blendMode: "normal",
     bounds,
     texture: request.output.path,
     pivot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.5 },
     mesh: makeGridMesh(bounds, 4, 4),
     weights: { head: 1, body: 0, gaze: 0, physics: 0 },
+    ...(request.kind === "mouth-shape" && request.variant ? { mouthVariant: request.variant } : {}),
     parentGroup: "head"
   };
 }
@@ -100,6 +137,10 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
   for (const request of requests.requests) {
     const candidate = join(resolve(options.assets), basename(request.output.path));
     try {
+      if (layers.some((layer) => layer.id === request.id)) {
+        rejected.push({ requestId: request.id, reason: "项目已经包含该补充素材。" });
+        continue;
+      }
       const { data, info } = await sharp(candidate).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       if (info.width !== request.output.width || info.height !== request.output.height) {
         rejected.push({ requestId: request.id, reason: `尺寸应为 ${request.output.width}x${request.output.height}，实际为 ${info.width}x${info.height}。` });
@@ -112,14 +153,16 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
         rejected.push({ requestId: request.id, reason: `非透明区域比例 ${coverage.toFixed(4)} 超出安全范围。` });
         continue;
       }
+      const existing = request.kind === "closed-eye"
+        ? project.layers.find((layer) => layer.side === request.side && layer.role === "eyelash") ?? project.layers.find((layer) => layer.side === request.side && layer.role === "eyeWhite")
+        : project.layers.find((layer) => layer.role === "mouth" && (layer.mouthVariant === "closed" || layer.mouthVariant === undefined));
+      if (!existing) {
+        rejected.push({ requestId: request.id, reason: request.kind === "closed-eye" ? "项目中没有对应的眼睛图层。" : "项目中没有闭合嘴部图层。" });
+        continue;
+      }
       const target = join(projectDirectory, request.output.path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(candidate, target);
-      const existing = project.layers.find((layer) => layer.side === request.side && layer.role === "eyelash") ?? project.layers.find((layer) => layer.side === request.side && layer.role === "eyeWhite");
-      if (!existing) {
-        rejected.push({ requestId: request.id, reason: "项目中没有对应的眼睛图层。" });
-        continue;
-      }
       layers.push(supplementalLayer(request, project, existing));
       accepted.push(request.id);
     } catch (error) {
@@ -148,6 +191,21 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
       // A previous enhancement backup is intentionally preserved.
     }
     await writeFile(join(projectDirectory, "puppetloom.json"), `${JSON.stringify(nextProject, null, 2)}\n`, "utf8");
+    const reportPath = join(projectDirectory, "reports", "build-report.json");
+    try {
+      const report = JSON.parse(await readFile(reportPath, "utf8")) as {
+        layerCount: number;
+        enabledFeatures: string[];
+        disabledFeatures: string[];
+      };
+      const features = Object.entries(nextProject.runtime.features).filter(([name]) => name !== "mouthMotion");
+      report.layerCount = nextProject.layers.length;
+      report.enabledFeatures = features.filter(([, enabled]) => enabled).map(([name]) => name);
+      report.disabledFeatures = features.filter(([, enabled]) => !enabled).map(([name]) => name);
+      await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    } catch {
+      // Older projects without a build report remain usable after enhancement.
+    }
   }
   return { accepted, rejected, project: nextProject };
 }

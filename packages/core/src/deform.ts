@@ -78,6 +78,11 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   const bodyRoll = (clamp(state.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180;
   let point = { ...base };
 
+  if ((layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && state.blink > 0) {
+    const closing = smoothstep01(state.blink);
+    point.y = layer.pivot.y + (point.y - layer.pivot.y) * (1 - closing * 0.72);
+  }
+
   if (layer.weights.body > 0) {
     const breath = clamp(state.breath, -1, 1);
     const breathWeight = breathInfluence(layer) * layer.weights.body;
@@ -163,5 +168,6 @@ export const neutralMotionState: MotionState = {
   earY: 0,
   accessoryX: 0,
   accessoryY: 0,
-  blink: 0
+  blink: 0,
+  mouthOpen: 0
 };

@@ -88,9 +88,25 @@ async function toImageBitmap(source: Blob | ImageBitmapSource): Promise<ImageBit
   return createImageBitmap(source, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
 }
 
-function opacityFor(layer: LayerBinding, state: MotionState): number {
+function smoothstep(value: number): number {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * (3 - 2 * t);
+}
+
+export function opacityFor(layer: LayerBinding, state: MotionState): number {
   if (layer.role === "eyeClosed") return layer.opacity === 0 ? state.blink : layer.opacity * state.blink;
   if (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") return layer.opacity * (1 - state.blink);
+  if (layer.role === "mouth") {
+    const openness = Math.max(0, Math.min(1, state.mouthOpen));
+    const variant = layer.mouthVariant ?? "closed";
+    if (variant === "closed") return layer.opacity * (1 - smoothstep(openness / 0.42));
+    if (variant === "slight") {
+      const entering = smoothstep(openness / 0.42);
+      const leaving = 1 - smoothstep((openness - 0.5) / 0.38);
+      return layer.opacity * entering * leaving;
+    }
+    return layer.opacity * smoothstep((openness - 0.42) / 0.58);
+  }
   return layer.opacity;
 }
 

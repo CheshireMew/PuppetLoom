@@ -40,6 +40,7 @@ export const puppetLoomProjectSchema = z.object({
       mesh: meshSchema,
       weights: z.object({ head: z.number(), body: z.number(), gaze: z.number(), physics: z.number() }),
       clipLayerId: z.string().optional(),
+      mouthVariant: z.enum(["closed", "slight", "open"]).optional(),
       parentGroup: z.enum(["head", "body", "root"])
     })
   ).min(1),
@@ -85,10 +86,12 @@ export const assetRequestDocumentSchema = z.object({
   optional: z.literal(true),
   requests: z.array(z.object({
     id: z.string(),
-    kind: z.literal("closed-eye"),
-    side: z.enum(["left", "right"]),
+    kind: z.enum(["closed-eye", "mouth-shape"]),
+    side: z.enum(["left", "right", "center"]),
+    variant: z.enum(["slight", "open"]).optional(),
     sourceLayerIds: z.array(z.string()),
     crop: rectSchema,
+    reference: z.object({ path: z.string().min(1) }).optional(),
     output: z.object({ path: z.string(), width: z.number().int().positive(), height: z.number().int().positive(), transparent: z.literal(true) }),
     prompt: z.string(),
     constraints: z.array(z.string()),

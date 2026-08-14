@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { access, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, extname, join, parse, resolve } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import sharp from "sharp";
 import { makeAssetRequests } from "./assets.js";
 import { PuppetLoomError } from "./errors.js";
@@ -155,6 +155,17 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   );
   const neutral = await neutralPng(imported);
   await writeFile(join(output, "reports", "neutral.png"), neutral);
+  await Promise.all(requests.requests.map(async (request) => {
+    if (!request.reference) return;
+    const target = join(output, request.reference.path);
+    await mkdir(dirname(target), { recursive: true });
+    await sharp(neutral).extract({
+      left: Math.round(request.crop.x),
+      top: Math.round(request.crop.y),
+      width: Math.round(request.crop.width),
+      height: Math.round(request.crop.height)
+    }).png().toFile(target);
+  }));
   await writePoseSheet(join(output, "reports", "pose-sheet.png"), imported, project);
   await writeFile(join(output, "puppetloom.json"), `${JSON.stringify(project, null, 2)}\n`, "utf8");
   await writeFile(join(output, "reports", "build-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");

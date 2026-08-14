@@ -2,6 +2,7 @@ export const PUPPETLOOM_PROJECT_VERSION = 1 as const;
 
 export type RigLevel = "semantic" | "grouped" | "minimal";
 export type Side = "left" | "right" | "center";
+export type MouthVariant = "closed" | "slight" | "open";
 
 export type SemanticRole =
   | "backHair"
@@ -74,6 +75,7 @@ export interface LayerBinding {
   mesh: MeshBinding;
   weights: LayerWeights;
   clipLayerId?: string;
+  mouthVariant?: MouthVariant;
   parentGroup: "head" | "body" | "root";
 }
 
@@ -197,10 +199,14 @@ export interface PuppetLoomProject {
 
 export interface AssetRequest {
   id: string;
-  kind: "closed-eye";
-  side: "left" | "right";
+  kind: "closed-eye" | "mouth-shape";
+  side: Side;
+  variant?: Exclude<MouthVariant, "closed">;
   sourceLayerIds: string[];
   crop: Rect;
+  reference?: {
+    path: string;
+  };
   output: {
     path: string;
     width: number;
@@ -317,4 +323,5 @@ export interface MotionState {
   accessoryX: number;
   accessoryY: number;
   blink: number;
+  mouthOpen: number;
 }

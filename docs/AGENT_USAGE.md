@@ -41,7 +41,19 @@ node E:\Code\PuppetLoom\apps\cli\dist\index.js verify --project E:\Puppets\Chara
 E:\Puppets\CharacterName\requests\asset-requests.json
 ```
 
-若调用外部图像生成能力，必须把对应裁切图、单项提示词和约束一起提供，并将透明 PNG 写到请求的 `output.path`。PuppetLoom 自身不调用任何图像 API。生成失败、身份变化或尺寸不符时可以直接停止，当前角色仍能运行。
+每项请求都给出 `reference.path`、短提示词和约束。若调用外部图像生成能力，必须提供对应参考裁切；PuppetLoom 自身不调用任何图像 API。不要相信“提示透明背景”就能得到 Alpha：常见生图接口会把白底或棋盘格直接画进不透明 PNG。应明确生成纯白背景，再用 `scripts/extract-generated-supplement.mjs` 按浅色背景抠图、缩放并放回请求画布，最后由 `enhance` 检查真实 Alpha、尺寸和覆盖率。生成失败、身份变化或尺寸不符时可以直接停止，当前角色仍能运行。
+
+抠图脚本需要目标画布和内容尺寸。例如：
+
+```powershell
+node E:\Code\PuppetLoom\scripts\extract-generated-supplement.mjs `
+  --input E:\Temp\generated.png `
+  --output E:\Puppets\CharacterName\supplements\mouth-slight.png `
+  --canvas-width 52 --canvas-height 32 `
+  --content-width 18 --content-height 5
+```
+
+实际数值读取当前请求和参考裁切，不能照抄示例到其它角色。
 
 素材准备完成后：
 

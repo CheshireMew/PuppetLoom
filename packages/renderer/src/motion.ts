@@ -212,7 +212,8 @@ export class CalmMotionController {
       earY: this.project.runtime.features.hairPhysics ? this.ear.y : 0,
       accessoryX: this.project.runtime.features.hairPhysics ? this.accessory.x : 0,
       accessoryY: this.project.runtime.features.hairPhysics ? this.accessory.y : 0,
-      blink: this.project.runtime.features.blink ? blinkValue(timeSeconds, this.project.runtime.seed) : 0
+      blink: this.project.runtime.features.blink ? blinkValue(timeSeconds, this.project.runtime.seed) : 0,
+      mouthOpen: 0
     };
   }
 }

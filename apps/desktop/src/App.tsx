@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuildReport, InspectionReport, PuppetLoomProject } from "@puppetloom/core";
+import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import type { ViewerState } from "../electron/global.js";
 
@@ -30,12 +31,19 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
         setProject(loaded);
         renderer.current = await PuppetRenderer.create(canvas.current, loaded, (layer) => window.puppetloom.readAsset(projectDirectory, layer));
         renderer.current.start();
+        window.puppetloomRenderTestPose = (override) => {
+          if (!renderer.current) return false;
+          renderer.current.setPaused(true);
+          renderer.current.render({ ...neutralMotionState, ...override });
+          return true;
+        };
       } catch (cause) {
         setError(messageOf(cause));
       }
     })();
     return () => {
       disposed = true;
+      delete window.puppetloomRenderTestPose;
       renderer.current?.dispose();
     };
   }, [projectDirectory]);

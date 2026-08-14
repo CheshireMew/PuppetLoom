@@ -122,10 +122,12 @@ describe("project creation", () => {
 });
 
 describe("optional enhancement", () => {
-  it("describes two closed-eye requests without blocking the build", async () => {
-    const requests = JSON.parse(await readFile(resolve(semanticOutput, "requests/asset-requests.json"), "utf8")) as { optional: boolean; requests: unknown[] };
+  it("describes blink and compact mouth-shape requests without blocking the build", async () => {
+    const requests = JSON.parse(await readFile(resolve(semanticOutput, "requests/asset-requests.json"), "utf8")) as { optional: boolean; requests: Array<{ id: string; kind: string; reference: { path: string } }> };
     expect(requests.optional).toBe(true);
-    expect(requests.requests).toHaveLength(2);
+    expect(requests.requests.map(({ id }) => id)).toEqual(["closed-eye-left", "closed-eye-right", "mouth-slight", "mouth-open-small"]);
+    expect(requests.requests.map(({ kind }) => kind)).toEqual(["closed-eye", "closed-eye", "mouth-shape", "mouth-shape"]);
+    for (const request of requests.requests) expect((await stat(resolve(semanticOutput, request.reference.path))).isFile()).toBe(true);
   });
 
   it("rejects wrong-size supplements and preserves the safe project", async () => {
@@ -133,10 +135,31 @@ describe("optional enhancement", () => {
     await mkdir(assetDirectory, { recursive: true });
     await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "closed-eye-left.png"));
     await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "closed-eye-right.png"));
+    await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "mouth-slight.png"));
+    await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "mouth-open-small.png"));
     const before = await readFile(resolve(semanticOutput, "puppetloom.json"), "utf8");
     const result = await enhanceProject({ project: semanticOutput, assets: assetDirectory });
     expect(result.accepted).toHaveLength(0);
-    expect(result.rejected).toHaveLength(2);
+    expect(result.rejected).toHaveLength(4);
     expect(await readFile(resolve(semanticOutput, "puppetloom.json"), "utf8")).toBe(before);
+  });
+
+  it("accepts a complete eye and mouth supplement set", async () => {
+    const assetDirectory = resolve(runRoot, "valid-supplements");
+    await mkdir(assetDirectory, { recursive: true });
+    const document = JSON.parse(await readFile(resolve(semanticOutput, "requests/asset-requests.json"), "utf8")) as { requests: Array<{ id: string; output: { width: number; height: number; path: string } }> };
+    for (const request of document.requests) {
+      const width = request.output.width;
+      const height = request.output.height;
+      const mark = Buffer.from(`<svg width="${width}" height="${height}"><rect x="${Math.round(width * 0.3)}" y="${Math.round(height * 0.42)}" width="${Math.max(2, Math.round(width * 0.4))}" height="${Math.max(2, Math.round(height * 0.16))}" rx="2" fill="#442d38"/></svg>`);
+      await sharp({ create: { width, height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: mark }]).png().toFile(resolve(assetDirectory, request.output.path.split("/").at(-1)!));
+    }
+    const result = await enhanceProject({ project: semanticOutput, assets: assetDirectory });
+    expect(result.accepted).toEqual(["closed-eye-left", "closed-eye-right", "mouth-slight", "mouth-open-small"]);
+    expect(result.rejected).toEqual([]);
+    expect(result.project.runtime.features.blink).toBe(true);
+    expect(result.project.layers.filter((layer) => layer.role === "mouth").map((layer) => layer.mouthVariant).sort()).toEqual(["closed", "open", "slight"]);
+    expect(JSON.parse(await readFile(resolve(semanticOutput, "reports/build-report.json"), "utf8"))).toMatchObject({ layerCount: 23, enabledFeatures: expect.arrayContaining(["blink"]), disabledFeatures: [] });
+    expect((await verifyProject(semanticOutput)).valid).toBe(true);
   });
 });

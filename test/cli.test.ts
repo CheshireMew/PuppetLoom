@@ -49,7 +49,16 @@ describe("CLI contract", () => {
   it("treats unavailable optional supplements as non-blocking", async () => {
     const result = await cli(["enhance", "--project", cliProject, "--assets", "test/fixtures/no-supplements", "--json"]);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, accepted: [], rejected: [{ requestId: "closed-eye-left" }, { requestId: "closed-eye-right" }] });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      accepted: [],
+      rejected: [
+        { requestId: "closed-eye-left" },
+        { requestId: "closed-eye-right" },
+        { requestId: "mouth-slight" },
+        { requestId: "mouth-open-small" }
+      ]
+    });
   });
 
   it("opens the transparent player through the play command", async () => {

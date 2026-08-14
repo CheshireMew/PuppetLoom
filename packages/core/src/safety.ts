@@ -47,7 +47,8 @@ export function safetyPoseState(yaw: number, pitch: number, roll: number): Motio
     earY: -pitch * 0.014,
     accessoryX: -yaw * 0.105,
     accessoryY: -pitch * 0.047,
-    blink: 0
+    blink: 0,
+    mouthOpen: 0
   };
 }
 

@@ -1,7 +1,7 @@
 import type { PuppetLoomProject } from "@puppetloom/core/browser";
 import { describe, expect, it } from "vitest";
 import { CalmMotionController } from "../src/motion.js";
-import { layersInRenderOrder } from "../src/renderer.js";
+import { layersInRenderOrder, opacityFor } from "../src/renderer.js";
 
 function fixtureProject(seed = 42): PuppetLoomProject {
   return {
@@ -75,5 +75,23 @@ describe("eye rendering order", () => {
       "iris:left", "iris:right",
       "eyelash:left", "eyelash:right"
     ]);
+  });
+});
+
+describe("mouth shape crossfade", () => {
+  const state = new CalmMotionController(fixtureProject()).sample(0);
+  const mouth = (mouthVariant: "closed" | "slight" | "open") => ({ role: "mouth", mouthVariant, opacity: 1 }) as PuppetLoomProject["layers"][number];
+
+  it("keeps the closed PSD mouth at rest", () => {
+    expect(opacityFor(mouth("closed"), { ...state, mouthOpen: 0 })).toBe(1);
+    expect(opacityFor(mouth("slight"), { ...state, mouthOpen: 0 })).toBe(0);
+    expect(opacityFor(mouth("open"), { ...state, mouthOpen: 0 })).toBe(0);
+  });
+
+  it("crossfades through one slight shape into one open shape", () => {
+    expect(opacityFor(mouth("slight"), { ...state, mouthOpen: 0.42 })).toBeGreaterThan(0.8);
+    expect(opacityFor(mouth("closed"), { ...state, mouthOpen: 0.42 })).toBe(0);
+    expect(opacityFor(mouth("open"), { ...state, mouthOpen: 1 })).toBe(1);
+    expect(opacityFor(mouth("slight"), { ...state, mouthOpen: 1 })).toBe(0);
   });
 });
