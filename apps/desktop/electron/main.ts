@@ -1,3 +1,4 @@
+import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,11 +11,27 @@ const preload = join(electronDirectory, "preload.cjs");
 const rendererPage = resolve(electronDirectory, "../renderer/index.html");
 const viewerStates = new Map<number, ViewerState>();
 const viewerProjects = new Map<number, string>();
+let runtimeLogPath: string | undefined;
+
+function runtimeLog(event: string, details: Record<string, unknown> = {}): void {
+  if (!runtimeLogPath) return;
+  try {
+    mkdirSync(dirname(runtimeLogPath), { recursive: true });
+    appendFileSync(runtimeLogPath, `${JSON.stringify({ time: new Date().toISOString(), event, ...details })}\n`, "utf8");
+  } catch {
+    // Runtime diagnostics must never prevent the viewer from opening.
+  }
+}
 
 function queryProjectArgument(commandLine = process.argv): string | undefined {
   const index = commandLine.indexOf("--project");
   const candidate = index >= 0 ? commandLine[index + 1] : undefined;
-  return candidate ? resolve(candidate) : undefined;
+  const cleaned = candidate?.replace(/^"+|"+$/g, "");
+  return cleaned ? resolve(cleaned) : undefined;
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function samePath(left: string, right: string): boolean {
@@ -96,6 +113,7 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
 
 async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
   const resolvedProject = resolve(projectDirectory);
+  runtimeLog("viewer-create-request", { project: resolvedProject });
   for (const [id, directory] of viewerProjects) {
     const existing = BrowserWindow.fromId(id);
     if (existing && samePath(directory, resolvedProject)) {
@@ -104,6 +122,7 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
     }
   }
   const project = await loadProject(resolvedProject);
+  runtimeLog("project-loaded", { project: resolvedProject, name: project.name, layers: project.layers.length });
   const height = 720;
   const width = Math.max(300, Math.round(height * project.canvas.width / project.canvas.height));
   const window = new BrowserWindow({
@@ -124,11 +143,25 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
   window.setAspectRatio(project.canvas.width / project.canvas.height);
   stateFor(window);
   viewerProjects.set(window.id, resolvedProject);
+  runtimeLog("viewer-window-created", { id: window.id, width, height });
+  window.once("ready-to-show", () => runtimeLog("viewer-ready-to-show", { id: window.id }));
+  window.webContents.on("did-finish-load", () => runtimeLog("viewer-page-loaded", { id: window.id }));
+  window.webContents.on("render-process-gone", (_event, details) => runtimeLog("renderer-gone", { id: window.id, reason: details.reason, exitCode: details.exitCode }));
+  window.on("unresponsive", () => runtimeLog("viewer-unresponsive", { id: window.id }));
   window.once("closed", () => {
+    runtimeLog("viewer-closed", { id: window.id });
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
   });
-  await window.loadFile(rendererPage, { query: { viewer: "1", project: resolvedProject } });
+  try {
+    await window.loadFile(rendererPage, { query: { viewer: "1", project: resolvedProject } });
+    runtimeLog("viewer-load-complete", { id: window.id });
+  } catch (cause) {
+    viewerStates.delete(window.id);
+    viewerProjects.delete(window.id);
+    window.destroy();
+    throw cause;
+  }
   return window;
 }
 
@@ -147,9 +180,11 @@ function createControlWindow(): BrowserWindow {
 }
 
 const initialProject = queryProjectArgument();
+runtimeLogPath = initialProject ? join(initialProject, "reports", "runtime.log") : undefined;
 const automatedExit = Number(process.env.PUPPETLOOM_E2E_EXIT_AFTER_MS ?? 0);
 const allowMultipleInstances = process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || (Number.isFinite(automatedExit) && automatedExit > 0);
 const hasInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock({ project: initialProject ?? "" });
+runtimeLog("app-start", { argv: process.argv, initialProject, allowMultipleInstances, hasInstanceLock });
 
 if (!hasInstanceLock) app.quit();
 
@@ -159,7 +194,11 @@ if (hasInstanceLock && !allowMultipleInstances) {
     const project = fromData ?? queryProjectArgument(commandLine);
     void app.whenReady().then(async () => {
       if (project) {
-        await createViewer(project);
+        try {
+          await createViewer(project);
+        } catch (cause) {
+          dialog.showErrorBox("无法启动角色", errorMessage(cause));
+        }
         return;
       }
       const control = BrowserWindow.getAllWindows().find((window) => !viewerProjects.has(window.id));
@@ -170,6 +209,7 @@ if (hasInstanceLock && !allowMultipleInstances) {
 }
 
 if (hasInstanceLock) app.whenReady().then(async () => {
+  runtimeLog("app-ready");
   ipcMain.handle("dialog:psd", (event) => chooseFile(event, [{ name: "Photoshop document", extensions: ["psd"] }]));
   ipcMain.handle("dialog:reference", (event) => chooseFile(event, [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }]));
   ipcMain.handle("dialog:output", async (event) => {
@@ -224,13 +264,26 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
 
   const project = initialProject;
-  if (project) await createViewer(project);
-  else createControlWindow();
+  if (project) {
+    try {
+      await createViewer(project);
+    } catch (cause) {
+      dialog.showErrorBox("无法启动角色", errorMessage(cause));
+      createControlWindow();
+    }
+  } else createControlWindow();
   if (Number.isFinite(automatedExit) && automatedExit >= 250) setTimeout(() => app.quit(), automatedExit);
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createControlWindow();
   });
 });
 
-app.on("will-quit", () => globalShortcut.unregisterAll());
-app.on("window-all-closed", () => app.quit());
+app.on("before-quit", () => runtimeLog("app-before-quit"));
+app.on("will-quit", () => {
+  runtimeLog("app-will-quit");
+  globalShortcut.unregisterAll();
+});
+app.on("window-all-closed", () => {
+  runtimeLog("window-all-closed");
+  app.quit();
+});

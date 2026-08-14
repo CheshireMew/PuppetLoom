@@ -44,6 +44,8 @@
 
 `reports/neutral.png` 是 PSD 中立合成。`reports/pose-sheet.png` 为 960×960 诊断图，按顺序绘制中立、左右转头、半幅转头、上下俯仰、左右倾斜和四个组合姿态。每格标签来自同一次安全检查。
 
+角色窗口运行后会按需创建 `reports/runtime.log`。它使用逐行 JSON 记录启动参数、项目读取、窗口创建、页面加载、渲染进程异常和正常关闭事件，用于诊断“进程存在但窗口没有出现”等桌面问题；它不包含纹理像素或用户素材。
+
 ## 补充素材请求
 
 `requests/asset-requests.json` 当前只会请求左右闭眼线。文档声明 `optional: true`，每项包含：
