@@ -14,13 +14,18 @@ function roleDepth(role: SemanticRole): number {
   return 0;
 }
 
-function rolePoseBlend(role: SemanticRole): number {
+function rolePoseBlend(layer: LayerBinding, base: Point): number {
+  const { role } = layer;
   if (role === "face" || role === "nose" || role === "mouth" || role === "eyeWhite" || role === "iris" || role === "eyelash" || role === "eyeClosed" || role === "eyebrow") return 1;
   if (role === "ear") return 0.85;
   if (role === "frontHair" || role === "headwear") return 0.72;
   if (role === "sideHair") return 0.64;
   if (role === "backHair") return 0.52;
-  if (role === "neck") return 0.28;
+  if (role === "neck") {
+    const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+    const pinned = v * v * (3 - 2 * v);
+    return 0.52 * (1 - pinned);
+  }
   return 0.4;
 }
 
@@ -56,7 +61,7 @@ export function applyCoherentPoseField(
     x: field.center.x + yawX * field.radiusX * perspectiveScale,
     y: field.center.y + pitchY * field.radiusY * perspectiveScale
   };
-  const blend = rolePoseBlend(layer.role) * layer.weights.head;
+  const blend = rolePoseBlend(layer, base) * layer.weights.head;
   return {
     x: base.x + (projected.x - base.x) * blend,
     y: base.y + (projected.y - base.y) * blend

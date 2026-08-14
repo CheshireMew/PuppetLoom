@@ -26,7 +26,7 @@ describe("calm autonomous timeline", () => {
   it("keeps mouth motion disabled and uses correlated movement", () => {
     const project = fixtureProject();
     const controller = new CalmMotionController(project);
-    const states = Array.from({ length: 720 }, (_, index) => controller.sample(index / 60));
+    const states = Array.from({ length: 1200 }, (_, index) => controller.sample(index / 60));
     expect(project.runtime.features.mouthMotion).toBe(false);
     expect(states.some((state) => Math.abs(state.headYaw) > 0.5)).toBe(true);
     expect(states.some((state) => Math.abs(state.bodySway) > 0.01)).toBe(true);
@@ -36,8 +36,11 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.hairX - state.earX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.backHairX - state.accessoryX) > 0.001)).toBe(true);
     expect(states.every((state) => Math.abs(state.headYaw) <= 1 && Math.abs(state.headPitch) <= 1)).toBe(true);
+    expect(states.some((state) => state.headPitch > 0.12)).toBe(true);
     const frameSteps = states.slice(1).map((state, index) => Math.abs(state.headYaw - states[index]!.headYaw));
     expect(Math.max(...frameSteps)).toBeLessThan(0.04);
+    const bodySteps = states.slice(1).map((state, index) => Math.abs(state.bodySway - states[index]!.bodySway));
+    expect(Math.max(...bodySteps)).toBeLessThan(Math.max(...frameSteps));
   });
 
   it("moves the gaze before the head and lets the body follow later", () => {

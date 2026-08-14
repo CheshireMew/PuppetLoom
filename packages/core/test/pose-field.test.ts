@@ -47,4 +47,14 @@ describe("coherent semantic pose field", () => {
     expect(frontHair.x).toBeGreaterThan(backHair.x);
     expect([nose, frontHair, backHair].every((posed) => Number.isFinite(posed.x) && Number.isFinite(posed.y))).toBe(true);
   });
+
+  it("lets the top of the neck follow while keeping the collar edge pinned", () => {
+    const neck = layer("neck");
+    const top = { x: 0.5, y: neck.bounds.y };
+    const bottom = { x: 0.5, y: neck.bounds.y + neck.bounds.height };
+    const posedTop = applyCoherentPoseField(field, neck, top, 0.6, 0.45);
+    const posedBottom = applyCoherentPoseField(field, neck, bottom, 0.6, 0.45);
+    expect(Math.hypot(posedTop.x - top.x, posedTop.y - top.y)).toBeGreaterThan(0);
+    expect(posedBottom).toEqual(bottom);
+  });
 });

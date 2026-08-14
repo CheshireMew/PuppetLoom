@@ -57,15 +57,16 @@ function makeEvents(seed: number, seconds = 900): MotionEvent[] {
   while (cursor < seconds) {
     const direction = random() < 0.5 ? -1 : 1;
     const magnitude = 0.55 + random() * 0.23;
-    const isNod = index > 0 && index % 3 === 2;
+    const isVertical = index > 0 && index % 3 === 2;
+    const looksUp = isVertical && index % 6 === 5;
     events.push({
       start: cursor,
       transition: 0.9 + random() * 0.3,
       hold: 1.05 + random() * 0.45,
       returnDuration: 1.25 + random() * 0.35,
-      yaw: direction * magnitude,
-      pitch: isNod ? 0.24 + random() * 0.14 : (random() - 0.5) * 0.16,
-      roll: direction * (0.1 + random() * 0.12)
+      yaw: direction * (isVertical ? 0.16 + random() * 0.12 : magnitude),
+      pitch: isVertical ? (looksUp ? -(0.14 + random() * 0.08) : 0.24 + random() * 0.14) : (random() - 0.5) * 0.16,
+      roll: direction * (isVertical ? 0.04 + random() * 0.04 : 0.1 + random() * 0.12)
     });
     cursor += 5.4 + random() * 1.8;
     index += 1;
@@ -117,13 +118,14 @@ export class CalmMotionController {
   readonly project: PuppetLoomProject;
   readonly events: MotionEvent[];
   private lastTime = 0;
-  private smoothedBody = 0;
-  private smoothedBodyRoll = 0;
   private previousHead = 0;
   private previousPitch = 0;
+  private previousRoll = 0;
   private readonly trackedYaw: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedPitch: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedRoll: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedBody: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedBodyRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly frontHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly backHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly ear: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
@@ -136,11 +138,10 @@ export class CalmMotionController {
 
   reset(): void {
     this.lastTime = 0;
-    this.smoothedBody = 0;
-    this.smoothedBodyRoll = 0;
     this.previousHead = 0;
     this.previousPitch = 0;
-    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll]) {
+    this.previousRoll = 0;
+    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyRoll]) {
       axis.value = 0;
       axis.velocity = 0;
     }
@@ -174,18 +175,20 @@ export class CalmMotionController {
     const pitch = Math.max(-1, Math.min(1, this.trackedPitch.value));
     const roll = Math.max(-1, Math.min(1, this.trackedRoll.value));
 
-    const bodyBlend = 1 - Math.exp(-delta / 0.68);
-    this.smoothedBody += (yaw * 0.38 - this.smoothedBody) * bodyBlend;
-    this.smoothedBodyRoll += (roll * 0.4 - this.smoothedBodyRoll) * bodyBlend;
+    advanceTracking(this.trackedBody, yaw * 0.38, delta, 0, Math.min(1, tuning.stability + 0.35));
+    advanceTracking(this.trackedBodyRoll, roll * 0.4, delta, 0, Math.min(1, tuning.stability + 0.35));
 
     const headVelocity = Math.max(-2.5, Math.min(2.5, (yaw - this.previousHead) / delta));
     const pitchVelocity = Math.max(-2.5, Math.min(2.5, (pitch - this.previousPitch) / delta));
+    const rollVelocity = Math.max(-2.5, Math.min(2.5, (roll - this.previousRoll) / delta));
     this.previousHead = yaw;
     this.previousPitch = pitch;
-    advanceSpring(this.frontHair, headVelocity, pitchVelocity, delta, 28, 9.5, 0.3);
-    advanceSpring(this.backHair, headVelocity, pitchVelocity, delta, 16, 6.7, 0.48);
-    advanceSpring(this.ear, headVelocity, pitchVelocity, delta, 22, 7.8, 0.4);
-    advanceSpring(this.accessory, headVelocity, pitchVelocity, delta, 8.5, 4.6, 0.68);
+    this.previousRoll = roll;
+    const lateralVelocity = headVelocity + rollVelocity * 0.18;
+    advanceSpring(this.frontHair, lateralVelocity, pitchVelocity, delta, 28, 9.5, 0.3);
+    advanceSpring(this.backHair, lateralVelocity, pitchVelocity, delta, 16, 6.7, 0.48);
+    advanceSpring(this.ear, lateralVelocity, pitchVelocity, delta, 22, 7.8, 0.4);
+    advanceSpring(this.accessory, lateralVelocity, pitchVelocity, delta, 8.5, 4.6, 0.68);
 
     const breathPeriod = 5.1 + ((this.project.runtime.seed % 17) / 17) * 0.7;
     const breath = Math.sin((timeSeconds / breathPeriod) * Math.PI * 2 - Math.PI * 0.5);
@@ -194,8 +197,8 @@ export class CalmMotionController {
       headYaw: yaw,
       headPitch: pitch,
       headRoll: roll,
-      bodySway: this.smoothedBody,
-      bodyRoll: this.smoothedBodyRoll,
+      bodySway: this.trackedBody.value,
+      bodyRoll: this.trackedBodyRoll.value,
       gazeX: this.project.runtime.features.gaze ? gazeX : 0,
       gazeY: this.project.runtime.features.gaze ? gazeY : 0,
       breath,
