@@ -151,13 +151,19 @@ function poseFieldFor(anchors: AnchorGraph, level: RigLevel): CoherentPoseField 
   const faceWidth = Math.max(0.07, Math.abs(anchors.cheekLeft.x - anchors.cheekRight.x) / 0.64);
   const faceHeight = Math.max(0.09, Math.abs(anchors.chin.y - anchors.forehead.y) / 0.78);
   return {
-    kind: "ellipsoid-v1",
+    kind: "head-surfaces-v2",
     center: roundPoint({
       x: anchors.nose?.x ?? (anchors.cheekLeft.x + anchors.cheekRight.x) * 0.5,
       y: (anchors.forehead.y + anchors.chin.y) * 0.5
     }),
     radiusX: Number((faceWidth * 0.5).toFixed(6)),
     radiusY: Number((faceHeight * 0.5).toFixed(6)),
+    skullCenter: roundPoint({
+      x: anchors.nose?.x ?? (anchors.cheekLeft.x + anchors.cheekRight.x) * 0.5,
+      y: ((anchors.headTop?.y ?? anchors.forehead.y) + anchors.chin.y) * 0.5
+    }),
+    skullRadiusX: Number((Math.max(faceWidth * 1.25, faceHeight * 0.72)).toFixed(6)),
+    skullRadiusY: Number((Math.max(faceHeight * 0.72, (anchors.chin.y - (anchors.headTop?.y ?? anchors.forehead.y)) * 0.5)).toFixed(6)),
     maxYawRadians: level === "semantic" ? 0.3 : 0.14,
     maxPitchRadians: level === "semantic" ? 0.2 : 0.1,
     perspective: level === "semantic" ? 0.1 : 0.05
@@ -244,7 +250,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     anchors,
     runtime: {
       seed: input.seed,
-      profile: poseField ? "coherent-v1" : "calm-v1",
+      profile: poseField ? "coherent-v2" : "calm-v1",
       envelope: envelopeFor(level),
       features,
       ...(poseField ? { poseField, motionTuning: { amplitude: 1, response: 0.72, stability: 0.42 } } : {})

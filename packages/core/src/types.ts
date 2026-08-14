@@ -115,10 +115,13 @@ export interface RuntimeFeatures {
 }
 
 export interface CoherentPoseField {
-  kind: "ellipsoid-v1";
+  kind: "ellipsoid-v1" | "head-surfaces-v2";
   center: Point;
   radiusX: number;
   radiusY: number;
+  skullCenter?: Point;
+  skullRadiusX?: number;
+  skullRadiusY?: number;
   maxYawRadians: number;
   maxPitchRadians: number;
   perspective: number;
@@ -132,7 +135,7 @@ export interface MotionTuning {
 
 export interface RuntimeSettings {
   seed: number;
-  profile: "calm-v1" | "coherent-v1";
+    profile: "calm-v1" | "coherent-v1" | "coherent-v2";
   envelope: MotionEnvelope;
   features: RuntimeFeatures;
   poseField?: CoherentPoseField;

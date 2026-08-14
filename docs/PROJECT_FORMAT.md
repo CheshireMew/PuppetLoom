@@ -21,9 +21,9 @@
 
 ## 运行姿态字段
 
-新建的语义项目使用 `runtime.profile: "coherent-v1"`。`runtime.poseField` 保存由角色关键点推导的椭球中心、横纵半径、最大 yaw/pitch 角度和透视强度。运行时用同一个姿态场投影脸部及其从属图层，再按语义深度和图层权重混合，不保存针对某一张角色图手写的顶点动画。
+新建的语义项目使用 `runtime.profile: "coherent-v2"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度和透视强度。运行时让脸型与五官使用脸部表面，让头发、耳朵和头饰使用头骨表面；两者共享头部根节点，再按语义深度和局部权重混合。项目不保存针对某一张角色图手写的顶点动画。
 
-`runtime.motionTuning` 的 `amplitude`、`response` 和 `stability` 分别控制动作总幅度、追随速度和阻尼稳定度。它们作用于同一个头部目标，不会为不同部位生成互不相关的随机运动。旧项目没有这两个对象时继续走 `calm-v1` 兼容路径。
+`runtime.motionTuning` 的 `amplitude`、`response` 和 `stability` 分别控制动作总幅度、追随速度和阻尼稳定度。它们作用于同一个头部目标，不会为不同部位生成互不相关的随机运动。读取器继续兼容 `coherent-v1` 的单表面项目和没有姿态场的 `calm-v1` 项目。
 
 ## 图层字段
 

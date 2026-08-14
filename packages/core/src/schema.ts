@@ -48,16 +48,19 @@ export const puppetLoomProjectSchema = z.object({
   }),
   runtime: z.object({
     seed: z.number().int(),
-    profile: z.enum(["calm-v1", "coherent-v1"]),
+    profile: z.enum(["calm-v1", "coherent-v1", "coherent-v2"]),
     envelope: z.object({
       headYaw: z.number().nonnegative(), headPitch: z.number().nonnegative(), headRollDegrees: z.number().nonnegative(), bodySway: z.number().nonnegative(), bodyRollDegrees: z.number().nonnegative(), gazeX: z.number().nonnegative(), gazeY: z.number().nonnegative(), breath: z.number().nonnegative(), globalScale: z.number().positive()
     }),
     features: z.object({ headTurn: z.boolean(), bodyFollow: z.boolean(), gaze: z.boolean(), hairPhysics: z.boolean(), blink: z.boolean(), mouthMotion: z.literal(false) }),
     poseField: z.object({
-      kind: z.literal("ellipsoid-v1"),
+      kind: z.enum(["ellipsoid-v1", "head-surfaces-v2"]),
       center: pointSchema,
       radiusX: z.number().positive(),
       radiusY: z.number().positive(),
+      skullCenter: pointSchema.optional(),
+      skullRadiusX: z.number().positive().optional(),
+      skullRadiusY: z.number().positive().optional(),
       maxYawRadians: z.number().positive(),
       maxPitchRadians: z.number().positive(),
       perspective: z.number().min(0).max(0.5)
