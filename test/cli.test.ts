@@ -55,6 +55,7 @@ describe("CLI contract", () => {
       rejected: [
         { requestId: "closed-eye-left" },
         { requestId: "closed-eye-right" },
+        { requestId: "mouth-neutral" },
         { requestId: "mouth-slight" },
         { requestId: "mouth-open-small" }
       ]

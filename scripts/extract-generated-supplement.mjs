@@ -22,9 +22,10 @@ const contentHeight = Math.round(positiveNumber("content-height"));
 const centerX = Number(argument("center-x", canvasWidth / 2));
 const centerY = Number(argument("center-y", canvasHeight / 2));
 const flip = process.argv.includes("--flip");
+const fill = process.argv.includes("--fill");
 
 if (!argument("input") || !argument("output")) {
-  throw new Error("用法：node scripts/extract-generated-supplement.mjs --input <image> --output <png> --canvas-width <n> --canvas-height <n> --content-width <n> --content-height <n> [--center-x <n>] [--center-y <n>] [--flip]");
+  throw new Error("用法：node scripts/extract-generated-supplement.mjs --input <image> --output <png> --canvas-width <n> --canvas-height <n> --content-width <n> --content-height <n> [--center-x <n>] [--center-y <n>] [--flip] [--fill]");
 }
 
 const source = await sharp(input).removeAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -65,7 +66,7 @@ const cropWidth = maxX - minX + 1;
 const cropHeight = maxY - minY + 1;
 let extracted = sharp(rgba, { raw: { width: source.info.width, height: source.info.height, channels: 4 } })
   .extract({ left: minX, top: minY, width: cropWidth, height: cropHeight })
-  .resize({ width: contentWidth, height: contentHeight, fit: "inside", kernel: sharp.kernel.lanczos3 });
+  .resize({ width: contentWidth, height: contentHeight, fit: fill ? "fill" : "inside", kernel: sharp.kernel.lanczos3 });
 if (flip) extracted = extracted.flop();
 const normalized = await extracted.png().toBuffer({ resolveWithObject: true });
 const left = Math.round(centerX - normalized.info.width / 2);

@@ -67,10 +67,10 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
     const x = Math.max(0, Math.min(project.canvas.width - cropWidth, Math.round(centerX - cropWidth * 0.5)));
     const y = Math.max(0, Math.min(project.canvas.height - cropHeight, Math.round(centerY - cropHeight * 0.5)));
     const crop = { x, y, width: cropWidth, height: cropHeight };
-    for (const variant of ["slight", "open"] as const) {
-      if (project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
-      const id = variant === "slight" ? "mouth-slight" : "mouth-open-small";
-      const description = variant === "slight" ? "slightly open" : "open a small, natural amount";
+    for (const variant of ["closed", "slight", "open"] as const) {
+      if (variant === "closed" ? project.layers.some((layer) => layer.id === "mouth-neutral") : project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
+      const id = variant === "closed" ? "mouth-neutral" : variant === "slight" ? "mouth-slight" : "mouth-open-small";
+      const description = variant === "closed" ? "closed with a very subtle, relaxed smile" : variant === "slight" ? "slightly open with the same subtle smile" : "open a small, natural amount with the same subtle smile";
       requests.push({
         id,
         kind: "mouth-shape",
@@ -164,6 +164,10 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
       await mkdir(dirname(target), { recursive: true });
       await copyFile(candidate, target);
       layers.push(supplementalLayer(request, project, existing));
+      if (request.kind === "mouth-shape" && request.variant === "closed") {
+        const existingIndex = layers.findIndex((layer) => layer.id === existing.id);
+        if (existingIndex >= 0) layers[existingIndex] = { ...layers[existingIndex]!, opacity: 0 };
+      }
       accepted.push(request.id);
     } catch (error) {
       rejected.push({ requestId: request.id, reason: error instanceof Error ? error.message : "无法读取补充素材。" });

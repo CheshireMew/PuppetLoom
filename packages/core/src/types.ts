@@ -201,7 +201,7 @@ export interface AssetRequest {
   id: string;
   kind: "closed-eye" | "mouth-shape";
   side: Side;
-  variant?: Exclude<MouthVariant, "closed">;
+  variant?: MouthVariant;
   sourceLayerIds: string[];
   crop: Rect;
   reference?: {

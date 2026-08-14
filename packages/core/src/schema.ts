@@ -88,7 +88,7 @@ export const assetRequestDocumentSchema = z.object({
     id: z.string(),
     kind: z.enum(["closed-eye", "mouth-shape"]),
     side: z.enum(["left", "right", "center"]),
-    variant: z.enum(["slight", "open"]).optional(),
+    variant: z.enum(["closed", "slight", "open"]).optional(),
     sourceLayerIds: z.array(z.string()),
     crop: rectSchema,
     reference: z.object({ path: z.string().min(1) }).optional(),
