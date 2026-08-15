@@ -44,24 +44,16 @@ function breathInfluence(layer: LayerBinding): number {
   return 0;
 }
 
-function physicsOffset(layer: LayerBinding, state: MotionState): Point {
-  if (layer.role === "backHair") return { x: state.backHairX, y: state.backHairY };
-  if (layer.role === "headwear" || layer.role === "ear") return { x: state.earX, y: state.earY };
-  if (layer.role === "topWear" || layer.role === "bottomWear") return { x: state.clothX, y: state.clothY };
-  if (layer.role === "tail") return { x: state.tailX, y: state.tailY };
-  if (layer.role === "accessory") return { x: state.accessoryX, y: state.accessoryY };
-  return { x: state.hairX, y: state.hairY };
-}
-
 function secondaryFree(layer: LayerBinding, base: Point): number {
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
   if (layer.role === "frontHair") return smoothstep01((v - 0.36) / 0.64) ** 2;
-  if (layer.role === "headwear" || layer.role === "ear") {
+  if (layer.role === "headwear") {
     const outer = smoothstep01((Math.abs(u - 0.5) - 0.18) / 0.32);
     const belowBand = smoothstep01((v - 0.18) / 0.72);
     return outer * belowBand;
   }
+  if (layer.role === "ear") return smoothstep01(v) ** 2;
   if (layer.role === "tail") {
     const distanceFromRoot = Math.hypot((u - 0.03) * 0.9, (v - 0.08) * 0.74);
     return smoothstep01((distanceFromRoot - 0.14) / 0.68);
@@ -69,6 +61,20 @@ function secondaryFree(layer: LayerBinding, base: Point): number {
   if (layer.role === "topWear") return smoothstep01((v - 0.52) / 0.48) ** 2;
   if (layer.role === "bottomWear") return smoothstep01((v - 0.12) / 0.88) ** 2;
   return v * v;
+}
+
+function addLocalBend(point: Point, base: Point, pivot: Point, radians: number, free: number): void {
+  if (Math.abs(radians) < 1e-8 || free <= 0) return;
+  const x = base.x - pivot.x;
+  const y = base.y - pivot.y;
+  point.x += -y * radians * free;
+  point.y += x * radians * free;
+}
+
+function addLocalStretch(point: Point, base: Point, pivot: Point, amount: number, free: number): void {
+  if (Math.abs(amount) < 1e-8 || free <= 0) return;
+  point.x += (base.x - pivot.x) * amount * free;
+  point.y += (base.y - pivot.y) * amount * free;
 }
 
 function ahogeFree(layer: LayerBinding, base: Point): number {
@@ -150,31 +156,39 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
 
   if (layer.weights.physics > 0) {
     const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
-    const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
     const free = secondaryFree(layer, base);
-    const physics = physicsOffset(layer, state);
-    const flexibleFeature = layer.role === "headwear" || layer.role === "ear";
-    const clothFeature = layer.role === "topWear" || layer.role === "bottomWear";
-    const tailFeature = layer.role === "tail";
-    const flexibility = flexibleFeature ? 1.35 : tailFeature ? 1.12 : clothFeature ? 4 : 1;
-    point.x += physics.x * faceWidth * 1.6 * flexibility * layer.weights.physics * free;
-    point.y += physics.y * faceHeight * 0.84 * flexibility * layer.weights.physics * free;
-    if (layer.role === "frontHair" || layer.role === "backHair" || layer.role === "sideHair" || flexibleFeature) {
-      const twist = flexibleFeature ? 0.22 : 0.14;
-      point.y += physics.x * (u - 0.5) * faceHeight * twist * layer.weights.physics * free;
-    }
-    if (clothFeature) {
-      point.y += physics.x * (u - 0.5) * faceHeight * 0.08 * layer.weights.physics * free;
-    }
-    if (tailFeature) {
-      point.y += physics.x * (u - 0.03) * faceHeight * 0.34 * layer.weights.physics * free;
-      point.x -= physics.y * (v - 0.08) * faceWidth * 0.28 * layer.weights.physics * free;
+    const weight = layer.weights.physics;
+    if (layer.role === "frontHair") {
+      addLocalBend(point, base, layer.pivot, state.hairX * 2.1 * weight, free);
+      point.y += state.hairY * faceHeight * 0.42 * weight * free;
+    } else if (layer.role === "backHair" || layer.role === "sideHair") {
+      addLocalBend(point, base, layer.pivot, state.backHairX * 2.5 * weight, free);
+      point.y += state.backHairY * faceHeight * 0.5 * weight * free;
+    } else if (layer.role === "headwear") {
+      addLocalBend(point, base, layer.pivot, state.headwearX * 1.8 * weight, 1);
+      addLocalStretch(point, base, layer.pivot, state.headwearY * 0.32 * weight, 1);
+      point.y += state.earY * faceHeight * 2.2 * weight * free;
+      addLocalBend(point, base, layer.pivot, state.earX * 0.72 * weight, free);
+    } else if (layer.role === "ear") {
+      point.y += state.earY * faceHeight * 0.85 * weight * free;
+      addLocalBend(point, base, layer.pivot, state.earX * 0.85 * weight, free);
+    } else if (layer.role === "topWear" || layer.role === "bottomWear") {
+      const clothScale = layer.role === "bottomWear" ? 3.4 : 2.1;
+      addLocalBend(point, base, layer.pivot, state.clothX * clothScale * weight, free);
+      point.y += state.clothY * faceHeight * 0.46 * weight * free;
+      point.y += state.clothX * (u - 0.5) * faceHeight * 0.12 * weight * free;
+    } else if (layer.role === "tail") {
+      addLocalBend(point, base, layer.pivot, state.tailX * 2.6 * weight, free);
+      addLocalStretch(point, base, layer.pivot, state.tailY * 0.42 * weight, free);
+    } else if (layer.role === "accessory") {
+      addLocalBend(point, base, layer.pivot, state.accessoryX * 2.2 * weight, free);
+      point.y += state.accessoryY * faceHeight * 0.55 * weight * free;
     }
     if (layer.role === "frontHair") {
       const ahoge = ahogeFree(layer, base);
-      point.x += state.ahogeX * faceWidth * 1.9 * layer.weights.physics * ahoge;
-      point.y += state.ahogeY * faceHeight * 0.9 * layer.weights.physics * ahoge;
-      point.y += state.ahogeX * (u - 0.5) * faceHeight * 0.24 * layer.weights.physics * ahoge;
+      addLocalBend(point, base, layer.pivot, state.ahogeX * 4.2 * weight, ahoge);
+      point.y += state.ahogeY * faceHeight * 0.62 * weight * ahoge;
+      point.y += state.ahogeX * (u - 0.5) * faceHeight * 0.18 * weight * ahoge;
     }
   }
 
@@ -200,6 +214,8 @@ export const neutralMotionState: MotionState = {
   ahogeY: 0,
   backHairX: 0,
   backHairY: 0,
+  headwearX: 0,
+  headwearY: 0,
   earX: 0,
   earY: 0,
   clothX: 0,

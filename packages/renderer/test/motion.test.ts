@@ -31,10 +31,11 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.headYaw) > 0.5)).toBe(true);
     expect(states.some((state) => Math.abs(state.bodySway) > 0.01)).toBe(true);
     expect(states.every((state) => Number.isFinite(state.hairX))).toBe(true);
-    expect(states.every((state) => Number.isFinite(state.ahogeX) && Number.isFinite(state.backHairX) && Number.isFinite(state.earX))).toBe(true);
+    expect(states.every((state) => Number.isFinite(state.ahogeX) && Number.isFinite(state.backHairX) && Number.isFinite(state.headwearX) && Number.isFinite(state.earX))).toBe(true);
     expect(states.every((state) => Number.isFinite(state.clothX) && Number.isFinite(state.tailX) && Number.isFinite(state.accessoryX))).toBe(true);
     expect(states.some((state) => Math.abs(state.hairX - state.backHairX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.hairX - state.earX) > 0.001)).toBe(true);
+    expect(states.some((state) => Math.abs(state.headwearX - state.earX) > 0.0001)).toBe(true);
     expect(states.some((state) => Math.abs(state.backHairX - state.accessoryX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.ahogeX - state.hairX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.tailX - state.clothX) > 0.001)).toBe(true);
@@ -56,6 +57,17 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.clothX) > 0.0001)).toBe(true);
     expect(states.some((state) => Math.abs(state.tailX) > 0.0001)).toBe(true);
     expect(Math.max(...states.map((state) => Math.abs(state.tailX)))).toBeLessThan(0.08);
+  });
+
+  it("does not drive every attached part with the same phase and direction", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    const states = Array.from({ length: 900 }, (_, index) => controller.sample(index / 60));
+    const differsInDirection = (left: keyof typeof states[number], right: keyof typeof states[number]) =>
+      states.some((state) => Number(state[left]) * Number(state[right]) < -1e-7);
+    expect(differsInDirection("hairX", "backHairX")).toBe(true);
+    expect(differsInDirection("ahogeX", "headwearX")).toBe(true);
+    expect(differsInDirection("earY", "clothY")).toBe(true);
+    expect(differsInDirection("tailX", "clothX")).toBe(true);
   });
 
   it("moves the gaze before the head and lets the body follow later", () => {

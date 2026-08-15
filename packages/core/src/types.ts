@@ -321,6 +321,8 @@ export interface MotionState {
   ahogeY: number;
   backHairX: number;
   backHairY: number;
+  headwearX: number;
+  headwearY: number;
   earX: number;
   earY: number;
   clothX: number;

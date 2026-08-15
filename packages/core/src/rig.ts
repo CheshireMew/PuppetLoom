@@ -33,6 +33,7 @@ const headRoles = new Set<SemanticRole>([
 
 const fineRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear"]);
 const hairRoles = new Set<SemanticRole>(["backHair", "frontHair", "sideHair"]);
+const eyeSocketRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClosed"]);
 
 function normalizedRect(rect: Rect, width: number, height: number): Rect {
   return roundRect({ x: rect.x / width, y: rect.y / height, width: rect.width / width, height: rect.height / height });
@@ -74,9 +75,16 @@ export function makeGridMesh(bounds: Rect, rows: number, cols: number): MeshBind
   return { rows, cols, points, uvs, triangles };
 }
 
-function pivotFor(role: SemanticRole, bounds: Rect): Point {
-  if (hairRoles.has(role)) return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.15 });
+function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], anchors: AnchorGraph): Point {
+  if (eyeSocketRoles.has(role) && side !== "center") {
+    const eye = side === "left" ? anchors.eyeLeft : anchors.eyeRight;
+    if (eye) return roundPoint(eye);
+  }
+  if (role === "frontHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.38 });
+  if (role === "backHair" || role === "sideHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.15 });
   if (role === "tail") return roundPoint({ x: bounds.x + bounds.width * 0.03, y: bounds.y + bounds.height * 0.08 });
+  if (role === "topWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.18 });
+  if (role === "bottomWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.12 });
   if (role === "arm" || role === "hand") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.08 });
   if (role === "leg" || role === "foot") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.05 });
   return roundPoint(rectCenter(bounds));
@@ -240,7 +248,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       blendMode: layer.blendMode,
       bounds,
       texture: `textures/${layer.id}.png`,
-      pivot: pivotFor(layer.role, bounds),
+      pivot: pivotFor(layer.role, bounds, layer.side, anchors),
       mesh: makeGridMesh(bounds, density.rows, density.cols),
       weights,
       ...(clipLayerId ? { clipLayerId } : {}),

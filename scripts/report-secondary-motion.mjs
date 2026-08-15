@@ -12,7 +12,7 @@ const project = JSON.parse(await readFile(resolve(projectDirectory, "puppetloom.
 const controller = new CalmMotionController(project);
 const fps = 60;
 const secondaryKeys = [
-  "hairX", "hairY", "ahogeX", "ahogeY", "backHairX", "backHairY", "earX", "earY",
+  "hairX", "hairY", "ahogeX", "ahogeY", "backHairX", "backHairY", "headwearX", "headwearY", "earX", "earY",
   "clothX", "clothY", "tailX", "tailY", "accessoryX", "accessoryY"
 ];
 const states = Array.from({ length: Math.round(durationSeconds * fps) }, (_, index) => controller.sample(index / fps));

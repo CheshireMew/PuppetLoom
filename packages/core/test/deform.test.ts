@@ -96,4 +96,29 @@ describe("secondary motion anchoring", () => {
     expect(movement(root, deformPoint(project, layer, root, state))).toBeLessThan(1e-8);
     expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(0.001);
   });
+
+  it("keeps the maid band centered while the merged ears bob vertically", () => {
+    const layer = secondaryLayer("headwear");
+    layer.pivot = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y + layer.bounds.height * 0.5 };
+    const bandCenter = { ...layer.pivot };
+    const earTip = { x: layer.bounds.x, y: layer.bounds.y + layer.bounds.height };
+    const state = { ...neutralMotionState, earY: 0.05 };
+    expect(movement(bandCenter, deformPoint(project, layer, bandCenter, state))).toBeLessThan(1e-8);
+    const movedTip = deformPoint(project, layer, earTip, state);
+    expect(movedTip.y).toBeGreaterThan(earTip.y);
+    expect(Math.abs(movedTip.x - earTip.x)).toBeLessThan(1e-8);
+  });
+
+  it("can bend front and back hair in opposite directions around fixed roots", () => {
+    const front = secondaryLayer("frontHair");
+    const back = secondaryLayer("backHair");
+    const frontTip = { x: front.pivot.x, y: front.bounds.y + front.bounds.height };
+    const backTip = { x: back.pivot.x, y: back.bounds.y + back.bounds.height };
+    const state = { ...neutralMotionState, hairX: 0.04, backHairX: -0.04 };
+    const movedFront = deformPoint(project, front, frontTip, state);
+    const movedBack = deformPoint(project, back, backTip, state);
+    expect(Math.sign(movedFront.x - frontTip.x)).toBe(-Math.sign(movedBack.x - backTip.x));
+    expect(deformPoint(project, front, front.pivot, state)).toEqual(front.pivot);
+    expect(deformPoint(project, back, back.pivot, state)).toEqual(back.pivot);
+  });
 });

@@ -159,6 +159,9 @@ describe("optional enhancement", () => {
     expect(result.accepted).toEqual(["closed-eye-left", "closed-eye-right", "mouth-neutral", "mouth-slight", "mouth-open-small"]);
     expect(result.rejected).toEqual([]);
     expect(result.project.runtime.features.blink).toBe(true);
+    for (const closed of result.project.layers.filter((layer) => layer.role === "eyeClosed")) {
+      expect(closed.pivot).toEqual(result.project.layers.find((layer) => layer.role === "eyeWhite" && layer.side === closed.side)?.pivot);
+    }
     expect(result.project.layers.filter((layer) => layer.role === "mouth").map((layer) => layer.mouthVariant).sort()).toEqual(["closed", "closed", "open", "slight"]);
     expect(result.project.layers.filter((layer) => layer.role === "mouth" && layer.mouthVariant === "closed" && layer.opacity === 0)).toHaveLength(1);
     expect(JSON.parse(await readFile(resolve(semanticOutput, "reports/build-report.json"), "utf8"))).toMatchObject({ layerCount: 24, enabledFeatures: expect.arrayContaining(["blink"]), disabledFeatures: [] });

@@ -119,7 +119,7 @@ function supplementalLayer(request: AssetRequest, project: PuppetLoomProject, ex
     blendMode: "normal",
     bounds,
     texture: request.output.path,
-    pivot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.5 },
+    pivot: request.kind === "closed-eye" ? { ...existing.pivot } : { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.5 },
     mesh: makeGridMesh(bounds, 4, 4),
     weights: { head: 1, body: 0, gaze: 0, physics: 0 },
     ...(request.kind === "mouth-shape" && request.variant ? { mouthVariant: request.variant } : {}),
