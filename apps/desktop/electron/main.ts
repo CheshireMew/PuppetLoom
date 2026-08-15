@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createProject, inspectPsd, loadProject, verifyProject } from "@puppetloom/core";
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain } from "electron";
+import { pointerTargetFromScreen } from "@puppetloom/renderer";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen } from "electron";
 import type { DesktopCreateRequest, ViewerState } from "./global.js";
 
 const electronDirectory = dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,7 @@ const preload = join(electronDirectory, "preload.cjs");
 const rendererPage = resolve(electronDirectory, "../renderer/index.html");
 const viewerStates = new Map<number, ViewerState>();
 const viewerProjects = new Map<number, string>();
+const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 let runtimeLogPath: string | undefined;
 
 function runtimeLog(event: string, details: Record<string, unknown> = {}): void {
@@ -58,7 +60,7 @@ async function chooseFile(event: Electron.IpcMainInvokeEvent, filters: Electron.
 function stateFor(window: BrowserWindow): ViewerState {
   const existing = viewerStates.get(window.id);
   if (existing) return existing;
-  const state = { paused: false, alwaysOnTop: true, clickThrough: false, scale: 1 };
+  const state = { paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: true, scale: 1 };
   viewerStates.set(window.id, state);
   return state;
 }
@@ -95,6 +97,7 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
     window.setIgnoreMouseEvents(!current.clickThrough, { forward: true });
     next = { ...current, clickThrough: !current.clickThrough };
   }
+  if (action === "pointer-tracking") next = { ...current, mouseTracking: !current.mouseTracking };
   if (action === "larger" || action === "smaller") {
     const factor = action === "larger" ? 1.1 : 1 / 1.1;
     const size = window.getSize();
@@ -143,6 +146,10 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
   window.setAspectRatio(project.canvas.width / project.canvas.height);
   stateFor(window);
   viewerProjects.set(window.id, resolvedProject);
+  viewerLookOrigins.set(window.id, project.anchors.nose ?? {
+    x: 0.5,
+    y: ((project.anchors.headTop?.y ?? 0.04) + (project.anchors.chin?.y ?? 0.36)) * 0.5
+  });
   runtimeLog("viewer-window-created", { id: window.id, width, height });
   window.once("ready-to-show", () => runtimeLog("viewer-ready-to-show", { id: window.id }));
   window.webContents.on("did-finish-load", () => runtimeLog("viewer-page-loaded", { id: window.id }));
@@ -152,6 +159,7 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
     runtimeLog("viewer-closed", { id: window.id });
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
+    viewerLookOrigins.delete(window.id);
   });
   try {
     await window.loadFile(rendererPage, { query: { viewer: "1", project: resolvedProject } });
@@ -159,6 +167,7 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
   } catch (cause) {
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
+    viewerLookOrigins.delete(window.id);
     window.destroy();
     throw cause;
   }
@@ -254,6 +263,14 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("viewer:self-control", (event, action: string) => {
     const window = ownerWindow(event);
     return window ? controlViewer(window, action) : null;
+  });
+  ipcMain.handle("viewer:pointer-target", (event) => {
+    const window = ownerWindow(event);
+    if (!window || !stateFor(window).mouseTracking) return { x: 0, y: 0, strength: 0 };
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = window.getBounds();
+    const workArea = screen.getDisplayMatching(bounds).workArea;
+    return pointerTargetFromScreen(cursor, bounds, workArea, viewerLookOrigins.get(window.id));
   });
 
   globalShortcut.register("CommandOrControl+Shift+P", () => {

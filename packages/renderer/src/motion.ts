@@ -1,4 +1,5 @@
 import type { MotionState, PuppetLoomProject } from "@puppetloom/core/browser";
+import type { PointerLookTarget } from "./pointer.js";
 
 interface MotionEvent {
   start: number;
@@ -24,6 +25,7 @@ interface TrackingAxis {
 
 export interface MotionSampleOptions {
   primaryMotion?: boolean;
+  lookTarget?: PointerLookTarget;
 }
 
 function mulberry32(seed: number): () => number {
@@ -189,6 +191,9 @@ export class CalmMotionController {
   private readonly trackedRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedBody: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedBodyRoll: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedLookX: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedLookY: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedLookStrength: TrackingAxis = { value: 0, velocity: 0 };
   private readonly frontHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly ahoge: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly backHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
@@ -208,7 +213,7 @@ export class CalmMotionController {
     this.previousPitch = 0;
     this.previousRoll = 0;
     this.previousBody = 0;
-    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyRoll]) {
+    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyRoll, this.trackedLookX, this.trackedLookY, this.trackedLookStrength]) {
       axis.value = 0;
       axis.velocity = 0;
     }
@@ -228,13 +233,27 @@ export class CalmMotionController {
     const microPitch = primaryMotion ? Math.sin(timeSeconds * 0.37 + phase * 1.3) * 0.01 : 0;
     const microRoll = primaryMotion ? Math.sin(timeSeconds * 0.29 + phase * 0.45) * 0.008 : 0;
     const tuning = this.project.runtime.motionTuning ?? { amplitude: 1, response: 0.72, stability: 0.42 };
-    const desiredYaw = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "yaw") : 0) + microYaw) * tuning.amplitude));
-    const desiredPitch = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch) * tuning.amplitude));
-    const desiredRoll = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "roll") : 0) + microRoll) * tuning.amplitude));
-    const gazeTargetX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.25 : 0) + microYaw * 0.7) * tuning.amplitude;
-    const gazeTargetY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.05 : 0) + microPitch * 0.55) * tuning.amplitude;
     const delta = this.lastTime === 0 ? 1 / 60 : Math.max(1 / 240, Math.min(0.05, timeSeconds - this.lastTime));
     this.lastTime = timeSeconds;
+
+    const lookTarget = primaryMotion ? options.lookTarget : undefined;
+    advanceTracking(this.trackedLookX, Math.max(-1, Math.min(1, lookTarget?.x ?? 0)), delta, 1, 0.72);
+    advanceTracking(this.trackedLookY, Math.max(-1, Math.min(1, lookTarget?.y ?? 0)), delta, 1, 0.72);
+    advanceTracking(this.trackedLookStrength, Math.max(0, Math.min(1, lookTarget?.strength ?? 0)), delta, 1, 0.82);
+    const lookStrength = Math.max(0, Math.min(1, this.trackedLookStrength.value));
+    const autonomousYaw = ((active ? eventValue(active, timeSeconds, "yaw") : 0) + microYaw) * tuning.amplitude;
+    const autonomousPitch = ((active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch) * tuning.amplitude;
+    const autonomousRoll = ((active ? eventValue(active, timeSeconds, "roll") : 0) + microRoll) * tuning.amplitude;
+    const pointerYaw = this.trackedLookX.value * 0.92 * tuning.amplitude;
+    const pointerPitch = this.trackedLookY.value * 0.72 * tuning.amplitude;
+    const pointerRoll = this.trackedLookX.value * 0.1 * tuning.amplitude;
+    const desiredYaw = Math.max(-1, Math.min(1, autonomousYaw * (1 - lookStrength) + pointerYaw * lookStrength));
+    const desiredPitch = Math.max(-1, Math.min(1, autonomousPitch * (1 - lookStrength) + pointerPitch * lookStrength));
+    const desiredRoll = Math.max(-1, Math.min(1, autonomousRoll * (1 - lookStrength) + pointerRoll * lookStrength));
+    const autonomousGazeX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.25 : 0) + microYaw * 0.7) * tuning.amplitude;
+    const autonomousGazeY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.05 : 0) + microPitch * 0.55) * tuning.amplitude;
+    const gazeTargetX = autonomousGazeX * (1 - lookStrength) + this.trackedLookX.value * 1.1 * tuning.amplitude * lookStrength;
+    const gazeTargetY = autonomousGazeY * (1 - lookStrength) + this.trackedLookY.value * 0.92 * tuning.amplitude * lookStrength;
 
     advanceTracking(this.trackedYaw, desiredYaw, delta, tuning.response, tuning.stability);
     advanceTracking(this.trackedPitch, desiredPitch, delta, tuning.response, tuning.stability);

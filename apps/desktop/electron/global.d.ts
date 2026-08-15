@@ -1,4 +1,5 @@
 import type { BuildReport, InspectionReport, LayerBinding, MotionState, PuppetLoomProject, VerifyResult } from "@puppetloom/core";
+import type { PointerLookTarget } from "@puppetloom/renderer";
 
 export interface DesktopCreateRequest {
   input: string;
@@ -18,6 +19,7 @@ export interface ViewerState {
   paused: boolean;
   alwaysOnTop: boolean;
   clickThrough: boolean;
+  mouseTracking: boolean;
   scale: number;
 }
 
@@ -32,8 +34,9 @@ export interface PuppetLoomDesktopApi {
   readProject(projectDirectory: string): Promise<PuppetLoomProject>;
   readAsset(projectDirectory: string, layer: LayerBinding): Promise<Blob>;
   launchViewer(projectDirectory: string): Promise<{ id: number; state: ViewerState }>;
-  controlViewer(id: number, action: "pause" | "top" | "click-through" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
-  viewerAction(action: "pause" | "top" | "click-through" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
+  controlViewer(id: number, action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
+  viewerAction(action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
+  pointerTarget(): Promise<PointerLookTarget>;
   onViewerState(listener: (state: ViewerState) => void): () => void;
 }
 

@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("puppetloom", {
   launchViewer: (projectDirectory: string) => ipcRenderer.invoke("viewer:launch", projectDirectory),
   controlViewer: (id: number, action: string) => ipcRenderer.invoke("viewer:control", id, action),
   viewerAction: (action: string) => ipcRenderer.invoke("viewer:self-control", action),
+  pointerTarget: () => ipcRenderer.invoke("viewer:pointer-target"),
   onViewerState: (listener: (state: unknown) => void) => {
     const handler = (_event: unknown, state: unknown) => listener(state);
     ipcRenderer.on("viewer:state", handler);

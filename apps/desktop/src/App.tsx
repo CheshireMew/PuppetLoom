@@ -4,7 +4,7 @@ import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import type { ViewerState } from "../electron/global.js";
 
-type ViewerAction = "pause" | "top" | "click-through" | "larger" | "smaller" | "close";
+type ViewerAction = "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -14,7 +14,7 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const [project, setProject] = useState<PuppetLoomProject>();
-  const [state, setState] = useState<ViewerState>({ paused: false, alwaysOnTop: true, clickThrough: false, scale: 1 });
+  const [state, setState] = useState<ViewerState>({ paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: true, scale: 1 });
   const [error, setError] = useState("");
 
   useEffect(() => window.puppetloom.onViewerState((next) => {
@@ -24,6 +24,8 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
 
   useEffect(() => {
     let disposed = false;
+    let pointerTimer = 0;
+    let pointerRequestActive = false;
     void (async () => {
       try {
         const loaded = await window.puppetloom.readProject(projectDirectory);
@@ -31,6 +33,19 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
         setProject(loaded);
         renderer.current = await PuppetRenderer.create(canvas.current, loaded, (layer) => window.puppetloom.readAsset(projectDirectory, layer));
         renderer.current.start();
+        const updatePointer = async () => {
+          if (disposed || pointerRequestActive || !renderer.current) return;
+          pointerRequestActive = true;
+          try {
+            renderer.current.setLookTarget(await window.puppetloom.pointerTarget());
+          } catch {
+            renderer.current?.setLookTarget({ x: 0, y: 0, strength: 0 });
+          } finally {
+            pointerRequestActive = false;
+          }
+        };
+        void updatePointer();
+        pointerTimer = window.setInterval(() => void updatePointer(), 1000 / 20);
         window.puppetloomRenderTestPose = (override) => {
           if (!renderer.current) return false;
           renderer.current.setPaused(true);
@@ -43,6 +58,7 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
     })();
     return () => {
       disposed = true;
+      if (pointerTimer) window.clearInterval(pointerTimer);
       delete window.puppetloomRenderTestPose;
       renderer.current?.dispose();
     };
@@ -65,6 +81,7 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
         <button onClick={() => act("larger")} title="放大">＋</button>
         <button onClick={() => act("pause")} title="暂停或继续">{state.paused ? "继续" : "暂停"}</button>
         <button onClick={() => act("top")} title="切换置顶">{state.alwaysOnTop ? "取消置顶" : "置顶"}</button>
+        <button onClick={() => act("pointer-tracking")} title="在鼠标跟随和自主观察之间切换">{state.mouseTracking ? "跟随中" : "自主"}</button>
         <button onClick={() => act("click-through")} title="启用后按 Ctrl+Shift+P 恢复鼠标">穿透</button>
         <button onClick={() => act("close")} title="关闭">×</button>
       </nav>
@@ -213,6 +230,7 @@ function Creator(): React.JSX.Element {
             {viewerId !== undefined && <div className="remote-controls">
               <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}>暂停 / 继续</button>
               <button onClick={() => void window.puppetloom.controlViewer(viewerId, "click-through")}>鼠标穿透</button>
+              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pointer-tracking")}>鼠标跟随 / 自主观察</button>
               <button onClick={() => void window.puppetloom.controlViewer(viewerId, "top")}>切换置顶</button>
             </div>}
           </section>}

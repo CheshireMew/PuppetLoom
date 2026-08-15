@@ -106,6 +106,26 @@ describe("calm autonomous timeline", () => {
     expect(Math.abs(duringTurn.headYaw)).toBeGreaterThan(Math.abs(duringTurn.bodySway));
   });
 
+  it("follows a pointer with gaze first, head second, and body last", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    const target = { x: 0.9, y: -0.7, strength: 1 };
+    const states = Array.from({ length: 180 }, (_, index) => controller.sample(index / 60, { lookTarget: target }));
+    expect(states[8]!.gazeX).toBeGreaterThan(states[8]!.headYaw * 0.35);
+    expect(states.at(-1)!.headYaw).toBeGreaterThan(0.75);
+    expect(states.at(-1)!.headPitch).toBeLessThan(-0.4);
+    expect(states.at(-1)!.bodySway).toBeGreaterThan(0.3);
+    expect(Math.abs(states.at(-1)!.bodySway)).toBeLessThan(Math.abs(states.at(-1)!.headYaw));
+  });
+
+  it("returns smoothly to autonomous motion when pointer tracking is disabled", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    for (let index = 0; index < 120; index += 1) controller.sample(index / 60, { lookTarget: { x: -0.9, y: 0.4, strength: 1 } });
+    const release = Array.from({ length: 180 }, (_, index) => controller.sample((120 + index) / 60));
+    const steps = release.slice(1).map((state, index) => Math.abs(state.headYaw - release[index]!.headYaw));
+    expect(Math.max(...steps)).toBeLessThan(0.05);
+    expect(release.at(-1)!.headYaw).toBeGreaterThan(-0.7);
+  });
+
   it("opens and closes the mouth occasionally instead of chattering continuously", () => {
     const controller = new CalmMotionController(fixtureProject(42, true));
     const states = Array.from({ length: 1200 }, (_, index) => controller.sample(index / 60));

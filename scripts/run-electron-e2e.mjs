@@ -40,6 +40,15 @@ try {
   const aspect = nativeState.size[0] / nativeState.size[1];
   if (!nativeState.top || !nativeState.visible || Math.abs(aspect - 1) > 0.01) throw new Error(`透明窗口状态不符合要求：${JSON.stringify(nativeState)}`);
 
+  const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
+  if (![pointer.x, pointer.y, pointer.strength].every(Number.isFinite) || pointer.strength !== 1) throw new Error(`系统鼠标目标无效：${JSON.stringify(pointer)}`);
+  const trackingOff = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: launched.id });
+  if (trackingOff?.mouseTracking) throw new Error("桌面端未能关闭鼠标跟随。" );
+  const disabledPointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
+  if (disabledPointer.strength !== 0) throw new Error(`关闭鼠标跟随后仍返回活动目标：${JSON.stringify(disabledPointer)}`);
+  const trackingOn = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: launched.id });
+  if (!trackingOn?.mouseTracking) throw new Error("桌面端未能恢复鼠标跟随。" );
+
   await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "larger"), { id: launched.id });
   const scaledSize = await browserWindow.evaluate((window) => window.getSize());
   if (scaledSize[0] <= nativeState.size[0] || scaledSize[1] <= nativeState.size[1]) throw new Error(`角色窗口缩放未生效：${JSON.stringify({ before: nativeState.size, after: scaledSize })}`);

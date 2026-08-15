@@ -1,5 +1,6 @@
 import { deformedPoints, type LayerBinding, type MotionState, type PuppetLoomProject } from "@puppetloom/core/browser";
 import { CalmMotionController } from "./motion.js";
+import type { PointerLookTarget } from "./pointer.js";
 
 export type TextureResolver = (layer: LayerBinding) => Promise<Blob | ImageBitmapSource>;
 
@@ -149,6 +150,7 @@ export class PuppetRenderer {
   private animationFrame = 0;
   private startedAt = 0;
   private paused = false;
+  private lookTarget: PointerLookTarget = { x: 0, y: 0, strength: 0 };
 
   private constructor(canvas: HTMLCanvasElement, project: PuppetLoomProject) {
     this.canvas = canvas;
@@ -275,7 +277,7 @@ export class PuppetRenderer {
     if (this.animationFrame) return;
     this.startedAt = performance.now();
     const loop = (now: number) => {
-      if (!this.paused) this.render(this.controller.sample((now - this.startedAt) / 1000));
+      if (!this.paused) this.render(this.controller.sample((now - this.startedAt) / 1000, { lookTarget: this.lookTarget }));
       this.animationFrame = requestAnimationFrame(loop);
     };
     this.animationFrame = requestAnimationFrame(loop);
@@ -283,6 +285,14 @@ export class PuppetRenderer {
 
   setPaused(paused: boolean): void {
     this.paused = paused;
+  }
+
+  setLookTarget(target: PointerLookTarget): void {
+    this.lookTarget = {
+      x: Math.max(-1, Math.min(1, target.x)),
+      y: Math.max(-1, Math.min(1, target.y)),
+      strength: Math.max(0, Math.min(1, target.strength))
+    };
   }
 
   dispose(): void {
