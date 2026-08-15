@@ -12,7 +12,8 @@ import type {
   Rect,
   RigLevel,
   RuntimeFeatures,
-  SemanticRole
+  SemanticRole,
+  LayerSecondaryAnchors
 } from "./types.js";
 
 const headRoles = new Set<SemanticRole>([
@@ -82,12 +83,46 @@ function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], 
   }
   if (role === "frontHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.38 });
   if (role === "backHair" || role === "sideHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.15 });
+  if (role === "ear") {
+    const x = side === "left" ? bounds.x : side === "right" ? bounds.x + bounds.width : bounds.x + bounds.width * 0.5;
+    return roundPoint({ x, y: bounds.y + bounds.height * 0.42 });
+  }
   if (role === "tail") return roundPoint({ x: bounds.x + bounds.width * 0.03, y: bounds.y + bounds.height * 0.08 });
   if (role === "topWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.18 });
   if (role === "bottomWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.12 });
   if (role === "arm" || role === "hand") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.08 });
   if (role === "leg" || role === "foot") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.05 });
   return roundPoint(rectCenter(bounds));
+}
+
+function countOpaqueWingPixels(layer: ImportedLayer, hingeX: number, hingeY: number, direction: -1 | 1, faceWidth: number, faceHeight: number): number {
+  let count = 0;
+  const { width, height, data } = layer.pixels;
+  for (let y = 0; y < height; y += 1) {
+    const globalY = layer.bounds.y + y;
+    if (globalY < hingeY - faceHeight * 0.12) continue;
+    for (let x = 0; x < width; x += 1) {
+      const globalX = layer.bounds.x + x;
+      if ((globalX - hingeX) * direction < faceWidth * 0.04) continue;
+      if ((data[(y * width + x) * 4 + 3] ?? 0) > 8) count += 1;
+    }
+  }
+  return count;
+}
+
+function secondaryAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | undefined, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors | undefined {
+  if (layer.role !== "headwear" || !faceLayer) return undefined;
+  const hingeLeftX = faceLayer.bounds.x + faceLayer.bounds.width * 0.03;
+  const hingeRightX = faceLayer.bounds.x + faceLayer.bounds.width * 0.97;
+  const hingeY = faceLayer.bounds.y + faceLayer.bounds.height * 0.5;
+  const leftPixels = countOpaqueWingPixels(layer, hingeLeftX, hingeY, -1, faceLayer.bounds.width, faceLayer.bounds.height);
+  const rightPixels = countOpaqueWingPixels(layer, hingeRightX, hingeY, 1, faceLayer.bounds.width, faceLayer.bounds.height);
+  const threshold = Math.max(24, Math.round(layer.opaquePixels * 0.006));
+  if (leftPixels < threshold || rightPixels < threshold) return undefined;
+  return {
+    earHingeLeft: roundPoint({ x: hingeLeftX / canvas.width, y: hingeY / canvas.height }),
+    earHingeRight: roundPoint({ x: hingeRightX / canvas.width, y: hingeY / canvas.height })
+  };
 }
 
 function weightsFor(role: SemanticRole, level: RigLevel, insideHead: boolean): LayerWeights {
@@ -227,6 +262,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
   const { imported } = input;
   const level = suggestedRigLevel(imported.layers);
   const anchors = deriveAnchors(imported);
+  const faceLayer = findLayer(imported.layers, "face");
   const headBoundsPx = rectUnion(imported.layers.filter((layer) => headRoles.has(layer.role)).map((layer) => layer.bounds));
   const headBounds = headBoundsPx ? normalizedRect(headBoundsPx, imported.canvas.width, imported.canvas.height) : undefined;
   const layers: LayerBinding[] = imported.layers.map((layer) => {
@@ -237,6 +273,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     const weights = weightsFor(layer.role, level, insideHead);
     const parentGroup: LayerBinding["parentGroup"] = weights.head >= 0.5 ? "head" : weights.body > 0 ? "body" : "root";
     const clipLayerId = clipLayerFor(layer, imported.layers);
+    const secondaryAnchors = secondaryAnchorsFor(layer, faceLayer, imported.canvas);
     return {
       id: layer.id,
       sourceName: layer.sourceName,
@@ -249,6 +286,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       bounds,
       texture: `textures/${layer.id}.png`,
       pivot: pivotFor(layer.role, bounds, layer.side, anchors),
+      ...(secondaryAnchors ? { secondaryAnchors } : {}),
       mesh: makeGridMesh(bounds, density.rows, density.cols),
       weights,
       ...(clipLayerId ? { clipLayerId } : {}),

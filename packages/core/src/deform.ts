@@ -64,6 +64,19 @@ function secondaryFree(layer: LayerBinding, base: Point): number {
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
   if (layer.role === "frontHair") return smoothstep01((v - 0.36) / 0.64) ** 2;
   if (layer.role === "headwear") {
+    const hinge = base.x < layer.bounds.x + layer.bounds.width * 0.5
+      ? layer.secondaryAnchors?.earHingeLeft
+      : layer.secondaryAnchors?.earHingeRight;
+    if (hinge) {
+      const distance = Math.hypot(
+        (base.x - hinge.x) / Math.max(1e-6, layer.bounds.width * 0.32),
+        (base.y - hinge.y) / Math.max(1e-6, layer.bounds.height * 0.35)
+      );
+      const radialRelease = smoothstep01((distance - 0.12) / 0.88);
+      const outer = smoothstep01((Math.abs(u - 0.5) - 0.08) / 0.24);
+      const belowBand = smoothstep01((v - 0.42) / 0.22);
+      return radialRelease * outer * belowBand;
+    }
     const outer = smoothstep01((Math.abs(u - 0.5) - 0.18) / 0.32);
     const belowBand = smoothstep01((v - 0.18) / 0.72);
     return outer * belowBand;
@@ -90,6 +103,21 @@ function addLocalStretch(point: Point, base: Point, pivot: Point, amount: number
   if (Math.abs(amount) < 1e-8 || free <= 0) return;
   point.x += (base.x - pivot.x) * amount * free;
   point.y += (base.y - pivot.y) * amount * free;
+}
+
+function earHingeFor(layer: LayerBinding, base: Point): { pivot: Point; mirror: -1 | 1 } | undefined {
+  if (layer.role === "headwear") {
+    if (base.x < layer.bounds.x + layer.bounds.width * 0.5 && layer.secondaryAnchors?.earHingeLeft) {
+      return { pivot: layer.secondaryAnchors.earHingeLeft, mirror: -1 };
+    }
+    if (layer.secondaryAnchors?.earHingeRight) return { pivot: layer.secondaryAnchors.earHingeRight, mirror: 1 };
+    return undefined;
+  }
+  if (layer.role === "ear") {
+    const mirror = layer.side === "right" || (layer.side === "center" && base.x < layer.bounds.x + layer.bounds.width * 0.5) ? -1 : 1;
+    return { pivot: layer.pivot, mirror };
+  }
+  return undefined;
 }
 
 function ahogeFree(layer: LayerBinding, base: Point): number {
@@ -192,11 +220,17 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     } else if (layer.role === "headwear") {
       addLocalBend(point, base, layer.pivot, state.headwearX * 1.8 * weight, 1);
       addLocalStretch(point, base, layer.pivot, state.headwearY * 0.32 * weight, 1);
-      point.y += state.earY * faceHeight * 2.8 * weight * free;
-      addLocalBend(point, base, layer.pivot, state.earX * 0.72 * weight, free);
+      const hinge = earHingeFor(layer, base);
+      if (hinge) {
+        const flap = state.earY * hinge.mirror * 20 + state.earX * 6;
+        addLocalBend(point, base, hinge.pivot, flap * weight, free);
+      } else {
+        point.y += state.earY * faceHeight * 2.8 * weight * free;
+        addLocalBend(point, base, layer.pivot, state.earX * 0.72 * weight, free);
+      }
     } else if (layer.role === "ear") {
-      point.y += state.earY * faceHeight * 0.85 * weight * free;
-      addLocalBend(point, base, layer.pivot, state.earX * 0.85 * weight, free);
+      const hinge = earHingeFor(layer, base);
+      if (hinge) addLocalBend(point, base, hinge.pivot, (state.earY * hinge.mirror * 20 + state.earX * 6) * weight, free);
     } else if (layer.role === "topWear" || layer.role === "bottomWear") {
       const clothScale = layer.role === "bottomWear" ? 3.4 : 2.1;
       addLocalBend(point, base, layer.pivot, state.clothX * clothScale * weight, free);

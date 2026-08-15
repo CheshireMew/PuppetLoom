@@ -21,6 +21,7 @@
     "test:expressions": "node scripts/render-expression-sheet.mjs",
     "test:turns": "node scripts/render-turn-sheet.mjs",
     "test:idle-motion": "node scripts/render-idle-motion-preview.mjs",
+    "test:ear-hinges": "node scripts/render-ear-hinge-sheet.mjs",
     "preview": "node scripts/render-project-preview.mjs",
     "fixtures": "node scripts/generate-fixtures.mjs",
     "desktop": "npm run build && electron apps/desktop/dist/electron/main.js",

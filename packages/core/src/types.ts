@@ -61,6 +61,11 @@ export interface LayerWeights {
   physics: number;
 }
 
+export interface LayerSecondaryAnchors {
+  earHingeLeft?: Point;
+  earHingeRight?: Point;
+}
+
 export interface LayerBinding {
   id: string;
   sourceName: string;
@@ -73,6 +78,7 @@ export interface LayerBinding {
   bounds: Rect;
   texture: string;
   pivot: Point;
+  secondaryAnchors?: LayerSecondaryAnchors;
   mesh: MeshBinding;
   weights: LayerWeights;
   clipLayerId?: string;

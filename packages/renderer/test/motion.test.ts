@@ -56,8 +56,7 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...states.map((state) => Math.abs(state.hairX)))).toBeGreaterThan(0.003);
     expect(Math.max(...states.map((state) => Math.abs(state.backHairX)))).toBeGreaterThan(0.006);
     expect(Math.max(...states.map((state) => Math.abs(state.ahogeX)))).toBeGreaterThan(0.008);
-    expect(Math.max(...states.map((state) => Math.abs(state.ahogeY)))).toBeGreaterThan(0.008);
-    expect(Math.max(...states.map((state) => Math.abs(state.earY)))).toBeGreaterThan(0.004);
+    expect(Math.max(...states.map((state) => Math.abs(state.ahogeY)))).toBeGreaterThan(0.0004);
     expect(states.some((state) => Math.abs(state.clothX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.tailX) > 0.001)).toBe(true);
     expect(states.filter((state) => state.hairX * state.backHairX < 0)).toHaveLength(states.length);
@@ -75,7 +74,7 @@ describe("calm autonomous timeline", () => {
     expect(differsInDirection("tailX", "clothX")).toBe(true);
   });
 
-  it("keeps breeze, ahoge, and ear motion alive while the head and body are frozen", () => {
+  it("keeps breeze and ahoge sway alive while primary motion is frozen, but triggers ears in occasional multi-flap bursts", () => {
     const controller = new CalmMotionController(fixtureProject());
     const states = Array.from({ length: 720 }, (_, index) => controller.sample(index / 60, { primaryMotion: false }));
     expect(states.every((state) => state.headYaw === 0 && state.headPitch === 0 && state.headRoll === 0)).toBe(true);
@@ -84,7 +83,15 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...states.map((state) => Math.abs(state.backHairX)))).toBeGreaterThan(0.008);
     expect(Math.max(...states.map((state) => Math.abs(state.ahogeX)))).toBeGreaterThan(0.01);
     expect(Math.max(...states.map((state) => Math.abs(state.ahogeY)))).toBeGreaterThan(0.01);
+    expect(states.filter((state) => Math.abs(state.ahogeY) > 0.01).length / states.length).toBeLessThan(0.35);
     expect(Math.max(...states.map((state) => Math.abs(state.earY)))).toBeGreaterThan(0.008);
+    const activeEars = states.map((state) => Math.abs(state.earY) > 0.0001);
+    expect(activeEars.filter(Boolean).length / states.length).toBeLessThan(0.3);
+    expect(activeEars.some((active, index) => active && !activeEars[index - 1])).toBe(true);
+    expect(states.some((state) => state.earY === 0 && state.earX === 0)).toBe(true);
+    const strongEars = states.map((state) => Math.abs(state.earY) > 0.008);
+    const strongFlapStarts = strongEars.filter((active, index) => active && !strongEars[index - 1]).length;
+    expect(strongFlapStarts).toBeGreaterThanOrEqual(6);
   });
 
   it("moves the gaze before the head and lets the body follow later", () => {

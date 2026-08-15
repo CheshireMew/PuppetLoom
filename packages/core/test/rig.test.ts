@@ -4,6 +4,8 @@ import type { ImportedLayer, ImportedPsd } from "../src/psd.js";
 import type { SemanticRole, Side } from "../src/types.js";
 
 function importedLayer(id: string, role: SemanticRole, side: Side, x: number, y: number, width: number, height: number): ImportedLayer {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let index = 3; index < data.length; index += 4) data[index] = 255;
   return {
     id,
     sourceName: id,
@@ -15,7 +17,7 @@ function importedLayer(id: string, role: SemanticRole, side: Side, x: number, y:
     blendMode: "normal",
     bounds: { x, y, width, height },
     opaquePixels: width * height,
-    pixels: { width, height, data: new Uint8ClampedArray(width * height * 4) }
+    pixels: { width, height, data }
   };
 }
 
@@ -67,5 +69,28 @@ describe("rig attachment pivots", () => {
     expect(project.layers.find((layer) => layer.role === "frontHair")?.pivot.y).toBeCloseTo(0.154, 6);
     expect(project.layers.find((layer) => layer.role === "topWear")?.pivot.y).toBeCloseTo(0.5396, 6);
     expect(project.layers.find((layer) => layer.role === "bottomWear")?.pivot.y).toBeCloseTo(0.686, 6);
+  });
+
+  it("derives two ear hinges from the face edges for merged headwear", () => {
+    const imported: ImportedPsd = {
+      input: "fixture.psd",
+      fileName: "fixture.psd",
+      canvas: { width: 1000, height: 1000 },
+      warnings: [],
+      layers: [
+        importedLayer("headwear", "headwear", "center", 300, 120, 400, 300),
+        importedLayer("face", "face", "center", 400, 200, 200, 260)
+      ]
+    };
+    const project = buildRig({
+      imported,
+      name: "fixture",
+      seed: 42,
+      source: { originalFileName: "fixture.psd", psdSha256: "fixture", psdPath: "source/source.psd" }
+    });
+    expect(project.layers.find((layer) => layer.role === "headwear")?.secondaryAnchors).toEqual({
+      earHingeLeft: { x: 0.406, y: 0.33 },
+      earHingeRight: { x: 0.594, y: 0.33 }
+    });
   });
 });

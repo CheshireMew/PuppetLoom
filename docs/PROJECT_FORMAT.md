@@ -32,11 +32,13 @@
 - 可稳定引用的 `id`、原名称 `sourceName` 和完整分组路径 `sourcePath`；
 - 语义 `role`、左右侧 `side`、原顺序 `order`、`opacity` 和 `blendMode`；
 - 标准化 `bounds` 与相对纹理路径 `texture`；
-- 变形中心 `pivot`、规则网格顶点/UV/三角形；
+- 变形中心 `pivot`、规则网格顶点/UV/三角形，以及可选的局部固定点 `secondaryAnchors`；
 - 头部、身体、视线和惯性的作用权重；
 - 所属头部或身体组、虹膜可选的 `clipLayerId`，以及嘴部可选的 `mouthVariant`（`closed`、`slight` 或 `open`）。
 
 尾巴使用独立的 `role: "tail"`，从身体根部向末端逐渐释放弹性；它不再归入普通 `accessory`。未知图层使用 `role: "unknown"`。它们不会被丢弃；程序只不给它们猜测专用表情行为。
+
+当左右耳与女仆头饰合并在同一 `headwear` 图层时，`secondaryAnchors.earHingeLeft` 和 `earHingeRight` 保存程序从脸部边缘及图层 Alpha 推导出的两个耳根固定点。耳翼围绕各自固定点变形，头饰中央仍只做轻微整体回弹。若透明区域无法证明左右都存在耳翼，程序不写入固定点，并保留旧的保守动作。
 
 ## 报告
 

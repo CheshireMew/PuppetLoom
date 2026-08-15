@@ -135,6 +135,47 @@ function mouthValue(time: number, seed: number): number {
   return 0;
 }
 
+function perkEnvelope(phase: number): number {
+  if (phase <= 0 || phase >= 1) return 0;
+  if (phase < 0.2) return smoothstep(phase / 0.2);
+  if (phase < 0.38) return 1;
+  return 1 - smoothstep((phase - 0.38) / 0.62);
+}
+
+function earTwitchValue(time: number, seed: number): { x: number; y: number } {
+  const random = mulberry32(seed ^ 0x3c6ef372);
+  let cursor = 1.35 + random() * 1.55;
+  while (cursor < time + 0.8) {
+    const flapDuration = 0.22 + random() * 0.055;
+    const flapCount = 3 + Math.floor(random() * 2);
+    const amplitude = 0.016 + random() * 0.004;
+    const asymmetry = (random() < 0.5 ? -1 : 1) * (0.0014 + random() * 0.0011);
+    const local = time - cursor;
+    const eventDuration = flapDuration * flapCount;
+    if (local >= 0 && local <= eventDuration) {
+      const flapIndex = Math.min(flapCount - 1, Math.floor(local / flapDuration));
+      const flapPhase = (local - flapIndex * flapDuration) / flapDuration;
+      const lift = perkEnvelope(flapPhase) * (1 - flapIndex * 0.055);
+      return { x: asymmetry * lift, y: -amplitude * lift };
+    }
+    cursor += eventDuration + 4.8 + random() * 4.2;
+  }
+  return { x: 0, y: 0 };
+}
+
+function ahogePerkValue(time: number, seed: number): number {
+  const random = mulberry32(seed ^ 0xbb67ae85);
+  let cursor = 2.2 + random() * 2.1;
+  while (cursor < time + 0.9) {
+    const duration = 0.46 + random() * 0.14;
+    const amplitude = 0.95 + random() * 0.35;
+    const local = time - cursor;
+    if (local >= 0 && local <= duration) return perkEnvelope(local / duration) * amplitude;
+    cursor += 5.6 + random() * 4.6;
+  }
+  return 0;
+}
+
 export class CalmMotionController {
   readonly project: PuppetLoomProject;
   readonly events: MotionEvent[];
@@ -152,7 +193,6 @@ export class CalmMotionController {
   private readonly ahoge: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly backHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly headwear: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly ear: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly cloth: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly tail: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
   private readonly accessory: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
@@ -172,7 +212,7 @@ export class CalmMotionController {
       axis.value = 0;
       axis.velocity = 0;
     }
-    for (const spring of [this.frontHair, this.ahoge, this.backHair, this.headwear, this.ear, this.cloth, this.tail, this.accessory]) {
+    for (const spring of [this.frontHair, this.ahoge, this.backHair, this.headwear, this.cloth, this.tail, this.accessory]) {
       spring.x = 0;
       spring.y = 0;
       spring.velocityX = 0;
@@ -220,19 +260,18 @@ export class CalmMotionController {
     const frontHairWind = Math.sin(timeSeconds * 0.81 + phase * 0.63) * 0.34 + Math.sin(timeSeconds * 0.29 + phase * 1.17) * 0.14;
     const frontHairLift = Math.sin(timeSeconds * 0.67 + phase * 1.46) * 0.15 + Math.sin(timeSeconds * 0.24 + phase * 0.55) * 0.06;
     const ahogeWind = Math.sin(timeSeconds * 1.07 + phase * 1.41) * 0.34 + Math.sin(timeSeconds * 0.43 + phase * 0.38) * 0.16;
-    const ahogeBounce = Math.sin(timeSeconds * 0.88 + phase * 0.19) * 0.26 + Math.sin(timeSeconds * 1.46 + phase * 1.34) * 0.11;
+    const ahogePerk = ahogePerkValue(timeSeconds, this.project.runtime.seed);
     const backHairWind = Math.sin(timeSeconds * 0.47 + phase * 0.92 + Math.PI) * 0.29 + Math.sin(timeSeconds * 0.21 + phase * 1.58) * 0.13;
     const backHairLift = Math.sin(timeSeconds * 0.38 + phase * 0.27) * 0.11;
     const headwearWobble = Math.sin(timeSeconds * 0.39 + phase * 1.73) * 0.055;
-    const earIdle = Math.sin(timeSeconds * 1.18 + phase * 0.31) * 0.31 + Math.sin(timeSeconds * 1.76 + phase * 1.22) * 0.14;
+    const earTwitch = earTwitchValue(timeSeconds, this.project.runtime.seed);
     const clothWind = Math.sin(timeSeconds * 0.36 + phase * 1.09) * 0.19;
     const tailWind = Math.sin(timeSeconds * 0.27 + phase * 1.87) * 0.14 + Math.sin(timeSeconds * 0.62 + phase * 0.52) * 0.05;
     const accessoryWind = Math.sin(timeSeconds * 0.66 + phase * 1.31) * 0.09;
     advanceSpring(this.frontHair, lateralVelocity * 0.58 + frontHairWind, pitchVelocity * 0.26 + frontHairLift, delta, 25, 8.7, 0.42);
-    advanceSpring(this.ahoge, lateralVelocity * 0.2 + ahogeWind, pitchVelocity * 0.12 + ahogeBounce, delta, 10, 4.7, 0.68);
+    advanceSpring(this.ahoge, lateralVelocity * 0.2 + ahogeWind, pitchVelocity * 0.08 + frontHairLift * 0.12 + ahogePerk, delta, 10, 4.7, 0.68);
     advanceSpring(this.backHair, lateralVelocity * 0.88 + backHairWind, pitchVelocity * 0.68 + backHairLift, delta, 14, 6.1, 0.56);
     advanceSpring(this.headwear, lateralVelocity * 0.25 + rollVelocity * 0.38 + headwearWobble, pitchVelocity * 0.12, delta, 30, 10.8, 0.22);
-    advanceSpring(this.ear, lateralVelocity * 0.08 + Math.sin(timeSeconds * 0.69 + phase * 0.81) * 0.045, (Math.abs(headVelocity) + Math.abs(pitchVelocity)) * 0.22 + earIdle, delta, 18, 6.6, 0.58);
     advanceSpring(this.cloth, bodyVelocity * 0.7 + clothWind, this.trackedBodyRoll.velocity * 0.16 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.07, delta, 12, 6.3, 0.48);
     advanceSpring(this.tail, bodyVelocity * 0.52 + tailWind, this.trackedBodyRoll.velocity * 0.12 + Math.sin(timeSeconds * 0.34 + phase * 0.76) * 0.055, delta, 6.2, 4.2, 0.7);
     advanceSpring(this.accessory, lateralVelocity * 0.46 + accessoryWind, pitchVelocity * 0.38 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.04, delta, 8.2, 4.5, 0.65);
@@ -257,8 +296,8 @@ export class CalmMotionController {
       backHairY: this.project.runtime.features.hairPhysics ? this.backHair.y : 0,
       headwearX: this.project.runtime.features.hairPhysics ? this.headwear.x : 0,
       headwearY: this.project.runtime.features.hairPhysics ? this.headwear.y : 0,
-      earX: this.project.runtime.features.hairPhysics ? this.ear.x : 0,
-      earY: this.project.runtime.features.hairPhysics ? this.ear.y : 0,
+      earX: this.project.runtime.features.hairPhysics ? earTwitch.x : 0,
+      earY: this.project.runtime.features.hairPhysics ? earTwitch.y : 0,
       clothX: this.project.runtime.features.hairPhysics ? this.cloth.x : 0,
       clothY: this.project.runtime.features.hairPhysics ? this.cloth.y : 0,
       tailX: this.project.runtime.features.hairPhysics ? this.tail.x : 0,

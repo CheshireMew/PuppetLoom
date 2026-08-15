@@ -97,16 +97,24 @@ describe("secondary motion anchoring", () => {
     expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(0.001);
   });
 
-  it("keeps the maid band centered while the merged ears bob vertically", () => {
+  it("pins merged ears at two face-side hinges and flaps both tips vertically", () => {
     const layer = secondaryLayer("headwear");
     layer.pivot = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y + layer.bounds.height * 0.5 };
+    layer.secondaryAnchors = {
+      earHingeLeft: { x: layer.bounds.x + layer.bounds.width * 0.29, y: layer.bounds.y + layer.bounds.height * 0.72 },
+      earHingeRight: { x: layer.bounds.x + layer.bounds.width * 0.71, y: layer.bounds.y + layer.bounds.height * 0.72 }
+    };
     const bandCenter = { ...layer.pivot };
-    const earTip = { x: layer.bounds.x, y: layer.bounds.y + layer.bounds.height };
+    const leftTip = { x: layer.bounds.x, y: layer.bounds.y + layer.bounds.height * 0.9 };
+    const rightTip = { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y + layer.bounds.height * 0.9 };
     const state = { ...neutralMotionState, earY: 0.05 };
     expect(movement(bandCenter, deformPoint(project, layer, bandCenter, state))).toBeLessThan(1e-8);
-    const movedTip = deformPoint(project, layer, earTip, state);
-    expect(movedTip.y).toBeGreaterThan(earTip.y);
-    expect(Math.abs(movedTip.x - earTip.x)).toBeLessThan(1e-8);
+    expect(deformPoint(project, layer, layer.secondaryAnchors.earHingeLeft, state)).toEqual(layer.secondaryAnchors.earHingeLeft);
+    expect(deformPoint(project, layer, layer.secondaryAnchors.earHingeRight, state)).toEqual(layer.secondaryAnchors.earHingeRight);
+    const movedLeft = deformPoint(project, layer, leftTip, state);
+    const movedRight = deformPoint(project, layer, rightTip, state);
+    expect(movedLeft.y).toBeGreaterThan(leftTip.y + 0.005);
+    expect(movedRight.y).toBeGreaterThan(rightTip.y + 0.005);
   });
 
   it("can bend front and back hair in opposite directions around fixed roots", () => {
