@@ -41,6 +41,21 @@ describe("coherent semantic pose field", () => {
     expect(right.x - center.x).toBeCloseTo(center.x - left.x, 6);
   });
 
+  it("uses surface depth for real up and down pitch instead of translating the head", () => {
+    const face = layer("face");
+    const nose = { x: 0.5, y: 0.3 };
+    const outline = { x: 0.36, y: 0.3 };
+    const upNose = applyCoherentPoseField(field, face, nose, 0, -0.9);
+    const downNose = applyCoherentPoseField(field, face, nose, 0, 0.9);
+    const upOutline = applyCoherentPoseField(field, face, outline, 0, -0.9);
+    const downOutline = applyCoherentPoseField(field, face, outline, 0, 0.9);
+    expect(upNose.y).toBeLessThan(nose.y);
+    expect(downNose.y).toBeGreaterThan(nose.y);
+    expect(downNose.y - upNose.y).toBeGreaterThan(downOutline.y - upOutline.y);
+    expect(upNose.x).toBeCloseTo(nose.x, 6);
+    expect(downNose.x).toBeCloseTo(nose.x, 6);
+  });
+
   it("moves facial features and attached hair as one pose with different depth", () => {
     const point = { x: 0.5, y: 0.3 };
     const nose = applyCoherentPoseField(field, layer("nose"), point, 0.7, 0.2);

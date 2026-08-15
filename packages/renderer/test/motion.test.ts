@@ -112,7 +112,7 @@ describe("calm autonomous timeline", () => {
     const states = Array.from({ length: 180 }, (_, index) => controller.sample(index / 60, { lookTarget: target }));
     expect(states[8]!.gazeX).toBeGreaterThan(states[8]!.headYaw * 0.35);
     expect(states.at(-1)!.headYaw).toBeGreaterThan(0.75);
-    expect(states.at(-1)!.headPitch).toBeLessThan(-0.4);
+    expect(states.at(-1)!.headPitch).toBeLessThan(-0.62);
     expect(states.at(-1)!.bodySway).toBeGreaterThan(0.3);
     expect(Math.abs(states.at(-1)!.bodySway)).toBeLessThan(Math.abs(states.at(-1)!.headYaw));
   });

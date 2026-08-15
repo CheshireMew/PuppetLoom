@@ -77,8 +77,8 @@ function projectedCoordinate(
   const yawZ = -nx * sinYaw + z * cosYaw;
   const cosPitch = Math.cos(pitchAngle);
   const sinPitch = Math.sin(pitchAngle);
-  const pitchY = ny * cosPitch - yawZ * sinPitch;
-  const pitchZ = ny * sinPitch + yawZ * cosPitch;
+  const pitchY = ny * cosPitch + yawZ * sinPitch;
+  const pitchZ = -ny * sinPitch + yawZ * cosPitch;
   const perspectiveScale = clamp(1 + (pitchZ - z) * perspective, 0.92, 1.08);
   return {
     x: surface.center.x + yawX * surface.radiusX * perspectiveScale,

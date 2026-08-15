@@ -217,7 +217,7 @@ function poseFieldFor(anchors: AnchorGraph, level: RigLevel): CoherentPoseField 
     skullRadiusX: Number((Math.max(faceWidth * 1.25, faceHeight * 0.72)).toFixed(6)),
     skullRadiusY: Number((Math.max(faceHeight * 0.72, (anchors.chin.y - (anchors.headTop?.y ?? anchors.forehead.y)) * 0.5)).toFixed(6)),
     maxYawRadians: level === "semantic" ? 0.3 : 0.14,
-    maxPitchRadians: level === "semantic" ? 0.2 : 0.1,
+    maxPitchRadians: level === "semantic" ? 0.32 : 0.14,
     perspective: level === "semantic" ? 0.1 : 0.05
   };
 }

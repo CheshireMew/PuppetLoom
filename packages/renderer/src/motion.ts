@@ -245,7 +245,7 @@ export class CalmMotionController {
     const autonomousPitch = ((active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch) * tuning.amplitude;
     const autonomousRoll = ((active ? eventValue(active, timeSeconds, "roll") : 0) + microRoll) * tuning.amplitude;
     const pointerYaw = this.trackedLookX.value * 0.92 * tuning.amplitude;
-    const pointerPitch = this.trackedLookY.value * 0.72 * tuning.amplitude;
+    const pointerPitch = this.trackedLookY.value * 0.96 * tuning.amplitude;
     const pointerRoll = this.trackedLookX.value * 0.1 * tuning.amplitude;
     const desiredYaw = Math.max(-1, Math.min(1, autonomousYaw * (1 - lookStrength) + pointerYaw * lookStrength));
     const desiredPitch = Math.max(-1, Math.min(1, autonomousPitch * (1 - lookStrength) + pointerPitch * lookStrength));

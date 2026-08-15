@@ -196,7 +196,6 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
       }
       point.y += pitch * faceHeight * (0.012 + upperHeadLever * 0.009 + pitchParallax(layer) * 0.011) * headWeight;
     }
-    point.y += pitch * faceHeight * 0.28 * headWeight;
     point = rotate(point, headPivot, headRoll * headWeight);
   }
 
