@@ -21,9 +21,9 @@
 
 ## 运行姿态字段
 
-新建的语义项目使用 `runtime.profile: "coherent-v2"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度和透视强度。运行时让脸型与五官使用脸部表面，让头发、耳朵和头饰使用头骨表面；两者共享头部根节点，再按语义深度和局部权重混合。项目不保存针对某一张角色图手写的顶点动画。
+新建且能可靠定位脸部的语义项目使用 `runtime.profile: "coherent-v3"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度和透视强度。`runtime.semanticCage` 保存 23 个标准化控制点、脸部与头骨三角形、受作用语义组，以及定位后的检查、修正和综合置信度。运行时让脸型与五官使用脸部控制网，让头发、耳朵和头饰使用头骨控制网；两者共享头部根节点，再按语义深度和局部权重混合。项目不保存针对某一张角色图手写的顶点动画。
 
-`runtime.motionTuning` 的 `amplitude`、`response` 和 `stability` 分别控制动作总幅度、追随速度和阻尼稳定度。它们作用于同一个头部目标，不会为不同部位生成互不相关的随机运动。读取器继续兼容 `coherent-v1` 的单表面项目和没有姿态场的 `calm-v1` 项目。
+`runtime.motionTuning` 的 `amplitude`、`response` 和 `stability` 分别控制动作总幅度、追随速度和阻尼稳定度。它们作用于同一个头部目标，不会为不同部位生成互不相关的随机运动。读取器继续兼容 `coherent-v2` 双表面、`coherent-v1` 单表面和没有姿态场的 `calm-v1` 项目；没有控制笼的旧项目保持原来的双表面路径。
 
 ## 图层字段
 
@@ -42,9 +42,11 @@
 
 ## 报告
 
-`reports/build-report.json` 是面向调用者的摘要，包含最终绑定等级、识别数量、安全缩放、启用/禁用功能、警告和补充请求数量。
+`reports/build-report.json` 是面向调用者的摘要，包含最终绑定等级、识别数量、安全缩放、启用/禁用功能、警告、补充请求数量和关键点校准摘要。
 
 `reports/neutral.png` 是 PSD 中立合成。`reports/pose-sheet.png` 为 960×960 诊断图，按顺序绘制中立、左右转头、半幅转头、上下俯仰、左右倾斜和四个组合姿态。每格标签来自同一次安全检查。
+
+语义项目还会生成 `reports/semantic-cage.png`、带编号与置信度表的 `reports/semantic-cage-head.png`，以及机器可读的 `reports/landmark-report.json`。JSON 同时列出控制点、三角形、修正记录和实际被脸部/头骨控制网作用的 PSD 图层，可由 Agent 在无需人工绑点的情况下复核结果。
 
 角色窗口运行后会按需创建 `reports/runtime.log`。它使用逐行 JSON 记录启动参数、项目读取、窗口创建、页面加载、渲染进程异常和正常关闭事件，用于诊断“进程存在但窗口没有出现”等桌面问题；它不包含纹理像素或用户素材。
 

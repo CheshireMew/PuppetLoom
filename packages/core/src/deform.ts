@@ -175,7 +175,7 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   if (layer.weights.head > 0) {
     const neckV = layer.role === "neck" ? clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1) : 0;
     const headWeight = layer.weights.head * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
-    if (project.runtime.poseField) point = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch);
+    if (project.runtime.poseField) point = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch, project.runtime.semanticCage);
     else {
       if (layer.side !== "center" && hasSidePerspective(layer)) {
         const side = layer.side === "left" ? 1 : -1;

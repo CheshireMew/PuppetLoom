@@ -102,6 +102,59 @@ export interface AnchorGraph {
   bodyCenter?: Point;
 }
 
+export type SemanticCagePointSource = "layer-alpha" | "face-alpha" | "head-alpha" | "inferred" | "corrected";
+
+export type SemanticCagePointId =
+  | "headTop"
+  | "forehead"
+  | "skullLeft"
+  | "skullRight"
+  | "faceLeft"
+  | "faceRight"
+  | "eyeLeftOuter"
+  | "eyeLeft"
+  | "eyeLeftInner"
+  | "eyeRightInner"
+  | "eyeRight"
+  | "eyeRightOuter"
+  | "nose"
+  | "cheekLeft"
+  | "cheekRight"
+  | "mouthLeft"
+  | "mouth"
+  | "mouthRight"
+  | "jawLeft"
+  | "jawRight"
+  | "chin"
+  | "neckLeft"
+  | "neckRight";
+
+export interface SemanticCagePoint {
+  position: Point;
+  confidence: number;
+  source: SemanticCagePointSource;
+}
+
+export type SemanticCageTriangle = [SemanticCagePointId, SemanticCagePointId, SemanticCagePointId];
+
+export interface SemanticControlCage {
+  kind: "semantic-face-cage-v1";
+  coordinateConvention: "screen-space";
+  points: Record<SemanticCagePointId, SemanticCagePoint>;
+  faceTriangles: SemanticCageTriangle[];
+  skullTriangles: SemanticCageTriangle[];
+  roleGroups: {
+    face: SemanticRole[];
+    skull: SemanticRole[];
+  };
+  validation: {
+    status: "passed" | "corrected";
+    confidence: number;
+    corrections: string[];
+    checks: string[];
+  };
+}
+
 export interface MotionEnvelope {
   headYaw: number;
   headPitch: number;
@@ -144,10 +197,11 @@ export interface MotionTuning {
 
 export interface RuntimeSettings {
   seed: number;
-    profile: "calm-v1" | "coherent-v1" | "coherent-v2";
+  profile: "calm-v1" | "coherent-v1" | "coherent-v2" | "coherent-v3";
   envelope: MotionEnvelope;
   features: RuntimeFeatures;
   poseField?: CoherentPoseField;
+  semanticCage?: SemanticControlCage;
   motionTuning?: MotionTuning;
 }
 
@@ -270,6 +324,7 @@ export interface BuildReport {
   warnings: string[];
   quality: QualitySummary;
   assetRequestCount: number;
+  landmarkCalibration?: SemanticControlCage["validation"] & { pointCount: number };
 }
 
 export interface BuildResult {

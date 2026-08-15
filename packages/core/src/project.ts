@@ -43,6 +43,96 @@ async function neutralPng(imported: ImportedPsd): Promise<Buffer> {
   return sharp({ create: { width: imported.canvas.width, height: imported.canvas.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite(composites).png().toBuffer();
 }
 
+async function writeSemanticCageArtifacts(output: string, neutral: Buffer, project: PuppetLoomProject): Promise<void> {
+  const cage = project.runtime.semanticCage;
+  if (!cage) return;
+  const width = project.canvas.width;
+  const height = project.canvas.height;
+  const pointEntries = Object.entries(cage.points);
+  const lines = (triangles: typeof cage.faceTriangles) => triangles.flatMap(([aId, bId, cId]) => {
+    const ids = [[aId, bId], [bId, cId], [cId, aId]] as const;
+    return ids.map(([fromId, toId]) => {
+      const from = cage.points[fromId].position;
+      const to = cage.points[toId].position;
+      return `<line x1="${from.x * width}" y1="${from.y * height}" x2="${to.x * width}" y2="${to.y * height}"/>`;
+    });
+  }).join("");
+  const markers = pointEntries.map(([, entry], index) => {
+    const x = entry.position.x * width;
+    const y = entry.position.y * height;
+    const number = String(index + 1).padStart(2, "0");
+    return `<g><circle cx="${x}" cy="${y}" r="8"/><text x="${x}" y="${y + 3.6}" text-anchor="middle">${number}</text></g>`;
+  }).join("");
+  const svg = Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <g fill="none" stroke="#38d6ff" stroke-width="2.2" stroke-opacity="0.8">${lines(cage.faceTriangles)}</g>
+    <g fill="none" stroke="#ffd166" stroke-width="2.2" stroke-opacity="0.72">${lines(cage.skullTriangles)}</g>
+    <g fill="#ff4861" stroke="#ffffff" stroke-width="1.5" font-family="Arial" font-size="7" font-weight="700">${markers}</g>
+  </svg>`);
+  const annotated = await sharp(neutral).composite([{ input: svg }]).png().toBuffer();
+  await writeFile(join(output, "reports", "semantic-cage.png"), annotated);
+  const positions = Object.values(cage.points).map((entry) => entry.position);
+  const minimumX = Math.min(...positions.map((entry) => entry.x));
+  const maximumX = Math.max(...positions.map((entry) => entry.x));
+  const minimumY = Math.min(...positions.map((entry) => entry.y));
+  const maximumY = Math.max(...positions.map((entry) => entry.y));
+  const paddingX = Math.max(0.025, (maximumX - minimumX) * 0.24);
+  const paddingY = Math.max(0.025, (maximumY - minimumY) * 0.2);
+  const cropLeft = Math.max(0, Math.floor((minimumX - paddingX) * width));
+  const cropTop = Math.max(0, Math.floor((minimumY - paddingY) * height));
+  const cropRight = Math.min(width, Math.ceil((maximumX + paddingX) * width));
+  const cropBottom = Math.min(height, Math.ceil((maximumY + paddingY) * height));
+  const head = await sharp(annotated)
+    .extract({ left: cropLeft, top: cropTop, width: cropRight - cropLeft, height: cropBottom - cropTop })
+    .resize({ width: 1000, withoutEnlargement: false })
+    .png()
+    .toBuffer({ resolveWithObject: true });
+  const legendWidth = 720;
+  const reportHeight = Math.max(head.info.height, 820);
+  const legendRows = Math.ceil(pointEntries.length / 2);
+  const rowHeight = Math.floor((reportHeight - 92) / legendRows);
+  const legendItems = pointEntries.map(([id, entry], index) => {
+    const column = Math.floor(index / legendRows);
+    const row = index % legendRows;
+    const x = 24 + column * (legendWidth / 2);
+    const y = 82 + row * rowHeight;
+    const number = String(index + 1).padStart(2, "0");
+    return `<g>
+      <circle cx="${x + 13}" cy="${y - 7}" r="13" fill="#ff4861" stroke="#ffffff" stroke-width="1.5"/>
+      <text x="${x + 13}" y="${y - 2}" fill="#ffffff" text-anchor="middle" font-size="11" font-weight="700">${number}</text>
+      <text x="${x + 34}" y="${y - 5}" fill="#f4f7fb" font-size="16" font-weight="700">${id}</text>
+      <text x="${x + 34}" y="${y + 14}" fill="#aebbd0" font-size="12">${entry.source} · ${entry.confidence.toFixed(2)}</text>
+    </g>`;
+  }).join("");
+  const legend = Buffer.from(`<svg width="${legendWidth}" height="${reportHeight}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100%" height="100%" fill="#101722"/>
+    <text x="24" y="34" fill="#ffffff" font-family="Arial" font-size="22" font-weight="700">Semantic control cage</text>
+    <text x="24" y="57" fill="#9fb0c7" font-family="Arial" font-size="13">编号 · 名称 · 定位来源 · 置信度</text>
+    <g font-family="Arial">${legendItems}</g>
+  </svg>`);
+  await sharp({ create: { width: head.info.width + legendWidth, height: reportHeight, channels: 4, background: { r: 11, g: 15, b: 23, alpha: 1 } } })
+    .composite([
+      { input: head.data, left: 0, top: Math.floor((reportHeight - head.info.height) / 2) },
+      { input: legend, left: head.info.width, top: 0 }
+    ])
+    .png()
+    .toFile(join(output, "reports", "semantic-cage-head.png"));
+  const appliedLayers = Object.fromEntries(Object.entries(cage.roleGroups).map(([group, roles]) => [
+    group,
+    project.layers
+      .filter((layer) => roles.includes(layer.role))
+      .map((layer) => ({ id: layer.id, sourceName: layer.sourceName, role: layer.role, side: layer.side }))
+  ]));
+  await writeFile(join(output, "reports", "landmark-report.json"), `${JSON.stringify({
+    kind: cage.kind,
+    coordinateConvention: cage.coordinateConvention,
+    validation: cage.validation,
+    points: cage.points,
+    triangles: { face: cage.faceTriangles, skull: cage.skullTriangles },
+    roleGroups: cage.roleGroups,
+    appliedLayers
+  }, null, 2)}\n`, "utf8");
+}
+
 async function luminanceSimilarity(referencePath: string, composite: PixelBuffer): Promise<number | undefined> {
   const reference = await sharp(referencePath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   if (reference.info.width !== composite.width || reference.info.height !== composite.height) return undefined;
@@ -115,7 +205,13 @@ function buildReport(project: PuppetLoomProject, recognized: number, warnings: s
     disabledFeatures: featureEntries.filter(([, enabled]) => !enabled).map(([key]) => key),
     warnings,
     quality: project.quality,
-    assetRequestCount
+    assetRequestCount,
+    ...(project.runtime.semanticCage ? {
+      landmarkCalibration: {
+        ...project.runtime.semanticCage.validation,
+        pointCount: Object.keys(project.runtime.semanticCage.points).length
+      }
+    } : {})
   };
 }
 
@@ -155,6 +251,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   );
   const neutral = await neutralPng(imported);
   await writeFile(join(output, "reports", "neutral.png"), neutral);
+  await writeSemanticCageArtifacts(output, neutral, project);
   await Promise.all(requests.requests.map(async (request) => {
     if (!request.reference) return;
     const target = join(output, request.reference.path);

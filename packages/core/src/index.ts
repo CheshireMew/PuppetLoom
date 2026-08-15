@@ -9,5 +9,6 @@ export * from "./psd.js";
 export * from "./pose-field.js";
 export * from "./rig.js";
 export * from "./safety.js";
+export * from "./semantic-cage.js";
 export * from "./types.js";
 export * from "./verify.js";

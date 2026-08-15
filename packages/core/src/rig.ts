@@ -1,5 +1,6 @@
 import { rectCenter, rectUnion, roundPoint, roundRect } from "./math.js";
 import { suggestedRigLevel, type ImportedLayer, type ImportedPsd } from "./psd.js";
+import { buildSemanticControlCage } from "./semantic-cage.js";
 import type {
   AnchorGraph,
   LayerBinding,
@@ -296,6 +297,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
   });
   const features = featuresFor(imported, level);
   const poseField = poseFieldFor(anchors, level);
+  const semanticCage = level === "semantic" ? buildSemanticControlCage(imported) : undefined;
   return {
     version: 1,
     name: input.name,
@@ -306,10 +308,11 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     anchors,
     runtime: {
       seed: input.seed,
-      profile: poseField ? "coherent-v2" : "calm-v1",
+      profile: semanticCage && poseField ? "coherent-v3" : poseField ? "coherent-v2" : "calm-v1",
       envelope: envelopeFor(level),
       features,
-      ...(poseField ? { poseField, motionTuning: { amplitude: 1, response: 0.72, stability: 0.42 } } : {})
+      ...(poseField ? { poseField, motionTuning: { amplitude: 1, response: 0.72, stability: 0.42 } } : {}),
+      ...(semanticCage ? { semanticCage } : {})
     },
     quality: { poseValidations: [], safetyScale: 1, issues: [] },
     disabledReasons: disabledReasons(features, imported, level)

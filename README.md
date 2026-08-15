@@ -8,7 +8,7 @@ PuppetLoom 把一份分层角色 PSD 自动创建为会自主运动的 2D 角色
 
 - 导入扁平或分组 PSD，保留所有可见像素图层、顺序、透明度、坐标和混合模式记录；未知图层照常绘制。
 - 识别中、英、日常见图层名称，合并的左右眼部图层可按实际像素位置拆分。
-- 自动生成语义、分组和最保守三档绑定；除损坏 PSD 或完全没有可见像素外，总会尝试给出安全结果。
+- 自动生成语义、分组和最保守三档绑定；语义项目会从实际图层 Alpha 定位 23 个脸部、眼角、嘴角、头骨和颈部控制点，检查顺序、包含关系与连接关系，并在置信度允许时自动修正异常点。除损坏 PSD 或完全没有可见像素外，总会尝试给出安全结果。
 - WebGL2 网格变形、眼部裁切、常见混合模式、连续的头脸脖子姿态场与上半身延迟跟随，以及呆毛、前后发、耳朵、衣摆、尾巴和饰品各自的固定区与弹性响应。
 - 自动验证中立姿态和 12 个运动姿态，检查网格翻转、过度拉伸、眼睛越界、脸发分离、颈部断开和画布越界。
 - CLI、PSD 创建桌面界面，以及透明、无边框、置顶的角色窗口。角色窗口支持拖动、缩放、暂停、置顶和鼠标穿透。
@@ -63,12 +63,14 @@ MyCharacter/
   reports/build-report.json
   reports/neutral.png
   reports/pose-sheet.png
+  reports/semantic-cage-head.png
+  reports/landmark-report.json
   requests/asset-requests.json
   requests/references/*.png
   supplements/
 ```
 
-格式字段和兼容约定见 [项目格式](docs/PROJECT_FORMAT.md)，包边界与运行链见 [架构说明](docs/ARCHITECTURE.md)，转头与分层跟随的实现依据见 [统一姿态模型](docs/COHERENT_POSE_MODEL.md)。
+格式字段和兼容约定见 [项目格式](docs/PROJECT_FORMAT.md)，包边界与运行链见 [架构说明](docs/ARCHITECTURE.md)，转头与分层跟随的实现依据见 [统一姿态模型](docs/COHERENT_POSE_MODEL.md)，第三个视频项目中哪些机制被采用、哪些没有采用见 [视频参考结论](docs/VIDEO_REFERENCE_FINDINGS.md)。
 
 ## 验证
 

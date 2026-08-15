@@ -1,5 +1,5 @@
 import { clamp } from "./math.js";
-import type { CoherentPoseField, LayerBinding, Point, SemanticRole } from "./types.js";
+import type { CoherentPoseField, LayerBinding, Point, SemanticCagePointId, SemanticControlCage, SemanticRole } from "./types.js";
 
 const skullRoles = new Set<SemanticRole>(["frontHair", "backHair", "sideHair", "headwear", "ear"]);
 const eyeSocketRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClosed"]);
@@ -43,6 +43,12 @@ interface Surface {
   radiusY: number;
 }
 
+interface Barycentric {
+  a: number;
+  b: number;
+  c: number;
+}
+
 function surfaceFor(field: CoherentPoseField, role: SemanticRole): Surface {
   if (
     field.kind === "head-surfaces-v2" &&
@@ -78,6 +84,113 @@ function projectedCoordinate(
     x: surface.center.x + yawX * surface.radiusX * perspectiveScale,
     y: surface.center.y + pitchY * surface.radiusY * perspectiveScale
   };
+}
+
+function semanticLandmarkAdjustment(field: CoherentPoseField, id: SemanticCagePointId, base: Point, projected: Point, yaw: number): Point {
+  const turn = clamp(yaw, -1, 1);
+  const amount = Math.abs(turn);
+  if (amount < 1e-9) return projected;
+  const direction = Math.sign(turn);
+  const side = base.x < field.center.x ? -1 : base.x > field.center.x ? 1 : 0;
+  const outlineIds = new Set<SemanticCagePointId>(["faceLeft", "faceRight", "cheekLeft", "cheekRight", "jawLeft", "jawRight"]);
+  if (outlineIds.has(id)) {
+    const farSide = Math.max(0, -turn * side);
+    const nearSide = Math.max(0, turn * side);
+    return { x: projected.x + direction * field.radiusX * (farSide * 0.13 + nearSide * 0.025), y: projected.y };
+  }
+  const centerShift = id === "chin" ? 0.07 : id === "mouth" || id === "mouthLeft" || id === "mouthRight" ? 0.045 : id === "nose" ? 0.025 : 0;
+  return centerShift > 0 ? { x: projected.x + direction * field.radiusX * amount * centerShift, y: projected.y } : projected;
+}
+
+function projectedCagePoint(
+  field: CoherentPoseField,
+  cage: SemanticControlCage,
+  id: SemanticCagePointId,
+  region: "face" | "skull",
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number
+): Point {
+  const base = cage.points[id].position;
+  const surface = region === "skull" && field.skullCenter && field.skullRadiusX && field.skullRadiusY
+    ? { center: field.skullCenter, radiusX: field.skullRadiusX, radiusY: field.skullRadiusY }
+    : { center: field.center, radiusX: field.radiusX, radiusY: field.radiusY };
+  const nx = (base.x - surface.center.x) / surface.radiusX;
+  const ny = (base.y - surface.center.y) / surface.radiusY;
+  const radial = nx * nx + ny * ny;
+  const z = Math.sqrt(Math.max(0, 1 - Math.min(1, radial)));
+  let projected = projectedCoordinate(surface, nx, ny, z, yawAngle, pitchAngle, field.perspective);
+  if (region === "skull" && field.skullCenter && field.skullRadiusX && field.skullRadiusY) {
+    const skullRoot = projectedCoordinate(surface, 0, 0, 1, yawAngle, pitchAngle, field.perspective);
+    const faceSurface = { center: field.center, radiusX: field.radiusX, radiusY: field.radiusY };
+    const faceRoot = projectedCoordinate(faceSurface, 0, 0, 1, yawAngle, pitchAngle, field.perspective);
+    projected = {
+      x: surface.center.x + (faceRoot.x - faceSurface.center.x) + (projected.x - skullRoot.x),
+      y: surface.center.y + (faceRoot.y - faceSurface.center.y) + (projected.y - skullRoot.y)
+    };
+  }
+  return region === "face" ? semanticLandmarkAdjustment(field, id, base, projected, yaw) : projected;
+}
+
+function barycentric(point: Point, a: Point, b: Point, c: Point): Barycentric | undefined {
+  const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+  if (Math.abs(denominator) < 1e-10) return undefined;
+  const wa = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
+  const wb = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
+  return { a: wa, b: wb, c: 1 - wa - wb };
+}
+
+function mappedBySemanticCage(
+  field: CoherentPoseField,
+  cage: SemanticControlCage,
+  base: Point,
+  region: "face" | "skull",
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number
+): Point {
+  const triangles = region === "face" ? cage.faceTriangles : cage.skullTriangles;
+  for (const [aId, bId, cId] of triangles) {
+    const a = cage.points[aId].position;
+    const b = cage.points[bId].position;
+    const c = cage.points[cId].position;
+    const weights = barycentric(base, a, b, c);
+    if (!weights || Math.min(weights.a, weights.b, weights.c) < -0.015) continue;
+    const targetA = projectedCagePoint(field, cage, aId, region, yawAngle, pitchAngle, yaw);
+    const targetB = projectedCagePoint(field, cage, bId, region, yawAngle, pitchAngle, yaw);
+    const targetC = projectedCagePoint(field, cage, cId, region, yawAngle, pitchAngle, yaw);
+    return {
+      x: targetA.x * weights.a + targetB.x * weights.b + targetC.x * weights.c,
+      y: targetA.y * weights.a + targetB.y * weights.b + targetC.y * weights.c
+    };
+  }
+
+  const ids = [...new Set(triangles.flat())];
+  let total = 0;
+  let dx = 0;
+  let dy = 0;
+  const softening = Math.max(1e-6, field.radiusX * field.radiusX * 0.0036);
+  for (const id of ids) {
+    const source = cage.points[id];
+    const distanceSquared = (base.x - source.position.x) ** 2 + (base.y - source.position.y) ** 2;
+    if (distanceSquared < 1e-12) return projectedCagePoint(field, cage, id, region, yawAngle, pitchAngle, yaw);
+    const weight = source.confidence / (distanceSquared + softening);
+    const target = projectedCagePoint(field, cage, id, region, yawAngle, pitchAngle, yaw);
+    dx += (target.x - source.position.x) * weight;
+    dy += (target.y - source.position.y) * weight;
+    total += weight;
+  }
+  return total > 0 ? { x: base.x + dx / total, y: base.y + dy / total } : { ...base };
+}
+
+function cageBlendFor(role: SemanticRole): number {
+  if (role === "face") return 0.88;
+  if (role === "eyeWhite" || role === "iris" || role === "eyelash" || role === "eyeClosed" || role === "eyebrow") return 0.82;
+  if (role === "nose" || role === "mouth") return 0.86;
+  if (role === "frontHair" || role === "sideHair") return 0.5;
+  if (role === "backHair") return 0.34;
+  if (role === "headwear" || role === "ear") return 0.28;
+  return 0;
 }
 
 function projectSurface(field: CoherentPoseField, layer: LayerBinding, base: Point, yawAngle: number, pitchAngle: number): Point {
@@ -152,13 +265,34 @@ export function applyCoherentPoseField(
   layer: LayerBinding,
   base: Point,
   yaw: number,
-  pitch: number
+  pitch: number,
+  semanticCage?: SemanticControlCage
 ): Point {
   const yawAngle = clamp(yaw, -1, 1) * field.maxYawRadians;
   const pitchAngle = clamp(pitch, -1, 1) * field.maxPitchRadians;
   if (Math.abs(yawAngle) < 1e-9 && Math.abs(pitchAngle) < 1e-9) return { ...base };
-  const posed = projectSurface(field, layer, base, yawAngle, pitchAngle);
-  const posedPivot = projectSurface(field, layer, layer.pivot, yawAngle, pitchAngle);
+  const surfacePosed = projectSurface(field, layer, base, yawAngle, pitchAngle);
+  const surfacePivot = projectSurface(field, layer, layer.pivot, yawAngle, pitchAngle);
+  const region = semanticCage?.roleGroups.skull.includes(layer.role)
+    ? "skull"
+    : semanticCage?.roleGroups.face.includes(layer.role)
+      ? "face"
+      : undefined;
+  const cageBlend = semanticCage && region ? cageBlendFor(layer.role) : 0;
+  const cagePosed = semanticCage && region
+    ? mappedBySemanticCage(field, semanticCage, base, region, yawAngle, pitchAngle, yaw)
+    : surfacePosed;
+  const cagePivot = semanticCage && region
+    ? mappedBySemanticCage(field, semanticCage, layer.pivot, region, yawAngle, pitchAngle, yaw)
+    : surfacePivot;
+  const posed = {
+    x: surfacePosed.x + (cagePosed.x - surfacePosed.x) * cageBlend,
+    y: surfacePosed.y + (cagePosed.y - surfacePosed.y) * cageBlend
+  };
+  const posedPivot = {
+    x: surfacePivot.x + (cagePivot.x - surfacePivot.x) * cageBlend,
+    y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * cageBlend
+  };
   const perspective = applyEyePerspective(layer, posed, posedPivot, yaw);
-  return applyFaceSilhouette(field, layer, base, perspective, yaw);
+  return semanticCage ? perspective : applyFaceSilhouette(field, layer, base, perspective, yaw);
 }

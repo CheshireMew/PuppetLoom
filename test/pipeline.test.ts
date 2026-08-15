@@ -66,13 +66,16 @@ describe("project creation", () => {
     const project = await loadProject(semanticOutput);
     const verification = await verifyProject(semanticOutput);
     expect(project.rigLevel).toBe("semantic");
+    expect(project.runtime.profile).toBe("coherent-v3");
+    expect(project.runtime.semanticCage?.validation.confidence).toBeGreaterThan(0.6);
     expect(project.layers).toHaveLength(19);
     expect(project.runtime.features.mouthMotion).toBe(false);
     expect(project.quality.poseValidations).toHaveLength(13);
     expect(verification.valid).toBe(true);
     for (const relative of [
       "puppetloom.json", "source/source.psd", "source/reference.png", "reports/build-report.json",
-      "reports/neutral.png", "reports/pose-sheet.png", "requests/asset-requests.json"
+      "reports/neutral.png", "reports/pose-sheet.png", "reports/semantic-cage.png", "reports/semantic-cage-head.png",
+      "reports/landmark-report.json", "requests/asset-requests.json"
     ]) expect((await stat(resolve(semanticOutput, relative))).isFile()).toBe(true);
   });
 
@@ -88,6 +91,18 @@ describe("project creation", () => {
     }
     expect(maximumDifference).toBeLessThanOrEqual(1);
     expect(changed / reference.length).toBeLessThan(0.00001);
+  });
+
+  it("reports the exact PSD layers affected by the face and skull cages", async () => {
+    const report = JSON.parse(await readFile(resolve(semanticOutput, "reports/landmark-report.json"), "utf8")) as {
+      appliedLayers: { face: Array<{ id: string; role: string }>; skull: Array<{ id: string; role: string }> };
+      triangles: { face: string[][]; skull: string[][] };
+    };
+    expect(report.appliedLayers.face.some((layer) => layer.role === "face")).toBe(true);
+    expect(report.appliedLayers.face.filter((layer) => layer.role === "eyeWhite")).toHaveLength(2);
+    expect(report.appliedLayers.skull.some((layer) => layer.role === "frontHair")).toBe(true);
+    expect(report.triangles.face.flat()).toContain("eyeLeftOuter");
+    expect(report.triangles.face.flat()).toContain("mouthRight");
   });
 
   it("produces real 13-pose visual evidence", async () => {
