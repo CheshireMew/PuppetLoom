@@ -122,3 +122,71 @@ describe("secondary motion anchoring", () => {
     expect(deformPoint(project, back, back.pivot, state)).toEqual(back.pivot);
   });
 });
+
+describe("connected head and upper-body motion", () => {
+  const connectedProject = {
+    anchors: {
+      chin: { x: 0.5, y: 0.28 },
+      neck: { x: 0.5, y: 0.33 },
+      bodyCenter: { x: 0.5, y: 0.56 },
+      cheekLeft: { x: 0.58, y: 0.22 },
+      cheekRight: { x: 0.42, y: 0.22 },
+      forehead: { x: 0.5, y: 0.11 }
+    },
+    runtime: {
+      envelope: {
+        headYaw: 0.84,
+        headPitch: 0.64,
+        headRollDegrees: 3.2,
+        bodySway: 0.012,
+        bodyRollDegrees: 2.2,
+        gazeX: 0.16,
+        gazeY: 0.1,
+        breath: 0.004,
+        globalScale: 1
+      },
+      poseField: {
+        kind: "head-surfaces-v2",
+        center: { x: 0.5, y: 0.2 },
+        radiusX: 0.14,
+        radiusY: 0.16,
+        skullCenter: { x: 0.5, y: 0.17 },
+        skullRadiusX: 0.22,
+        skullRadiusY: 0.24,
+        maxYawRadians: 0.3,
+        maxPitchRadians: 0.2,
+        perspective: 0.1
+      }
+    }
+  } as PuppetLoomProject;
+
+  it("lets the neck bridge the moving head to the delayed torso", () => {
+    const face = secondaryLayer("face", { x: 0.4, y: 0.1, width: 0.2, height: 0.2 });
+    face.weights = { head: 1, body: 0, gaze: 0, physics: 0 };
+    face.pivot = { x: 0.5, y: 0.2 };
+    const neck = secondaryLayer("neck", { x: 0.47, y: 0.27, width: 0.06, height: 0.13 });
+    neck.weights = { head: 1, body: 1, gaze: 0, physics: 0 };
+    const state = { ...neutralMotionState, headYaw: 0.85, bodySway: 0.425, bodyRoll: 0.1 };
+    const faceCenter = { x: 0.5, y: 0.2 };
+    const neckTop = { x: 0.5, y: 0.27 };
+    const neckBottom = { x: 0.5, y: 0.4 };
+    const faceShift = deformPoint(connectedProject, face, faceCenter, state).x - faceCenter.x;
+    const topShift = deformPoint(connectedProject, neck, neckTop, state).x - neckTop.x;
+    const bottomShift = deformPoint(connectedProject, neck, neckBottom, state).x - neckBottom.x;
+    expect(Math.sign(topShift)).toBe(Math.sign(faceShift));
+    expect(Math.abs(topShift)).toBeGreaterThan(Math.abs(bottomShift) * 3);
+    expect(Math.abs(faceShift - topShift)).toBeLessThan(0.02);
+  });
+
+  it("turns the upper body while keeping the feet planted", () => {
+    const top = secondaryLayer("topWear", { x: 0.42, y: 0.38, width: 0.16, height: 0.2 });
+    top.weights = { head: 0, body: 1, gaze: 0, physics: 0 };
+    const foot = secondaryLayer("foot", { x: 0.45, y: 0.9, width: 0.1, height: 0.06 });
+    foot.weights = { head: 0, body: 1, gaze: 0, physics: 0 };
+    const state = { ...neutralMotionState, bodySway: 0.4, bodyRoll: 0.12 };
+    const topPoint = { x: 0.44, y: 0.4 };
+    const footPoint = { x: 0.47, y: 0.93 };
+    expect(movement(topPoint, deformPoint(connectedProject, top, topPoint, state))).toBeGreaterThan(0.001);
+    expect(deformPoint(connectedProject, foot, footPoint, state)).toEqual(footPoint);
+  });
+});

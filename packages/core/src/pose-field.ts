@@ -20,19 +20,19 @@ function roleDepth(role: SemanticRole): number {
 function rolePoseBlend(layer: LayerBinding, base: Point): number {
   const { role } = layer;
   if (role === "face" || role === "nose" || role === "mouth" || role === "eyeWhite" || role === "iris" || role === "eyelash" || role === "eyeClosed" || role === "eyebrow") return 1;
-  if (role === "ear") return 0.38;
-  if (role === "frontHair") return 0.48;
-  if (role === "headwear") return 0.34;
-  if (role === "sideHair") return 0.44;
+  if (role === "ear") return 0.52;
+  if (role === "frontHair") return 0.66;
+  if (role === "headwear") return 0.54;
+  if (role === "sideHair") return 0.58;
   if (role === "backHair") {
     const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
     const freeEnd = v * v * (3 - 2 * v);
-    return 0.52 - freeEnd * 0.34;
+    return 0.62 - freeEnd * 0.34;
   }
   if (role === "neck") {
     const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
     const pinned = v * v * (3 - 2 * v);
-    return 0.52 * (1 - pinned);
+    return 1 - pinned;
   }
   return 0.4;
 }

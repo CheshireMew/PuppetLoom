@@ -96,7 +96,7 @@ function weightsFor(role: SemanticRole, level: RigLevel, insideHead: boolean): L
   if (hairRoles.has(role)) return { head: 1, body: 0, gaze: 0, physics: level === "semantic" ? (role === "backHair" ? 0.8 : 1) : 0.35 };
   if (role === "headwear" || role === "ear") return { head: 1, body: 0, gaze: 0, physics: level === "semantic" ? 0.55 : 0.2 };
   if (headRoles.has(role) || (role === "unknown" && insideHead)) return { head: 1, body: 0, gaze: 0, physics: 0 };
-  if (role === "neck") return { head: level === "semantic" ? 0.35 : 0.7, body: level === "semantic" ? 0.65 : 0.3, gaze: 0, physics: 0 };
+  if (role === "neck") return { head: level === "semantic" ? 1 : 0.78, body: 1, gaze: 0, physics: 0 };
   if (role === "tail") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.75 : 0.3 };
   if (role === "bottomWear") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.3 : 0.12 };
   if (role === "topWear") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.1 : 0.04 };
@@ -154,7 +154,7 @@ function deriveAnchors(imported: ImportedPsd): AnchorGraph {
 
 function envelopeFor(level: RigLevel): MotionEnvelope {
   if (level === "semantic") {
-    return { headYaw: 0.84, headPitch: 0.64, headRollDegrees: 3.2, bodySway: 0.01, bodyRollDegrees: 1.4, gazeX: 0.16, gazeY: 0.1, breath: 0.004, globalScale: 1 };
+    return { headYaw: 0.84, headPitch: 0.64, headRollDegrees: 3.2, bodySway: 0.012, bodyRollDegrees: 2.2, gazeX: 0.16, gazeY: 0.1, breath: 0.004, globalScale: 1 };
   }
   if (level === "grouped") {
     return { headYaw: 0.36, headPitch: 0.25, headRollDegrees: 2, bodySway: 0.007, bodyRollDegrees: 0.9, gazeX: 0, gazeY: 0, breath: 0.003, globalScale: 1 };

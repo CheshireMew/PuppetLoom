@@ -17,19 +17,20 @@ const headTop = project.anchors?.headTop?.y ?? 0.04;
 const chin = project.anchors?.chin?.y ?? 0.28;
 const headCenterX = project.anchors?.nose?.x ?? 0.5;
 const headSize = Math.max(0.18, Math.min(0.36, (chin - headTop) * 1.3));
-const cropSize = Math.round(headSize * previewSize);
+const cropWidth = Math.round(headSize * previewSize * 1.55);
+const cropHeight = Math.round(headSize * previewSize * 1.9);
 const crop = {
-  width: cropSize,
-  height: cropSize,
-  left: Math.max(0, Math.min(previewSize - cropSize, Math.round((headCenterX - headSize / 2) * previewSize))),
-  top: Math.max(0, Math.min(previewSize - cropSize, Math.round((headTop - headSize * 0.08) * previewSize)))
+  width: cropWidth,
+  height: cropHeight,
+  left: Math.max(0, Math.min(previewSize - cropWidth, Math.round(headCenterX * previewSize - cropWidth / 2))),
+  top: Math.max(0, Math.min(previewSize - cropHeight, Math.round((headTop - headSize * 0.08) * previewSize)))
 };
 const poses = [
-  { label: "left 0.85", state: { headYaw: -0.85, gazeX: -0.25 } },
-  { label: "left 0.55", state: { headYaw: -0.55, gazeX: -0.14 } },
-  { label: "neutral", state: { headYaw: 0, gazeX: 0 } },
-  { label: "right 0.55", state: { headYaw: 0.55, gazeX: 0.14 } },
-  { label: "right 0.85", state: { headYaw: 0.85, gazeX: 0.25 } }
+  { label: "left 0.85", state: { headYaw: -0.85, gazeX: -0.25, bodySway: -0.425, bodyRoll: -0.102 } },
+  { label: "left 0.55", state: { headYaw: -0.55, gazeX: -0.14, bodySway: -0.275, bodyRoll: -0.066 } },
+  { label: "neutral", state: { headYaw: 0, gazeX: 0, bodySway: 0, bodyRoll: 0 } },
+  { label: "right 0.55", state: { headYaw: 0.55, gazeX: 0.14, bodySway: 0.275, bodyRoll: 0.066 } },
+  { label: "right 0.85", state: { headYaw: 0.85, gazeX: 0.25, bodySway: 0.425, bodyRoll: 0.102 } }
 ];
 
 const app = await electron.launch({
@@ -55,17 +56,17 @@ try {
       return output.toDataURL("image/png");
     }, previewSize);
     const frame = Buffer.from(dataUrl.split(",")[1], "base64");
-    const head = await sharp(frame).extract(crop).resize(300, 300, { fit: "fill", kernel: sharp.kernel.lanczos3 }).png().toBuffer();
-    const label = Buffer.from(`<svg width="300" height="38"><rect width="300" height="38" fill="#111722"/><text x="12" y="25" fill="#e8eef8" font-family="Arial" font-size="16">${pose.label}</text></svg>`);
-    tiles.push(await sharp({ create: { width: 300, height: 338, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-      .composite([{ input: head, left: 0, top: 0 }, { input: label, left: 0, top: 300 }]).png().toBuffer());
+    const head = await sharp(frame).extract(crop).resize(320, 390, { fit: "fill", kernel: sharp.kernel.lanczos3 }).png().toBuffer();
+    const label = Buffer.from(`<svg width="320" height="38"><rect width="320" height="38" fill="#111722"/><text x="12" y="25" fill="#e8eef8" font-family="Arial" font-size="16">${pose.label}</text></svg>`);
+    tiles.push(await sharp({ create: { width: 320, height: 428, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: head, left: 0, top: 0 }, { input: label, left: 0, top: 390 }]).png().toBuffer());
   }
 } finally {
   await app.close();
 }
 
-await sharp({ create: { width: 300 * tiles.length, height: 338, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-  .composite(tiles.map((input, index) => ({ input, left: index * 300, top: 0 })))
+await sharp({ create: { width: 320 * tiles.length, height: 428, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+  .composite(tiles.map((input, index) => ({ input, left: index * 320, top: 0 })))
   .png()
   .toFile(outputPath);
 process.stdout.write(`${JSON.stringify({ ok: true, project: basename(projectDirectory), outputPath, poses: poses.map(({ label }) => label) }, null, 2)}\n`);

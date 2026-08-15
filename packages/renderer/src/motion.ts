@@ -22,6 +22,10 @@ interface TrackingAxis {
   velocity: number;
 }
 
+export interface MotionSampleOptions {
+  primaryMotion?: boolean;
+}
+
 function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -176,12 +180,13 @@ export class CalmMotionController {
     }
   }
 
-  sample(timeSeconds: number): MotionState {
-    const active = this.events.find((event) => timeSeconds >= event.start - 0.42 && timeSeconds <= event.start + event.transition + event.hold + event.returnDuration);
+  sample(timeSeconds: number, options: MotionSampleOptions = {}): MotionState {
+    const primaryMotion = options.primaryMotion ?? true;
+    const active = primaryMotion ? this.events.find((event) => timeSeconds >= event.start - 0.42 && timeSeconds <= event.start + event.transition + event.hold + event.returnDuration) : undefined;
     const phase = (this.project.runtime.seed % 97) / 97 * Math.PI * 2;
-    const microYaw = Math.sin(timeSeconds * 0.55 + phase) * 0.018 + Math.sin(timeSeconds * 0.19 + phase * 0.7) * 0.012;
-    const microPitch = Math.sin(timeSeconds * 0.37 + phase * 1.3) * 0.01;
-    const microRoll = Math.sin(timeSeconds * 0.29 + phase * 0.45) * 0.008;
+    const microYaw = primaryMotion ? Math.sin(timeSeconds * 0.55 + phase) * 0.018 + Math.sin(timeSeconds * 0.19 + phase * 0.7) * 0.012 : 0;
+    const microPitch = primaryMotion ? Math.sin(timeSeconds * 0.37 + phase * 1.3) * 0.01 : 0;
+    const microRoll = primaryMotion ? Math.sin(timeSeconds * 0.29 + phase * 0.45) * 0.008 : 0;
     const tuning = this.project.runtime.motionTuning ?? { amplitude: 1, response: 0.72, stability: 0.42 };
     const desiredYaw = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "yaw") : 0) + microYaw) * tuning.amplitude));
     const desiredPitch = Math.max(-1, Math.min(1, ((active ? eventValue(active, timeSeconds, "pitch") : 0) + microPitch) * tuning.amplitude));
@@ -200,8 +205,8 @@ export class CalmMotionController {
     const gazeX = gazeTargetX - yaw * 0.55;
     const gazeY = gazeTargetY - pitch * 0.42;
 
-    advanceTracking(this.trackedBody, yaw * 0.38, delta, 0, Math.min(1, tuning.stability + 0.35));
-    advanceTracking(this.trackedBodyRoll, roll * 0.4, delta, 0, Math.min(1, tuning.stability + 0.35));
+    advanceTracking(this.trackedBody, yaw * 0.5, delta, 0, Math.min(1, tuning.stability + 0.35));
+    advanceTracking(this.trackedBodyRoll, roll * 0.4 + yaw * 0.12, delta, 0, Math.min(1, tuning.stability + 0.35));
 
     const headVelocity = Math.max(-2.5, Math.min(2.5, (yaw - this.previousHead) / delta));
     const pitchVelocity = Math.max(-2.5, Math.min(2.5, (pitch - this.previousPitch) / delta));
@@ -212,20 +217,23 @@ export class CalmMotionController {
     this.previousRoll = roll;
     this.previousBody = this.trackedBody.value;
     const lateralVelocity = headVelocity + rollVelocity * 0.18;
-    const frontHairWind = Math.sin(timeSeconds * 0.81 + phase * 0.63) * 0.08 + Math.sin(timeSeconds * 0.29 + phase * 1.17) * 0.035;
-    const ahogeWind = Math.sin(timeSeconds * 1.07 + phase * 1.41) * 0.13 + Math.sin(timeSeconds * 0.43 + phase * 0.38) * 0.055;
-    const backHairWind = Math.sin(timeSeconds * 0.47 + phase * 0.92) * 0.085 + Math.sin(timeSeconds * 0.21 + phase * 1.58) * 0.04;
-    const headwearWobble = Math.sin(timeSeconds * 0.39 + phase * 1.73) * 0.035;
-    const earIdle = Math.sin(timeSeconds * 1.18 + phase * 0.31) * 0.09 + Math.sin(timeSeconds * 0.56 + phase * 1.22) * 0.035;
-    const clothWind = Math.sin(timeSeconds * 0.36 + phase * 1.09) * 0.07;
+    const frontHairWind = Math.sin(timeSeconds * 0.81 + phase * 0.63) * 0.34 + Math.sin(timeSeconds * 0.29 + phase * 1.17) * 0.14;
+    const frontHairLift = Math.sin(timeSeconds * 0.67 + phase * 1.46) * 0.15 + Math.sin(timeSeconds * 0.24 + phase * 0.55) * 0.06;
+    const ahogeWind = Math.sin(timeSeconds * 1.07 + phase * 1.41) * 0.34 + Math.sin(timeSeconds * 0.43 + phase * 0.38) * 0.16;
+    const ahogeBounce = Math.sin(timeSeconds * 0.88 + phase * 0.19) * 0.26 + Math.sin(timeSeconds * 1.46 + phase * 1.34) * 0.11;
+    const backHairWind = Math.sin(timeSeconds * 0.47 + phase * 0.92 + Math.PI) * 0.29 + Math.sin(timeSeconds * 0.21 + phase * 1.58) * 0.13;
+    const backHairLift = Math.sin(timeSeconds * 0.38 + phase * 0.27) * 0.11;
+    const headwearWobble = Math.sin(timeSeconds * 0.39 + phase * 1.73) * 0.055;
+    const earIdle = Math.sin(timeSeconds * 1.18 + phase * 0.31) * 0.31 + Math.sin(timeSeconds * 1.76 + phase * 1.22) * 0.14;
+    const clothWind = Math.sin(timeSeconds * 0.36 + phase * 1.09) * 0.19;
     const tailWind = Math.sin(timeSeconds * 0.27 + phase * 1.87) * 0.14 + Math.sin(timeSeconds * 0.62 + phase * 0.52) * 0.05;
     const accessoryWind = Math.sin(timeSeconds * 0.66 + phase * 1.31) * 0.09;
-    advanceSpring(this.frontHair, lateralVelocity * 0.62 + frontHairWind, pitchVelocity * 0.3, delta, 27, 9.4, 0.3);
-    advanceSpring(this.ahoge, lateralVelocity * 0.24 + ahogeWind, pitchVelocity * 0.16 + Math.sin(timeSeconds * 0.74 + phase) * 0.04, delta, 11, 5.1, 0.58);
-    advanceSpring(this.backHair, lateralVelocity * 0.94 + backHairWind, pitchVelocity * 0.76, delta, 15, 6.4, 0.5);
+    advanceSpring(this.frontHair, lateralVelocity * 0.58 + frontHairWind, pitchVelocity * 0.26 + frontHairLift, delta, 25, 8.7, 0.42);
+    advanceSpring(this.ahoge, lateralVelocity * 0.2 + ahogeWind, pitchVelocity * 0.12 + ahogeBounce, delta, 10, 4.7, 0.68);
+    advanceSpring(this.backHair, lateralVelocity * 0.88 + backHairWind, pitchVelocity * 0.68 + backHairLift, delta, 14, 6.1, 0.56);
     advanceSpring(this.headwear, lateralVelocity * 0.25 + rollVelocity * 0.38 + headwearWobble, pitchVelocity * 0.12, delta, 30, 10.8, 0.22);
-    advanceSpring(this.ear, lateralVelocity * 0.1 + Math.sin(timeSeconds * 0.69 + phase * 0.81) * 0.025, (Math.abs(headVelocity) + Math.abs(pitchVelocity)) * 0.2 + earIdle, delta, 19, 7.1, 0.44);
-    advanceSpring(this.cloth, bodyVelocity * 0.72 + clothWind, this.trackedBodyRoll.velocity * 0.16 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.025, delta, 13, 6.8, 0.38);
+    advanceSpring(this.ear, lateralVelocity * 0.08 + Math.sin(timeSeconds * 0.69 + phase * 0.81) * 0.045, (Math.abs(headVelocity) + Math.abs(pitchVelocity)) * 0.22 + earIdle, delta, 18, 6.6, 0.58);
+    advanceSpring(this.cloth, bodyVelocity * 0.7 + clothWind, this.trackedBodyRoll.velocity * 0.16 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.07, delta, 12, 6.3, 0.48);
     advanceSpring(this.tail, bodyVelocity * 0.52 + tailWind, this.trackedBodyRoll.velocity * 0.12 + Math.sin(timeSeconds * 0.34 + phase * 0.76) * 0.055, delta, 6.2, 4.2, 0.7);
     advanceSpring(this.accessory, lateralVelocity * 0.46 + accessoryWind, pitchVelocity * 0.38 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.04, delta, 8.2, 4.5, 0.65);
 

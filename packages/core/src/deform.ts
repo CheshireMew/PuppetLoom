@@ -44,6 +44,21 @@ function breathInfluence(layer: LayerBinding): number {
   return 0;
 }
 
+function bodyMotionInfluence(layer: LayerBinding, base: Point): number {
+  if (layer.role === "neck") {
+    const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+    return smoothstep01((v - 0.04) / 0.92);
+  }
+  if (layer.role === "topWear") return 1;
+  if (layer.role === "arm" || layer.role === "hand") return 0.9;
+  if (layer.role === "bottomWear") return 0.62;
+  if (layer.role === "tail" || layer.role === "accessory") return 0.7;
+  if (layer.role === "leg") return 0.16;
+  if (layer.role === "foot") return 0;
+  if (layer.role === "unknown") return 0.45;
+  return 0.75;
+}
+
 function secondaryFree(layer: LayerBinding, base: Point): number {
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
@@ -108,6 +123,7 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   }
 
   if (layer.weights.body > 0) {
+    const bodyWeight = layer.weights.body * bodyMotionInfluence(layer, base);
     const breath = clamp(state.breath, -1, 1);
     const breathWeight = breathInfluence(layer) * layer.weights.body;
     if (breathWeight > 0) {
@@ -116,13 +132,21 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
       point.x = bodyPivot.x + (point.x - bodyPivot.x) * scaleX;
       point.y = bodyPivot.y + (point.y - bodyPivot.y) * scaleY - Math.max(0, breath) * envelope.breath * 0.05 * breathWeight;
     }
-    point.x += state.bodySway * envelope.bodySway * layer.weights.body;
-    const rotated = rotate(point, bodyPivot, bodyRoll * layer.weights.body);
+    point.x += state.bodySway * envelope.bodySway * bodyWeight;
+    const bodyTurn = clamp(state.bodySway * 2.1, -1, 1);
+    const compression = 1 - Math.abs(bodyTurn) * 0.022 * bodyWeight;
+    point.x = bodyPivot.x + (point.x - bodyPivot.x) * compression;
+    if (layer.side !== "center") {
+      const side = layer.side === "left" ? 1 : -1;
+      point.x += bodyTurn * side * faceWidth * 0.006 * bodyWeight;
+    }
+    const rotated = rotate(point, bodyPivot, bodyRoll * bodyWeight);
     point = rotated;
   }
 
   if (layer.weights.head > 0) {
-    const headWeight = layer.weights.head;
+    const neckV = layer.role === "neck" ? clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1) : 0;
+    const headWeight = layer.weights.head * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
     if (project.runtime.poseField) point = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch);
     else {
       if (layer.side !== "center" && hasSidePerspective(layer)) {
@@ -161,13 +185,14 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     if (layer.role === "frontHair") {
       addLocalBend(point, base, layer.pivot, state.hairX * 2.1 * weight, free);
       point.y += state.hairY * faceHeight * 0.42 * weight * free;
+      point.x += state.hairY * (u - 0.5) * faceWidth * 1.35 * weight * free;
     } else if (layer.role === "backHair" || layer.role === "sideHair") {
       addLocalBend(point, base, layer.pivot, state.backHairX * 2.5 * weight, free);
       point.y += state.backHairY * faceHeight * 0.5 * weight * free;
     } else if (layer.role === "headwear") {
       addLocalBend(point, base, layer.pivot, state.headwearX * 1.8 * weight, 1);
       addLocalStretch(point, base, layer.pivot, state.headwearY * 0.32 * weight, 1);
-      point.y += state.earY * faceHeight * 2.2 * weight * free;
+      point.y += state.earY * faceHeight * 2.8 * weight * free;
       addLocalBend(point, base, layer.pivot, state.earX * 0.72 * weight, free);
     } else if (layer.role === "ear") {
       point.y += state.earY * faceHeight * 0.85 * weight * free;
@@ -186,8 +211,8 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     }
     if (layer.role === "frontHair") {
       const ahoge = ahogeFree(layer, base);
-      addLocalBend(point, base, layer.pivot, state.ahogeX * 4.2 * weight, ahoge);
-      point.y += state.ahogeY * faceHeight * 0.62 * weight * ahoge;
+      addLocalBend(point, base, layer.pivot, state.ahogeX * 4.8 * weight, ahoge);
+      point.y += state.ahogeY * faceHeight * 1.8 * weight * ahoge;
       point.y += state.ahogeX * (u - 0.5) * faceHeight * 0.18 * weight * ahoge;
     }
   }
