@@ -7,23 +7,23 @@ $logPath = Join-Path $logDirectory ("launcher-{0}.log" -f (Get-Date -Format "yyy
 
 function Show-LaunchError([string]$message) {
   Add-Type -AssemblyName PresentationFramework
-  [System.Windows.MessageBox]::Show($message, "PuppetLoom 无法启动", "OK", "Error") | Out-Null
+  [System.Windows.MessageBox]::Show($message, "PuppetLoom could not start", "OK", "Error") | Out-Null
 }
 
 try {
   New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-  "[$(Get-Date -Format o)] 启动 PuppetLoom，项目目录：$projectRoot" | Add-Content -LiteralPath $logPath -Encoding UTF8
+  "[$(Get-Date -Format o)] Starting PuppetLoom from $projectRoot" | Add-Content -LiteralPath $logPath -Encoding UTF8
 
   $electron = Join-Path $projectRoot "node_modules\electron\dist\electron.exe"
   $desktopMain = Join-Path $projectRoot "apps\desktop\dist\electron\main.js"
   if (-not (Test-Path -LiteralPath $electron)) {
-    throw "缺少 Electron 运行环境。请先在 $projectRoot 执行 npm install。"
+    throw "Electron is missing. Run npm install in $projectRoot first."
   }
   if (-not (Test-Path -LiteralPath $desktopMain)) {
     $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
     & $npm run build *>> $logPath
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $desktopMain)) {
-      throw "桌面应用构建失败，详情见 $logPath"
+      throw "The desktop build failed. See $logPath for details."
     }
   }
 
@@ -32,6 +32,6 @@ try {
 } catch {
   $message = $_.Exception.Message
   "[$(Get-Date -Format o)] ERROR $message" | Add-Content -LiteralPath $logPath -Encoding UTF8
-  Show-LaunchError "$message`n`n日志：$logPath"
+  Show-LaunchError "$message`n`nLog: $logPath"
   exit 1
 }
