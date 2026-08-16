@@ -14,12 +14,14 @@ const vertexShaderSource = `#version 300 es
 precision highp float;
 in vec2 a_position;
 in vec2 a_uv;
+uniform vec2 u_aspectScale;
 out vec2 v_uv;
 out vec2 v_position;
 void main() {
   v_uv = a_uv;
   v_position = a_position;
-  gl_Position = vec4(a_position.x * 2.0 - 1.0, 1.0 - a_position.y * 2.0, 0.0, 1.0);
+  vec2 clipPosition = vec2(a_position.x * 2.0 - 1.0, 1.0 - a_position.y * 2.0);
+  gl_Position = vec4(clipPosition * u_aspectScale, 0.0, 1.0);
 }`;
 
 const fragmentShaderSource = `#version 300 es
@@ -92,6 +94,31 @@ async function toImageBitmap(source: Blob | ImageBitmapSource): Promise<ImageBit
 function smoothstep(value: number): number {
   const t = Math.max(0, Math.min(1, value));
   return t * t * (3 - 2 * t);
+}
+
+export interface AspectFitScale {
+  x: number;
+  y: number;
+}
+
+/**
+ * Fits project coordinates inside the current drawing buffer without changing
+ * their proportions. Any unused area stays transparent in the viewer.
+ */
+export function aspectFitScale(
+  projectWidth: number,
+  projectHeight: number,
+  viewportWidth: number,
+  viewportHeight: number
+): AspectFitScale {
+  if (![projectWidth, projectHeight, viewportWidth, viewportHeight].every((value) => Number.isFinite(value) && value > 0)) {
+    return { x: 1, y: 1 };
+  }
+  const projectAspect = projectWidth / projectHeight;
+  const viewportAspect = viewportWidth / viewportHeight;
+  if (viewportAspect > projectAspect) return { x: projectAspect / viewportAspect, y: 1 };
+  if (viewportAspect < projectAspect) return { x: 1, y: viewportAspect / projectAspect };
+  return { x: 1, y: 1 };
 }
 
 export function opacityFor(layer: LayerBinding, state: MotionState): number {
@@ -220,6 +247,14 @@ export class PuppetRenderer {
     const uvLocation = gl.getAttribLocation(this.program, "a_uv");
     const opacityLocation = gl.getUniformLocation(this.program, "u_opacity");
     const alphaThresholdLocation = gl.getUniformLocation(this.program, "u_alphaThreshold");
+    const aspectScaleLocation = gl.getUniformLocation(this.program, "u_aspectScale");
+    const aspectScale = aspectFitScale(
+      this.project.canvas.width,
+      this.project.canvas.height,
+      this.canvas.width,
+      this.canvas.height
+    );
+    gl.uniform2f(aspectScaleLocation, aspectScale.x, aspectScale.y);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
     gl.enableVertexAttribArray(positionLocation);
     gl.enableVertexAttribArray(uvLocation);

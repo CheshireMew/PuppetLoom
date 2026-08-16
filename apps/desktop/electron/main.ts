@@ -26,6 +26,7 @@ const rendererPage = resolve(electronDirectory, "../renderer/index.html");
 const viewerStates = new Map<number, ViewerState>();
 const viewerProjects = new Map<number, string>();
 const viewerLookOrigins = new Map<number, { x: number; y: number }>();
+const viewerAspectRatios = new Map<number, number>();
 let runtimeLogPath: string | undefined;
 
 interface RecentProject {
@@ -145,9 +146,18 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
     const factor = action === "larger" ? 1.1 : 1 / 1.1;
     const size = window.getSize();
     const width = size[0] ?? 600;
-    const height = size[1] ?? 720;
-    const newWidth = Math.max(220, Math.round(width * factor));
-    window.setSize(newWidth, Math.max(220, Math.round(height * factor)), true);
+    const aspectRatio = viewerAspectRatios.get(window.id) ?? width / (size[1] ?? 720);
+    let newWidth = Math.round(width * factor);
+    let newHeight = Math.round(newWidth / aspectRatio);
+    if (newWidth < 220) {
+      newWidth = 220;
+      newHeight = Math.round(newWidth / aspectRatio);
+    }
+    if (newHeight < 220) {
+      newHeight = 220;
+      newWidth = Math.round(newHeight * aspectRatio);
+    }
+    window.setSize(newWidth, newHeight, true);
     next = { ...current, scale: Math.max(0.35, Math.min(3, current.scale * factor)) };
   }
   if (action === "close") {
@@ -186,9 +196,11 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
     title: project.name,
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
   });
-  window.setAspectRatio(project.canvas.width / project.canvas.height);
+  const aspectRatio = project.canvas.width / project.canvas.height;
+  window.setAspectRatio(aspectRatio);
   stateFor(window);
   viewerProjects.set(window.id, resolvedProject);
+  viewerAspectRatios.set(window.id, aspectRatio);
   viewerLookOrigins.set(window.id, project.anchors.nose ?? {
     x: 0.5,
     y: ((project.anchors.headTop?.y ?? 0.04) + (project.anchors.chin?.y ?? 0.36)) * 0.5
@@ -203,6 +215,7 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
     viewerLookOrigins.delete(window.id);
+    viewerAspectRatios.delete(window.id);
   });
   try {
     await window.loadFile(rendererPage, { query: { viewer: "1", project: resolvedProject } });
@@ -211,6 +224,7 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
     viewerLookOrigins.delete(window.id);
+    viewerAspectRatios.delete(window.id);
     window.destroy();
     throw cause;
   }

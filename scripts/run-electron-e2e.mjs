@@ -76,7 +76,16 @@ try {
   const viewer = await viewerPromise;
   await viewer.getByTestId("viewer").waitFor();
   await viewer.locator("canvas").waitFor({ state: "visible" });
-  await viewer.waitForFunction(() => document.querySelector("canvas")?.width && document.querySelector("canvas")?.height);
+  await viewer.waitForFunction(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement) || !canvas.width || !canvas.height) return false;
+    const gl = canvas.getContext("webgl2");
+    if (!gl) return false;
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
+    return false;
+  }, undefined, { timeout: 30_000 });
 
   const duplicate = await control.evaluate((projectDirectory) => window.puppetloom.launchViewer(projectDirectory), output);
   if (duplicate.id !== launched.id) throw new Error(`重复打开同一项目创建了多个窗口：${JSON.stringify({ first: launched.id, duplicate: duplicate.id })}`);
@@ -90,6 +99,57 @@ try {
   }));
   const aspect = nativeState.size[0] / nativeState.size[1];
   if (!nativeState.top || !nativeState.visible || Math.abs(aspect - 1) > 0.01) throw new Error(`透明窗口状态不符合要求：${JSON.stringify(nativeState)}`);
+
+  const visiblePixelRatio = () => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("角色窗口缺少画布。");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) throw new Error("角色窗口缺少 WebGL2 上下文。");
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let minimumX = canvas.width;
+    let maximumX = -1;
+    let minimumY = canvas.height;
+    let maximumY = -1;
+    for (let y = 0; y < canvas.height; y += 1) {
+      for (let x = 0; x < canvas.width; x += 1) {
+        if (pixels[(y * canvas.width + x) * 4 + 3] === 0) continue;
+        minimumX = Math.min(minimumX, x);
+        maximumX = Math.max(maximumX, x);
+        minimumY = Math.min(minimumY, y);
+        maximumY = Math.max(maximumY, y);
+      }
+    }
+    if (maximumX < minimumX || maximumY < minimumY) throw new Error("角色窗口没有可见像素。");
+    return (maximumX - minimumX + 1) / (maximumY - minimumY + 1);
+  };
+  const baselinePixelRatio = await viewer.evaluate(visiblePixelRatio);
+  await browserWindow.evaluate((window) => {
+    window.setAspectRatio(0);
+    window.setSize(900, 600, false);
+  });
+  await viewer.waitForFunction(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.width / canvas.height <= 1.45) return false;
+    const gl = canvas.getContext("webgl2");
+    if (!gl) return false;
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
+    return false;
+  });
+  const windowedPixelRatio = await viewer.evaluate(visiblePixelRatio);
+  if (Math.abs(windowedPixelRatio / baselinePixelRatio - 1) > 0.06) {
+    throw new Error(`窗口比例改变后角色发生拉伸：${JSON.stringify({ baselinePixelRatio, windowedPixelRatio })}`);
+  }
+  await browserWindow.evaluate((window) => {
+    window.setAspectRatio(1);
+    window.setContentSize(720, 720, false);
+  });
+  await viewer.waitForFunction(() => {
+    const canvas = document.querySelector("canvas");
+    return canvas instanceof HTMLCanvasElement && Math.abs(canvas.width / canvas.height - 1) < 0.01;
+  });
 
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
   if (![pointer.x, pointer.y, pointer.strength].every(Number.isFinite) || pointer.strength !== 1) throw new Error(`系统鼠标目标无效：${JSON.stringify(pointer)}`);
