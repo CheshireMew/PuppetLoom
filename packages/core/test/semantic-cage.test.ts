@@ -102,23 +102,26 @@ describe("automatic semantic control cage", () => {
     expect(project.runtime.semanticCage?.validation.confidence).toBeGreaterThan(0.8);
   });
 
-  it("keeps face-framing front hair attached to both moving face edges", () => {
+  it("keeps face-framing hair outside the cheek without gluing its whole contour to the face", () => {
     const project = rigFixture();
     const field = project.runtime.poseField!;
     const cage = project.runtime.semanticCage!;
     const face = project.layers.find((entry) => entry.role === "face")!;
     const hair = project.layers.find((entry) => entry.role === "frontHair")!;
-    const y = cage.points.eyeLeft.position.y + (cage.points.chin.position.y - cage.points.eyeLeft.position.y) * 0.28;
     for (const yaw of [-0.85, 0.85]) {
       for (const side of ["Left", "Right"] as const) {
-        const facePoint = { x: cage.points[`face${side}`].position.x, y };
         const direction = side === "Left" ? -1 : 1;
-        const hairPoint = { x: facePoint.x + direction * face.bounds.width * 0.035, y };
-        const posedFace = applyCoherentPoseField(field, face, facePoint, yaw, 0, cage);
-        const posedHair = applyCoherentPoseField(field, hair, hairPoint, yaw, 0, cage);
-        const faceShift = posedFace.x - facePoint.x;
-        const hairShift = posedHair.x - hairPoint.x;
-        expect(Math.abs(faceShift - hairShift)).toBeLessThan(face.bounds.width * 0.01);
+        const neutralGap = face.bounds.width * 0.035;
+        for (const vertical of [0.18, 0.42, 0.66]) {
+          const y = cage.points.eyeLeft.position.y + (cage.points.chin.position.y - cage.points.eyeLeft.position.y) * vertical;
+          const facePoint = { x: cage.points[`face${side}`].position.x, y };
+          const hairPoint = { x: facePoint.x + direction * neutralGap, y };
+          const posedFace = applyCoherentPoseField(field, face, facePoint, yaw, 0, cage);
+          const posedHair = applyCoherentPoseField(field, hair, hairPoint, yaw, 0, cage);
+          const posedGap = direction * (posedHair.x - posedFace.x);
+          expect(posedGap).toBeGreaterThan(neutralGap * 0.55);
+          expect(posedGap).toBeLessThan(neutralGap * 1.55);
+        }
       }
     }
   });

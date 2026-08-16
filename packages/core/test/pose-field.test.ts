@@ -80,14 +80,17 @@ describe("coherent semantic pose field", () => {
   it("widens the near eye and narrows the far eye during a turn", () => {
     const nearEye = layer("eyelash", "left");
     const farEye = layer("eyelash", "right");
-    const widthAfter = (target: LayerBinding) => {
+    const widthAfter = (target: LayerBinding, yaw: number) => {
       const left = { x: target.bounds.x, y: target.pivot.y };
       const right = { x: target.bounds.x + target.bounds.width, y: target.pivot.y };
-      const posedLeft = applyCoherentPoseField(field, target, left, 0.75, 0);
-      const posedRight = applyCoherentPoseField(field, target, right, 0.75, 0);
+      const posedLeft = applyCoherentPoseField(field, target, left, yaw, 0);
+      const posedRight = applyCoherentPoseField(field, target, right, yaw, 0);
       return posedRight.x - posedLeft.x;
     };
-    expect(widthAfter(nearEye)).toBeGreaterThan(widthAfter(farEye));
+    const neutralWidth = widthAfter(nearEye, 0);
+    expect(widthAfter(nearEye, 0.75)).toBeGreaterThan(neutralWidth * 1.04);
+    expect(widthAfter(farEye, 0.75)).toBeLessThan(neutralWidth * 0.82);
+    expect(widthAfter(nearEye, 0.75)).toBeGreaterThan(widthAfter(farEye, 0.75));
   });
 
   it("foreshortens the screen-right eye during an extreme left turn", () => {

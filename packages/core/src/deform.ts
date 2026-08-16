@@ -205,7 +205,7 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     point.x = bodyPivot.x + (point.x - bodyPivot.x) * compression;
     const localU = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
     const localV = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-    const upperFollow = layer.role === "neck" ? 1 - localV : 1 - smoothstep01((localV - 0.08) / 0.92);
+    const upperFollow = layer.role === "neck" ? 1 : 1 - smoothstep01((localV - 0.08) / 0.92);
     if (layer.role === "neck" || layer.role === "topWear" || layer.role === "arm" || layer.role === "hand" || layer.role === "bottomWear") {
       point.x += bodyTurn * faceWidth * 0.012 * bodyWeight * upperFollow;
       point.y += bodyTurn * (localU - 0.5) * faceHeight * 0.018 * bodyWeight * upperFollow;

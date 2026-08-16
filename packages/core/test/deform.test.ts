@@ -222,13 +222,13 @@ describe("connected head and upper-body motion", () => {
     }
   } as PuppetLoomProject;
 
-  it("lets the neck bridge the moving head to the delayed torso", () => {
+  it("keeps the neck connected between the moving head and the upper body", () => {
     const face = secondaryLayer("face", { x: 0.4, y: 0.1, width: 0.2, height: 0.2 });
     face.weights = { head: 1, body: 0, gaze: 0, physics: 0 };
     face.pivot = { x: 0.5, y: 0.2 };
     const neck = secondaryLayer("neck", { x: 0.47, y: 0.27, width: 0.06, height: 0.13 });
     neck.weights = { head: 1, body: 1, gaze: 0, physics: 0 };
-    const state = { ...neutralMotionState, headYaw: 0.85, bodySway: 0.425, bodyRoll: 0.1 };
+    const state = { ...neutralMotionState, headYaw: 0.85, bodySway: 0.85 * 0.62, bodyRoll: 0.85 * 0.16 };
     const faceCenter = { x: 0.5, y: 0.2 };
     const neckTop = { x: 0.5, y: 0.27 };
     const neckBottom = { x: 0.5, y: 0.4 };
@@ -236,11 +236,13 @@ describe("connected head and upper-body motion", () => {
     const topShift = deformPoint(connectedProject, neck, neckTop, state).x - neckTop.x;
     const bottomShift = deformPoint(connectedProject, neck, neckBottom, state).x - neckBottom.x;
     expect(Math.sign(topShift)).toBe(Math.sign(faceShift));
-    expect(Math.abs(topShift)).toBeGreaterThan(Math.abs(bottomShift) * 3);
+    expect(Math.sign(bottomShift)).toBe(Math.sign(faceShift));
+    expect(Math.abs(bottomShift)).toBeGreaterThan(0.003);
+    expect(Math.abs(topShift)).toBeGreaterThan(Math.abs(bottomShift));
     expect(Math.abs(faceShift - topShift)).toBeLessThan(0.02);
   });
 
-  it("pitches the face through surface depth while the neck fades into the fixed collar", () => {
+  it("pitches the face and connected neck without leaving the upper body behind", () => {
     const face = secondaryLayer("face", { x: 0.4, y: 0.1, width: 0.2, height: 0.2 });
     face.weights = { head: 1, body: 0, gaze: 0, physics: 0 };
     face.pivot = { x: 0.5, y: 0.2 };
@@ -250,8 +252,8 @@ describe("connected head and upper-body motion", () => {
     const faceEdge = { x: 0.41, y: 0.2 };
     const neckTop = { x: 0.5, y: 0.27 };
     const neckBottom = { x: 0.5, y: 0.4 };
-    const up = { ...neutralMotionState, headPitch: -0.72 };
-    const down = { ...neutralMotionState, headPitch: 0.72 };
+    const up = { ...neutralMotionState, headPitch: -0.72, bodyPitch: -0.72 * 0.46 };
+    const down = { ...neutralMotionState, headPitch: 0.72, bodyPitch: 0.72 * 0.46 };
     const faceUp = deformPoint(connectedProject, face, faceCenter, up);
     const faceDown = deformPoint(connectedProject, face, faceCenter, down);
     const edgeUp = deformPoint(connectedProject, face, faceEdge, up);
@@ -263,7 +265,8 @@ describe("connected head and upper-body motion", () => {
     expect(faceDown.y - faceUp.y).toBeGreaterThan(0.015);
     expect(faceDown.y - faceUp.y).toBeGreaterThan((edgeDown.y - edgeUp.y) * 1.2);
     expect(neckTopDown.y - neckTopUp.y).toBeGreaterThan(0.01);
-    expect(Math.abs(neckBottomDown.y - neckBottomUp.y)).toBeLessThan(0.001);
+    expect(neckBottomDown.y - neckBottomUp.y).toBeGreaterThan(0.001);
+    expect(neckBottomDown.y - neckBottomUp.y).toBeLessThan(neckTopDown.y - neckTopUp.y);
   });
 
   it("turns the upper body while keeping the feet planted", () => {

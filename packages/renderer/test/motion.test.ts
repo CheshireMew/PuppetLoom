@@ -118,7 +118,7 @@ describe("calm autonomous timeline", () => {
     expect(strongFlapStarts).toBeGreaterThanOrEqual(6);
   });
 
-  it("moves the gaze before the head and lets the body follow later", () => {
+  it("moves the gaze first while the connected upper body starts with the head", () => {
     const controller = new CalmMotionController(fixtureProject());
     const first = controller.events[0]!;
     const gazeLead = controller.sample(first.start - 0.2);
@@ -126,11 +126,15 @@ describe("calm autonomous timeline", () => {
     expect(Math.abs(gazeLead.gazeX)).toBeGreaterThan(Math.abs(gazeLead.headYaw) * 2);
 
     controller.reset();
-    const duringTurn = controller.sample(first.start + first.transition * 0.55);
-    expect(Math.abs(duringTurn.headYaw)).toBeGreaterThan(Math.abs(duringTurn.bodySway));
+    const turnStates = Array.from({ length: 90 }, (_, index) => controller.sample(first.start - 0.2 + index / 60));
+    const headStart = turnStates.findIndex((state) => Math.abs(state.headYaw) > 0.02);
+    const bodyStart = turnStates.findIndex((state) => Math.abs(state.bodySway) > 0.012);
+    expect(headStart).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(bodyStart - headStart)).toBeLessThanOrEqual(1);
+    expect(turnStates.every((state) => Math.abs(state.bodySway - state.headYaw * 0.62) < 1e-9)).toBe(true);
   });
 
-  it("follows a pointer with gaze first, head second, and body last", () => {
+  it("follows a pointer with gaze first and a structurally connected upper body", () => {
     const controller = new CalmMotionController(fixtureProject());
     const target = { x: 0.9, y: -0.7, strength: 1 };
     const states = Array.from({ length: 180 }, (_, index) => controller.sample(index / 60, { lookTarget: target }));

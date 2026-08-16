@@ -26,11 +26,13 @@ const crop = {
   top: Math.max(0, Math.min(previewSize - cropHeight, Math.round((headTop - headSize * 0.08) * previewSize)))
 };
 const poses = [
-  { label: "left 0.85", state: { headYaw: -0.85, gazeX: -0.25, bodySway: -0.425, bodyRoll: -0.102 } },
-  { label: "left 0.55", state: { headYaw: -0.55, gazeX: -0.14, bodySway: -0.275, bodyRoll: -0.066 } },
+  { label: "left 0.85", state: { headYaw: -0.85, gazeX: -0.25, bodySway: -0.527, bodyRoll: -0.136 } },
+  { label: "left 0.55", state: { headYaw: -0.55, gazeX: -0.14, bodySway: -0.341, bodyRoll: -0.088 } },
   { label: "neutral", state: { headYaw: 0, gazeX: 0, bodySway: 0, bodyRoll: 0 } },
-  { label: "right 0.55", state: { headYaw: 0.55, gazeX: 0.14, bodySway: 0.275, bodyRoll: 0.066 } },
-  { label: "right 0.85", state: { headYaw: 0.85, gazeX: 0.25, bodySway: 0.425, bodyRoll: 0.102 } }
+  { label: "right 0.55", state: { headYaw: 0.55, gazeX: 0.14, bodySway: 0.341, bodyRoll: 0.088 } },
+  { label: "right 0.85", state: { headYaw: 0.85, gazeX: 0.25, bodySway: 0.527, bodyRoll: 0.136 } },
+  { label: "look up 0.75", state: { headPitch: -0.75, gazeY: -0.18, bodyPitch: -0.345 } },
+  { label: "look down 0.75", state: { headPitch: 0.75, gazeY: 0.18, bodyPitch: 0.345 } }
 ];
 
 const app = await electron.launch({
