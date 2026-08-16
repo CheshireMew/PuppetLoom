@@ -39,6 +39,10 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.backHairX - state.accessoryX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.ahogeX - state.hairX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.tailX - state.clothX) > 0.001)).toBe(true);
+    expect(states.every((state) => state.secondary?.frontHairLeft.x.length === 4)).toBe(true);
+    expect(states.every((state) => state.secondary?.backHairLeft.x.length === 5)).toBe(true);
+    expect(states.some((state) => state.secondary!.frontHairLeft.x.some((value, index) => Math.abs(value - state.secondary!.frontHairLeft.x[0]!) > 0.0001 && index > 0))).toBe(true);
+    expect(states.some((state) => Math.abs(state.secondary!.frontHairLeft.x.at(-1)! - state.secondary!.frontHairRight.x.at(-1)!) > 0.0001)).toBe(true);
     expect(states.every((state) => Math.abs(state.headYaw) <= 1 && Math.abs(state.headPitch) <= 1)).toBe(true);
     expect(states.some((state) => state.headPitch > 0.12)).toBe(true);
     const frameSteps = states.slice(1).map((state, index) => Math.abs(state.headYaw - states[index]!.headYaw));
@@ -114,6 +118,7 @@ describe("calm autonomous timeline", () => {
     expect(states.at(-1)!.headYaw).toBeGreaterThan(0.75);
     expect(states.at(-1)!.headPitch).toBeLessThan(-0.62);
     expect(states.at(-1)!.bodySway).toBeGreaterThan(0.3);
+    expect(states.at(-1)!.bodyPitch).toBeLessThan(-0.2);
     expect(Math.abs(states.at(-1)!.bodySway)).toBeLessThan(Math.abs(states.at(-1)!.headYaw));
   });
 

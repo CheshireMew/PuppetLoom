@@ -35,6 +35,7 @@ export function safetyPoseState(yaw: number, pitch: number, roll: number): Motio
     headPitch: pitch,
     headRoll: roll,
     bodySway: yaw * 0.5,
+    bodyPitch: pitch * 0.38,
     bodyRoll: roll * 0.35 + yaw * 0.12,
     gazeX: yaw * 0.45,
     gazeY: pitch * 0.3,

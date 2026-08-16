@@ -1,6 +1,6 @@
 import { clamp } from "./math.js";
 import { applyCoherentPoseField } from "./pose-field.js";
-import type { LayerBinding, MotionState, Point, PuppetLoomProject } from "./types.js";
+import type { LayerBinding, MotionChainState, MotionState, Point, PuppetLoomProject } from "./types.js";
 
 function rotate(point: Point, pivot: Point, radians: number): Point {
   if (Math.abs(radians) < 1e-8) return point;
@@ -33,6 +33,29 @@ function pitchParallax(layer: LayerBinding): number {
 function smoothstep01(value: number): number {
   const t = clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
+}
+
+function chainValue(chain: MotionChainState | undefined, axis: "x" | "y", free: number): number {
+  const values = chain?.[axis];
+  if (!values?.length || free <= 0) return 0;
+  const scaled = clamp(free, 0, 1) * values.length;
+  if (scaled >= values.length) return values.at(-1) ?? 0;
+  if (scaled <= 1) return (values[0] ?? 0) * smoothstep01(scaled);
+  const upperIndex = Math.min(values.length - 1, Math.floor(scaled));
+  const lowerIndex = Math.max(0, upperIndex - 1);
+  const blend = smoothstep01(scaled - Math.floor(scaled));
+  return (values[lowerIndex] ?? 0) * (1 - blend) + (values[upperIndex] ?? 0) * blend;
+}
+
+function pairedChainValue(
+  left: MotionChainState | undefined,
+  right: MotionChainState | undefined,
+  axis: "x" | "y",
+  u: number,
+  free: number
+): number {
+  const blend = smoothstep01((u - 0.34) / 0.32);
+  return chainValue(left, axis, free) * (1 - blend) + chainValue(right, axis, free) * blend;
 }
 
 function breathInfluence(layer: LayerBinding): number {
@@ -153,6 +176,7 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   if (layer.weights.body > 0) {
     const bodyWeight = layer.weights.body * bodyMotionInfluence(layer, base);
     const breath = clamp(state.breath, -1, 1);
+    const bodyPitch = clamp(state.bodyPitch, -1, 1);
     const breathWeight = breathInfluence(layer) * layer.weights.body;
     if (breathWeight > 0) {
       const scaleX = 1 + breath * envelope.breath * breathWeight;
@@ -164,6 +188,16 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     const bodyTurn = clamp(state.bodySway * 2.1, -1, 1);
     const compression = 1 - Math.abs(bodyTurn) * 0.022 * bodyWeight;
     point.x = bodyPivot.x + (point.x - bodyPivot.x) * compression;
+    const localU = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
+    const localV = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+    const upperFollow = layer.role === "neck" ? 1 - localV : 1 - smoothstep01((localV - 0.08) / 0.92);
+    if (layer.role === "neck" || layer.role === "topWear" || layer.role === "arm" || layer.role === "hand" || layer.role === "bottomWear") {
+      point.x += bodyTurn * faceWidth * 0.012 * bodyWeight * upperFollow;
+      point.y += bodyTurn * (localU - 0.5) * faceHeight * 0.018 * bodyWeight * upperFollow;
+      point.y += bodyPitch * faceHeight * 0.018 * bodyWeight * upperFollow;
+      const pitchScale = 1 - bodyPitch * 0.012 * bodyWeight * upperFollow;
+      point.x = bodyPivot.x + (point.x - bodyPivot.x) * pitchScale;
+    }
     if (layer.side !== "center") {
       const side = layer.side === "left" ? 1 : -1;
       point.x += bodyTurn * side * faceWidth * 0.006 * bodyWeight;
@@ -211,15 +245,32 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     const free = secondaryFree(layer, base);
     const weight = layer.weights.physics;
     if (layer.role === "frontHair") {
-      addLocalBend(point, base, layer.pivot, state.hairX * 2.1 * weight, free);
-      point.y += state.hairY * faceHeight * 0.42 * weight * free;
-      point.x += state.hairY * (u - 0.5) * faceWidth * 1.35 * weight * free;
+      if (state.secondary) {
+        const bend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, free);
+        const lift = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "y", u, free);
+        addLocalBend(point, base, layer.pivot, bend * 3.1 * weight, 1);
+        point.y += lift * faceHeight * 0.72 * weight;
+        point.x += lift * (u - 0.5) * faceWidth * 1.1 * weight;
+      } else {
+        addLocalBend(point, base, layer.pivot, state.hairX * 2.1 * weight, free);
+        point.y += state.hairY * faceHeight * 0.42 * weight * free;
+        point.x += state.hairY * (u - 0.5) * faceWidth * 1.35 * weight * free;
+      }
     } else if (layer.role === "backHair" || layer.role === "sideHair") {
-      addLocalBend(point, base, layer.pivot, state.backHairX * 2.5 * weight, free);
-      point.y += state.backHairY * faceHeight * 0.5 * weight * free;
+      if (state.secondary) {
+        const bend = pairedChainValue(state.secondary.backHairLeft, state.secondary.backHairRight, "x", u, free);
+        const lift = pairedChainValue(state.secondary.backHairLeft, state.secondary.backHairRight, "y", u, free);
+        addLocalBend(point, base, layer.pivot, bend * 3.5 * weight, 1);
+        point.y += lift * faceHeight * 0.82 * weight;
+      } else {
+        addLocalBend(point, base, layer.pivot, state.backHairX * 2.5 * weight, free);
+        point.y += state.backHairY * faceHeight * 0.5 * weight * free;
+      }
     } else if (layer.role === "headwear") {
-      addLocalBend(point, base, layer.pivot, state.headwearX * 1.8 * weight, 1);
-      addLocalStretch(point, base, layer.pivot, state.headwearY * 0.32 * weight, 1);
+      const headwearX = state.secondary ? chainValue(state.secondary.headwear, "x", Math.max(0.35, free)) : state.headwearX;
+      const headwearY = state.secondary ? chainValue(state.secondary.headwear, "y", Math.max(0.35, free)) : state.headwearY;
+      addLocalBend(point, base, layer.pivot, headwearX * 1.8 * weight, 1);
+      addLocalStretch(point, base, layer.pivot, headwearY * 0.32 * weight, 1);
       const hinge = earHingeFor(layer, base);
       if (hinge) {
         const flap = state.earY * hinge.mirror * 20 + state.earX * 6;
@@ -233,21 +284,30 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
       if (hinge) addLocalBend(point, base, hinge.pivot, (state.earY * hinge.mirror * 20 + state.earX * 6) * weight, free);
     } else if (layer.role === "topWear" || layer.role === "bottomWear") {
       const clothScale = layer.role === "bottomWear" ? 3.4 : 2.1;
-      addLocalBend(point, base, layer.pivot, state.clothX * clothScale * weight, free);
-      point.y += state.clothY * faceHeight * 0.46 * weight * free;
-      point.y += state.clothX * (u - 0.5) * faceHeight * 0.12 * weight * free;
+      const clothChain = layer.role === "bottomWear" ? state.secondary?.skirt : state.secondary?.topCloth;
+      const clothX = clothChain ? chainValue(clothChain, "x", free) : state.clothX * free;
+      const clothY = clothChain ? chainValue(clothChain, "y", free) : state.clothY * free;
+      addLocalBend(point, base, layer.pivot, clothX * clothScale * weight, 1);
+      point.y += clothY * faceHeight * 0.56 * weight;
+      point.y += clothX * (u - 0.5) * faceHeight * 0.16 * weight;
     } else if (layer.role === "tail") {
-      addLocalBend(point, base, layer.pivot, state.tailX * 2.6 * weight, free);
-      addLocalStretch(point, base, layer.pivot, state.tailY * 0.42 * weight, free);
+      const tailX = state.secondary ? chainValue(state.secondary.tail, "x", free) : state.tailX * free;
+      const tailY = state.secondary ? chainValue(state.secondary.tail, "y", free) : state.tailY * free;
+      addLocalBend(point, base, layer.pivot, tailX * 3.1 * weight, 1);
+      addLocalStretch(point, base, layer.pivot, tailY * 0.52 * weight, 1);
     } else if (layer.role === "accessory") {
-      addLocalBend(point, base, layer.pivot, state.accessoryX * 2.2 * weight, free);
-      point.y += state.accessoryY * faceHeight * 0.55 * weight * free;
+      const accessoryX = state.secondary ? chainValue(state.secondary.accessory, "x", free) : state.accessoryX * free;
+      const accessoryY = state.secondary ? chainValue(state.secondary.accessory, "y", free) : state.accessoryY * free;
+      addLocalBend(point, base, layer.pivot, accessoryX * 2.7 * weight, 1);
+      point.y += accessoryY * faceHeight * 0.68 * weight;
     }
     if (layer.role === "frontHair") {
       const ahoge = ahogeFree(layer, base);
-      addLocalBend(point, base, layer.pivot, state.ahogeX * 4.8 * weight, ahoge);
-      point.y += state.ahogeY * faceHeight * 1.8 * weight * ahoge;
-      point.y += state.ahogeX * (u - 0.5) * faceHeight * 0.18 * weight * ahoge;
+      const ahogeX = state.secondary ? chainValue(state.secondary.ahoge, "x", ahoge) : state.ahogeX * ahoge;
+      const ahogeY = state.secondary ? chainValue(state.secondary.ahoge, "y", ahoge) : state.ahogeY * ahoge;
+      addLocalBend(point, base, layer.pivot, ahogeX * 5.2 * weight, 1);
+      point.y += ahogeY * faceHeight * 1.9 * weight;
+      point.y += ahogeX * (u - 0.5) * faceHeight * 0.2 * weight;
     }
   }
 
@@ -263,6 +323,7 @@ export const neutralMotionState: MotionState = {
   headPitch: 0,
   headRoll: 0,
   bodySway: 0,
+  bodyPitch: 0,
   bodyRoll: 0,
   gazeX: 0,
   gazeY: 0,

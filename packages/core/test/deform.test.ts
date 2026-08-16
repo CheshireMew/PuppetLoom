@@ -129,6 +129,33 @@ describe("secondary motion anchoring", () => {
     expect(deformPoint(project, front, front.pivot, state)).toEqual(front.pivot);
     expect(deformPoint(project, back, back.pivot, state)).toEqual(back.pivot);
   });
+
+  it("uses separate multi-stage motion for the left and right hair tips", () => {
+    const layer = secondaryLayer("frontHair");
+    const root = { x: layer.pivot.x, y: layer.bounds.y + layer.bounds.height * 0.38 };
+    const leftTip = { x: layer.bounds.x + layer.bounds.width * 0.15, y: layer.bounds.y + layer.bounds.height };
+    const rightTip = { x: layer.bounds.x + layer.bounds.width * 0.85, y: layer.bounds.y + layer.bounds.height };
+    const state = {
+      ...neutralMotionState,
+      secondary: {
+        frontHairLeft: { x: [0.004, 0.012, 0.024, 0.04], y: [0, 0.002, 0.004, 0.006] },
+        frontHairRight: { x: [-0.003, -0.009, -0.018, -0.03], y: [0, -0.001, -0.003, -0.005] },
+        backHairLeft: { x: [0, 0, 0, 0, 0], y: [0, 0, 0, 0, 0] },
+        backHairRight: { x: [0, 0, 0, 0, 0], y: [0, 0, 0, 0, 0] },
+        ahoge: { x: [0, 0, 0, 0, 0], y: [0, 0, 0, 0, 0] },
+        headwear: { x: [0, 0, 0], y: [0, 0, 0] },
+        topCloth: { x: [0, 0, 0], y: [0, 0, 0] },
+        skirt: { x: [0, 0, 0, 0], y: [0, 0, 0, 0] },
+        tail: { x: [0, 0, 0, 0, 0], y: [0, 0, 0, 0, 0] },
+        accessory: { x: [0, 0, 0, 0], y: [0, 0, 0, 0] }
+      }
+    };
+    const movedLeft = deformPoint(project, layer, leftTip, state);
+    const movedRight = deformPoint(project, layer, rightTip, state);
+    expect(deformPoint(project, layer, root, state)).toEqual(root);
+    expect(Math.sign(movedLeft.x - leftTip.x)).toBe(-Math.sign(movedRight.x - rightTip.x));
+    expect(movement(leftTip, movedLeft)).toBeGreaterThan(movement(root, deformPoint(project, layer, root, state)) + 0.003);
+  });
 });
 
 describe("connected head and upper-body motion", () => {

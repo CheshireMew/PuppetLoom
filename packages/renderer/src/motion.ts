@@ -1,5 +1,6 @@
 import type { MotionState, PuppetLoomProject } from "@puppetloom/core/browser";
 import type { PointerLookTarget } from "./pointer.js";
+import { SegmentedSpringChain } from "./secondary-motion.js";
 
 interface MotionEvent {
   start: number;
@@ -9,13 +10,6 @@ interface MotionEvent {
   yaw: number;
   pitch: number;
   roll: number;
-}
-
-interface SpringState {
-  x: number;
-  y: number;
-  velocityX: number;
-  velocityY: number;
 }
 
 interface TrackingAxis {
@@ -78,23 +72,6 @@ function makeEvents(seed: number, seconds = 900): MotionEvent[] {
     index += 1;
   }
   return events;
-}
-
-function advanceSpring(
-  spring: SpringState,
-  inputVelocityX: number,
-  inputVelocityY: number,
-  delta: number,
-  stiffness: number,
-  damping: number,
-  coupling: number
-): void {
-  const accelerationX = -stiffness * spring.x - damping * spring.velocityX - inputVelocityX * coupling;
-  const accelerationY = -stiffness * spring.y - damping * spring.velocityY - inputVelocityY * coupling;
-  spring.velocityX += accelerationX * delta;
-  spring.velocityY += accelerationY * delta;
-  spring.x += spring.velocityX * delta;
-  spring.y += spring.velocityY * delta;
 }
 
 function advanceTracking(axis: TrackingAxis, target: number, delta: number, response: number, stability: number): void {
@@ -190,17 +167,21 @@ export class CalmMotionController {
   private readonly trackedPitch: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedBody: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedBodyPitch: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedBodyRoll: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedLookX: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedLookY: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedLookStrength: TrackingAxis = { value: 0, velocity: 0 };
-  private readonly frontHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly ahoge: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly backHair: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly headwear: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly cloth: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly tail: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
-  private readonly accessory: SpringState = { x: 0, y: 0, velocityX: 0, velocityY: 0 };
+  private readonly frontHairLeft = new SegmentedSpringChain({ segments: 4, stiffness: 31, damping: 10.2, propagation: 1.08, maxDisplacement: 0.075 });
+  private readonly frontHairRight = new SegmentedSpringChain({ segments: 4, stiffness: 28, damping: 9.4, propagation: 1.1, maxDisplacement: 0.075 });
+  private readonly backHairLeft = new SegmentedSpringChain({ segments: 5, stiffness: 17, damping: 6.7, propagation: 1.1, maxDisplacement: 0.105 });
+  private readonly backHairRight = new SegmentedSpringChain({ segments: 5, stiffness: 15.5, damping: 6.1, propagation: 1.12, maxDisplacement: 0.105 });
+  private readonly ahoge = new SegmentedSpringChain({ segments: 5, stiffness: 12, damping: 4.8, propagation: 1.14, maxDisplacement: 0.13 });
+  private readonly headwear = new SegmentedSpringChain({ segments: 3, stiffness: 36, damping: 11.4, propagation: 1.04, maxDisplacement: 0.045 });
+  private readonly topCloth = new SegmentedSpringChain({ segments: 3, stiffness: 24, damping: 8.6, propagation: 1.06, maxDisplacement: 0.055 });
+  private readonly skirt = new SegmentedSpringChain({ segments: 4, stiffness: 13, damping: 5.8, propagation: 1.11, maxDisplacement: 0.085 });
+  private readonly tail = new SegmentedSpringChain({ segments: 5, stiffness: 8.5, damping: 4.1, propagation: 1.13, maxDisplacement: 0.11 });
+  private readonly accessory = new SegmentedSpringChain({ segments: 4, stiffness: 11, damping: 4.9, propagation: 1.1, maxDisplacement: 0.09 });
 
   constructor(project: PuppetLoomProject) {
     this.project = project;
@@ -213,16 +194,11 @@ export class CalmMotionController {
     this.previousPitch = 0;
     this.previousRoll = 0;
     this.previousBody = 0;
-    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyRoll, this.trackedLookX, this.trackedLookY, this.trackedLookStrength]) {
+    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyPitch, this.trackedBodyRoll, this.trackedLookX, this.trackedLookY, this.trackedLookStrength]) {
       axis.value = 0;
       axis.velocity = 0;
     }
-    for (const spring of [this.frontHair, this.ahoge, this.backHair, this.headwear, this.cloth, this.tail, this.accessory]) {
-      spring.x = 0;
-      spring.y = 0;
-      spring.velocityX = 0;
-      spring.velocityY = 0;
-    }
+    for (const chain of [this.frontHairLeft, this.frontHairRight, this.backHairLeft, this.backHairRight, this.ahoge, this.headwear, this.topCloth, this.skirt, this.tail, this.accessory]) chain.reset();
   }
 
   sample(timeSeconds: number, options: MotionSampleOptions = {}): MotionState {
@@ -265,6 +241,7 @@ export class CalmMotionController {
     const gazeY = gazeTargetY - pitch * 0.42;
 
     advanceTracking(this.trackedBody, yaw * 0.5, delta, 0, Math.min(1, tuning.stability + 0.35));
+    advanceTracking(this.trackedBodyPitch, pitch * 0.38, delta, 0, Math.min(1, tuning.stability + 0.4));
     advanceTracking(this.trackedBodyRoll, roll * 0.4 + yaw * 0.12, delta, 0, Math.min(1, tuning.stability + 0.35));
 
     const headVelocity = Math.max(-2.5, Math.min(2.5, (yaw - this.previousHead) / delta));
@@ -287,13 +264,49 @@ export class CalmMotionController {
     const clothWind = Math.sin(timeSeconds * 0.36 + phase * 1.09) * 0.19;
     const tailWind = Math.sin(timeSeconds * 0.27 + phase * 1.87) * 0.14 + Math.sin(timeSeconds * 0.62 + phase * 0.52) * 0.05;
     const accessoryWind = Math.sin(timeSeconds * 0.66 + phase * 1.31) * 0.09;
-    advanceSpring(this.frontHair, lateralVelocity * 0.58 + frontHairWind, pitchVelocity * 0.26 + frontHairLift, delta, 25, 8.7, 0.42);
-    advanceSpring(this.ahoge, lateralVelocity * 0.2 + ahogeWind, pitchVelocity * 0.08 + frontHairLift * 0.12 + ahogePerk, delta, 10, 4.7, 0.68);
-    advanceSpring(this.backHair, lateralVelocity * 0.88 + backHairWind, pitchVelocity * 0.68 + backHairLift, delta, 14, 6.1, 0.56);
-    advanceSpring(this.headwear, lateralVelocity * 0.25 + rollVelocity * 0.38 + headwearWobble, pitchVelocity * 0.12, delta, 30, 10.8, 0.22);
-    advanceSpring(this.cloth, bodyVelocity * 0.7 + clothWind, this.trackedBodyRoll.velocity * 0.16 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.07, delta, 12, 6.3, 0.48);
-    advanceSpring(this.tail, bodyVelocity * 0.52 + tailWind, this.trackedBodyRoll.velocity * 0.12 + Math.sin(timeSeconds * 0.34 + phase * 0.76) * 0.055, delta, 6.2, 4.2, 0.7);
-    advanceSpring(this.accessory, lateralVelocity * 0.46 + accessoryWind, pitchVelocity * 0.38 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.04, delta, 8.2, 4.5, 0.65);
+    const hairLateral = headVelocity * 0.6 + bodyVelocity * 0.4 + rollVelocity * 0.18;
+    const hairVertical = pitchVelocity * 0.6 + this.trackedBodyPitch.velocity * 0.4;
+    const frontTargetX = -hairLateral * 0.016 + frontHairWind * 0.022;
+    const frontTargetY = -hairVertical * 0.011 + frontHairLift * 0.017;
+    this.frontHairLeft.advance(frontTargetX + Math.sin(timeSeconds * 0.53 + phase * 1.91) * 0.0045, frontTargetY, delta);
+    this.frontHairRight.advance(frontTargetX + Math.sin(timeSeconds * 0.61 + phase * 0.31) * 0.004, frontTargetY * 0.92, delta);
+
+    const backTargetX = -hairLateral * 0.026 + backHairWind * 0.062;
+    const backTargetY = -hairVertical * 0.019 + backHairLift * 0.024;
+    this.backHairLeft.advance(backTargetX + Math.sin(timeSeconds * 0.33 + phase * 0.43) * 0.008, backTargetY, delta);
+    this.backHairRight.advance(backTargetX + Math.sin(timeSeconds * 0.41 + phase * 1.37) * 0.0075, backTargetY * 1.06, delta);
+
+    this.ahoge.advance(
+      -hairLateral * 0.014 + ahogeWind * 0.065,
+      -hairVertical * 0.008 + frontHairLift * 0.012 - ahogePerk * 0.052,
+      delta
+    );
+    this.headwear.advance(
+      -(headVelocity * 0.4 + bodyVelocity * 0.6 + rollVelocity * 0.28) * 0.01 + headwearWobble * 0.016,
+      -(pitchVelocity * 0.4 + this.trackedBodyPitch.velocity * 0.6) * 0.006,
+      delta
+    );
+    const bodyLateral = bodyVelocity + this.trackedBodyRoll.velocity * 0.35;
+    const bodyVertical = this.trackedBodyPitch.velocity;
+    this.topCloth.advance(-bodyLateral * 0.014 + clothWind * 0.022, -bodyVertical * 0.006, delta);
+    this.skirt.advance(-bodyLateral * 0.024 + clothWind * 0.052, -bodyVertical * 0.012 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.009, delta);
+    this.tail.advance(-bodyLateral * 0.034 + tailWind * 0.035, -bodyVertical * 0.016 + Math.sin(timeSeconds * 0.34 + phase * 0.76) * 0.009, delta);
+    this.accessory.advance(-hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta);
+
+    const secondary = {
+      frontHairLeft: this.frontHairLeft.sample(),
+      frontHairRight: this.frontHairRight.sample(),
+      backHairLeft: this.backHairLeft.sample(),
+      backHairRight: this.backHairRight.sample(),
+      ahoge: this.ahoge.sample(),
+      headwear: this.headwear.sample(),
+      topCloth: this.topCloth.sample(),
+      skirt: this.skirt.sample(),
+      tail: this.tail.sample(),
+      accessory: this.accessory.sample()
+    };
+    const tip = (values: number[]): number => values.at(-1) ?? 0;
+    const pairTip = (left: number[], right: number[]): number => (tip(left) + tip(right)) * 0.5;
 
     const breathPeriod = 5.1 + ((this.project.runtime.seed % 17) / 17) * 0.7;
     const breath = Math.sin((timeSeconds / breathPeriod) * Math.PI * 2 - Math.PI * 0.5);
@@ -303,26 +316,28 @@ export class CalmMotionController {
       headPitch: pitch,
       headRoll: roll,
       bodySway: this.trackedBody.value,
+      bodyPitch: this.trackedBodyPitch.value,
       bodyRoll: this.trackedBodyRoll.value,
       gazeX: this.project.runtime.features.gaze ? gazeX : 0,
       gazeY: this.project.runtime.features.gaze ? gazeY : 0,
       breath,
-      hairX: this.project.runtime.features.hairPhysics ? this.frontHair.x : 0,
-      hairY: this.project.runtime.features.hairPhysics ? this.frontHair.y : 0,
-      ahogeX: this.project.runtime.features.hairPhysics ? this.ahoge.x : 0,
-      ahogeY: this.project.runtime.features.hairPhysics ? this.ahoge.y : 0,
-      backHairX: this.project.runtime.features.hairPhysics ? this.backHair.x : 0,
-      backHairY: this.project.runtime.features.hairPhysics ? this.backHair.y : 0,
-      headwearX: this.project.runtime.features.hairPhysics ? this.headwear.x : 0,
-      headwearY: this.project.runtime.features.hairPhysics ? this.headwear.y : 0,
+      hairX: this.project.runtime.features.hairPhysics ? pairTip(secondary.frontHairLeft.x, secondary.frontHairRight.x) : 0,
+      hairY: this.project.runtime.features.hairPhysics ? pairTip(secondary.frontHairLeft.y, secondary.frontHairRight.y) : 0,
+      ahogeX: this.project.runtime.features.hairPhysics ? tip(secondary.ahoge.x) : 0,
+      ahogeY: this.project.runtime.features.hairPhysics ? tip(secondary.ahoge.y) : 0,
+      backHairX: this.project.runtime.features.hairPhysics ? pairTip(secondary.backHairLeft.x, secondary.backHairRight.x) : 0,
+      backHairY: this.project.runtime.features.hairPhysics ? pairTip(secondary.backHairLeft.y, secondary.backHairRight.y) : 0,
+      headwearX: this.project.runtime.features.hairPhysics ? tip(secondary.headwear.x) : 0,
+      headwearY: this.project.runtime.features.hairPhysics ? tip(secondary.headwear.y) : 0,
       earX: this.project.runtime.features.hairPhysics ? earTwitch.x : 0,
       earY: this.project.runtime.features.hairPhysics ? earTwitch.y : 0,
-      clothX: this.project.runtime.features.hairPhysics ? this.cloth.x : 0,
-      clothY: this.project.runtime.features.hairPhysics ? this.cloth.y : 0,
-      tailX: this.project.runtime.features.hairPhysics ? this.tail.x : 0,
-      tailY: this.project.runtime.features.hairPhysics ? this.tail.y : 0,
-      accessoryX: this.project.runtime.features.hairPhysics ? this.accessory.x : 0,
-      accessoryY: this.project.runtime.features.hairPhysics ? this.accessory.y : 0,
+      clothX: this.project.runtime.features.hairPhysics ? tip(secondary.skirt.x) : 0,
+      clothY: this.project.runtime.features.hairPhysics ? tip(secondary.skirt.y) : 0,
+      tailX: this.project.runtime.features.hairPhysics ? tip(secondary.tail.x) : 0,
+      tailY: this.project.runtime.features.hairPhysics ? tip(secondary.tail.y) : 0,
+      accessoryX: this.project.runtime.features.hairPhysics ? tip(secondary.accessory.x) : 0,
+      accessoryY: this.project.runtime.features.hairPhysics ? tip(secondary.accessory.y) : 0,
+      ...(this.project.runtime.features.hairPhysics ? { secondary } : {}),
       blink: this.project.runtime.features.blink ? blinkValue(timeSeconds, this.project.runtime.seed) : 0,
       mouthOpen: this.project.runtime.features.mouthMotion ? mouthValue(timeSeconds, this.project.runtime.seed) : 0
     };

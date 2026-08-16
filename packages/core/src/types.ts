@@ -372,6 +372,7 @@ export interface MotionState {
   headPitch: number;
   headRoll: number;
   bodySway: number;
+  bodyPitch: number;
   bodyRoll: number;
   gazeX: number;
   gazeY: number;
@@ -392,6 +393,25 @@ export interface MotionState {
   tailY: number;
   accessoryX: number;
   accessoryY: number;
+  secondary?: SecondaryMotionState;
   blink: number;
   mouthOpen: number;
+}
+
+export interface MotionChainState {
+  x: number[];
+  y: number[];
+}
+
+export interface SecondaryMotionState {
+  frontHairLeft: MotionChainState;
+  frontHairRight: MotionChainState;
+  backHairLeft: MotionChainState;
+  backHairRight: MotionChainState;
+  ahoge: MotionChainState;
+  headwear: MotionChainState;
+  topCloth: MotionChainState;
+  skirt: MotionChainState;
+  tail: MotionChainState;
+  accessory: MotionChainState;
 }

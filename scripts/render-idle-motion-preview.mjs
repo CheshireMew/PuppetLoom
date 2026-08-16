@@ -96,6 +96,7 @@ try {
       headPitch: 0,
       headRoll: 0,
       bodySway: 0,
+      bodyPitch: 0,
       bodyRoll: 0,
       gazeX: 0,
       gazeY: 0,
