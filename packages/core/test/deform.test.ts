@@ -41,13 +41,21 @@ function eyeLayer(role: SemanticRole): LayerBinding {
 }
 
 function secondaryLayer(role: SemanticRole, bounds = { x: 0.35, y: 0.15, width: 0.3, height: 0.35 }): LayerBinding {
-  return {
+  const layer: LayerBinding = {
     ...eyeLayer(role),
     bounds,
     pivot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.1 },
     mesh: makeGridMesh(bounds, 10, 10),
     weights: { head: 0, body: 0, gaze: 0, physics: 1 }
   };
+  if (role === "frontHair") {
+    layer.secondaryAnchors = {
+      ahogeRoot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.24 },
+      frontHairRoot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.54 }
+    };
+    layer.pivot = layer.secondaryAnchors.frontHairRoot;
+  }
+  return layer;
 }
 
 function movement(from: { x: number; y: number }, to: { x: number; y: number }): number {
@@ -74,9 +82,20 @@ describe("secondary motion anchoring", () => {
   it("pins the ahoge root while moving its tip independently from the bangs", () => {
     const layer = secondaryLayer("frontHair");
     const tip = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y };
-    const root = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y + layer.bounds.height * 0.38 };
+    const root = layer.secondaryAnchors!.ahogeRoot!;
     const state = { ...neutralMotionState, ahogeX: 0.05 };
     expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(movement(root, deformPoint(project, layer, root, state)) * 5);
+  });
+
+  it("keeps the scalp between the ahoge and bangs rigid while both free ends move", () => {
+    const layer = secondaryLayer("frontHair");
+    const scalp = { x: layer.pivot.x, y: layer.bounds.y + layer.bounds.height * 0.4 };
+    const bangTip = { x: layer.bounds.x + layer.bounds.width * 0.25, y: layer.bounds.y + layer.bounds.height };
+    const ahogeTip = { x: layer.pivot.x, y: layer.bounds.y };
+    const state = { ...neutralMotionState, hairX: 0.05, hairY: 0.03, ahogeX: -0.06, ahogeY: 0.04 };
+    expect(deformPoint(project, layer, scalp, state)).toEqual(scalp);
+    expect(movement(bangTip, deformPoint(project, layer, bangTip, state))).toBeGreaterThan(0.005);
+    expect(movement(ahogeTip, deformPoint(project, layer, ahogeTip, state))).toBeGreaterThan(0.005);
   });
 
   it("pins the skirt waist and moves only the lower hem", () => {
@@ -84,17 +103,21 @@ describe("secondary motion anchoring", () => {
     const waist = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y };
     const hem = { x: layer.bounds.x + layer.bounds.width * 0.5, y: layer.bounds.y + layer.bounds.height };
     const state = { ...neutralMotionState, clothX: 0.05 };
+    const movedHem = deformPoint(project, layer, hem, state);
     expect(movement(waist, deformPoint(project, layer, waist, state))).toBeLessThan(1e-8);
-    expect(movement(hem, deformPoint(project, layer, hem, state))).toBeGreaterThan(0.001);
+    expect(Math.abs(movedHem.x - hem.x)).toBeGreaterThan(0.02);
+    expect(Math.abs(movedHem.x - hem.x)).toBeGreaterThan(Math.abs(movedHem.y - hem.y) * 4);
   });
 
-  it("pins the tail root and gradually releases its far end", () => {
+  it("pins the tail root and moves its far end mainly up and down", () => {
     const layer = secondaryLayer("tail");
     const root = { x: layer.bounds.x + layer.bounds.width * 0.03, y: layer.bounds.y + layer.bounds.height * 0.08 };
     const tip = { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y + layer.bounds.height * 0.55 };
-    const state = { ...neutralMotionState, tailX: 0.05 };
+    const state = { ...neutralMotionState, tailY: 0.05 };
+    const movedTip = deformPoint(project, layer, tip, state);
     expect(movement(root, deformPoint(project, layer, root, state))).toBeLessThan(1e-8);
-    expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(0.001);
+    expect(Math.abs(movedTip.y - tip.y)).toBeGreaterThan(0.02);
+    expect(Math.abs(movedTip.y - tip.y)).toBeGreaterThan(Math.abs(movedTip.x - tip.x) * 4);
   });
 
   it("pins merged ears at two face-side hinges and flaps both tips vertically", () => {
@@ -132,7 +155,7 @@ describe("secondary motion anchoring", () => {
 
   it("uses separate multi-stage motion for the left and right hair tips", () => {
     const layer = secondaryLayer("frontHair");
-    const root = { x: layer.pivot.x, y: layer.bounds.y + layer.bounds.height * 0.38 };
+    const root = layer.secondaryAnchors!.frontHairRoot!;
     const leftTip = { x: layer.bounds.x + layer.bounds.width * 0.15, y: layer.bounds.y + layer.bounds.height };
     const rightTip = { x: layer.bounds.x + layer.bounds.width * 0.85, y: layer.bounds.y + layer.bounds.height };
     const state = {

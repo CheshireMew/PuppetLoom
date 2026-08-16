@@ -23,26 +23,43 @@ const layers = [];
 for (const layer of project.layers.filter((candidate) => inspectedRoles.has(candidate.role) && candidate.weights.physics > 0)) {
   const neutral = deformedPoints(project, layer, neutralMotionState);
   const pointMaxima = neutral.map(() => 0);
+  const pointMaximaX = neutral.map(() => 0);
+  const pointMaximaY = neutral.map(() => 0);
   for (const state of states) {
-    const secondaryState = { ...neutralMotionState };
+    const secondaryState = { ...neutralMotionState, secondary: state.secondary };
     for (const key of secondaryKeys) secondaryState[key] = state[key] ?? 0;
     const current = deformedPoints(project, layer, secondaryState);
     for (let index = 0; index < neutral.length; index += 1) {
       const from = neutral[index];
       const to = current[index];
       if (!from || !to) continue;
-      const pixels = Math.hypot((to.x - from.x) * project.canvas.width, (to.y - from.y) * project.canvas.height);
+      const xPixels = Math.abs((to.x - from.x) * project.canvas.width);
+      const yPixels = Math.abs((to.y - from.y) * project.canvas.height);
+      const pixels = Math.hypot(xPixels, yPixels);
       pointMaxima[index] = Math.max(pointMaxima[index] ?? 0, pixels);
+      pointMaximaX[index] = Math.max(pointMaximaX[index] ?? 0, xPixels);
+      pointMaximaY[index] = Math.max(pointMaximaY[index] ?? 0, yPixels);
     }
   }
   const sorted = [...pointMaxima].sort((left, right) => left - right);
+  const crownIndices = layer.role === "frontHair" && layer.secondaryAnchors?.ahogeRoot && layer.secondaryAnchors?.frontHairRoot
+    ? layer.mesh.points
+      .map((point, index) => ({ point, index }))
+      .filter(({ point }) => point.y >= layer.secondaryAnchors.ahogeRoot.y && point.y <= layer.secondaryAnchors.frontHairRoot.y)
+      .map(({ index }) => index)
+    : [];
   layers.push({
     id: layer.id,
     role: layer.role,
     mesh: `${layer.mesh.cols}x${layer.mesh.rows}`,
     physicsWeight: layer.weights.physics,
     anchorP20Pixels: Number((sorted[Math.floor((sorted.length - 1) * 0.2)] ?? 0).toFixed(3)),
-    maximumPixels: Number((sorted.at(-1) ?? 0).toFixed(3))
+    maximumPixels: Number((sorted.at(-1) ?? 0).toFixed(3)),
+    maximumXPixels: Number(Math.max(...pointMaximaX).toFixed(3)),
+    maximumYPixels: Number(Math.max(...pointMaximaY).toFixed(3)),
+    ...(crownIndices.length > 0 ? {
+      protectedCrownMaximumPixels: Number(Math.max(...crownIndices.map((index) => pointMaxima[index] ?? 0)).toFixed(3))
+    } : {})
   });
 }
 

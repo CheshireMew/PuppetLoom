@@ -64,6 +64,8 @@ export interface LayerWeights {
 export interface LayerSecondaryAnchors {
   earHingeLeft?: Point;
   earHingeRight?: Point;
+  frontHairRoot?: Point;
+  ahogeRoot?: Point;
 }
 
 export interface LayerBinding {

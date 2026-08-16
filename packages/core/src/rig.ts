@@ -45,7 +45,7 @@ function meshDensity(layer: ImportedLayer): { rows: number; cols: number } {
   if (fineRoles.has(layer.role)) return { rows: 4, cols: 4 };
   const cols = Math.max(4, Math.min(14, Math.ceil(layer.bounds.width / 72) + 2));
   const rows = Math.max(4, Math.min(14, Math.ceil(layer.bounds.height / 72) + 2));
-  if (layer.role === "frontHair") return { rows: Math.max(rows, 12), cols: Math.max(cols, 10) };
+  if (layer.role === "frontHair") return { rows: Math.max(rows, 18), cols: Math.max(cols, 12) };
   if (layer.role === "backHair" || layer.role === "sideHair") return { rows: Math.max(rows, 10), cols: Math.max(cols, 10) };
   if (layer.role === "headwear") return { rows: Math.max(rows, 8), cols: Math.max(cols, 10) };
   if (layer.role === "tail" || layer.role === "bottomWear") return { rows: Math.max(rows, 10), cols: Math.max(cols, 10) };
@@ -77,12 +77,12 @@ export function makeGridMesh(bounds: Rect, rows: number, cols: number): MeshBind
   return { rows, cols, points, uvs, triangles };
 }
 
-function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], anchors: AnchorGraph): Point {
+function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], anchors: AnchorGraph, secondaryAnchors?: LayerSecondaryAnchors): Point {
   if (eyeSocketRoles.has(role) && side !== "center") {
     const eye = side === "left" ? anchors.eyeLeft : anchors.eyeRight;
     if (eye) return roundPoint(eye);
   }
-  if (role === "frontHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.38 });
+  if (role === "frontHair") return secondaryAnchors?.frontHairRoot ?? roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.52 });
   if (role === "backHair" || role === "sideHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.15 });
   if (role === "ear") {
     const x = side === "left" ? bounds.x : side === "right" ? bounds.x + bounds.width : bounds.x + bounds.width * 0.5;
@@ -111,7 +111,46 @@ function countOpaqueWingPixels(layer: ImportedLayer, hingeX: number, hingeY: num
   return count;
 }
 
+function frontHairAnchorsFor(layer: ImportedLayer, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors {
+  const { width, height, data } = layer.pixels;
+  const rows = Array.from({ length: height }, (_, y) => {
+    let opaque = 0;
+    let minimumX = width;
+    let maximumX = -1;
+    let runs = 0;
+    let previousOpaque = false;
+    for (let x = 0; x < width; x += 1) {
+      const currentOpaque = (data[(y * width + x) * 4 + 3] ?? 0) > 8;
+      if (currentOpaque) {
+        opaque += 1;
+        minimumX = Math.min(minimumX, x);
+        maximumX = Math.max(maximumX, x);
+        if (!previousOpaque) runs += 1;
+      }
+      previousOpaque = currentOpaque;
+    }
+    const span = maximumX >= minimumX ? maximumX - minimumX + 1 : 0;
+    return {
+      y,
+      runs,
+      spanRatio: span / Math.max(1, width),
+      fillRatio: span > 0 ? opaque / span : 0
+    };
+  });
+  const crown = rows.find((row) => row.spanRatio >= 0.35 && row.fillRatio >= 0.8);
+  const crownY = crown?.y ?? Math.round(height * 0.24);
+  const bangSearchY = crownY + Math.round(height * 0.18);
+  const bang = rows.find((row) => row.y >= bangSearchY && row.spanRatio >= 0.65 && (row.runs >= 3 || row.fillRatio <= 0.96));
+  const bangY = Math.max(crownY + Math.round(height * 0.18), Math.min(Math.round(height * 0.72), bang?.y ?? Math.round(height * 0.54)));
+  const centerX = (layer.bounds.x + layer.bounds.width * 0.5) / canvas.width;
+  return {
+    ahogeRoot: roundPoint({ x: centerX, y: (layer.bounds.y + crownY) / canvas.height }),
+    frontHairRoot: roundPoint({ x: centerX, y: (layer.bounds.y + bangY) / canvas.height })
+  };
+}
+
 function secondaryAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | undefined, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors | undefined {
+  if (layer.role === "frontHair") return frontHairAnchorsFor(layer, canvas);
   if (layer.role !== "headwear" || !faceLayer) return undefined;
   const hingeLeftX = faceLayer.bounds.x + faceLayer.bounds.width * 0.03;
   const hingeRightX = faceLayer.bounds.x + faceLayer.bounds.width * 0.97;
@@ -286,7 +325,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       blendMode: layer.blendMode,
       bounds,
       texture: `textures/${layer.id}.png`,
-      pivot: pivotFor(layer.role, bounds, layer.side, anchors),
+      pivot: pivotFor(layer.role, bounds, layer.side, anchors, secondaryAnchors),
       ...(secondaryAnchors ? { secondaryAnchors } : {}),
       mesh: makeGridMesh(bounds, density.rows, density.cols),
       weights,

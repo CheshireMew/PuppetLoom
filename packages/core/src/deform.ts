@@ -85,7 +85,12 @@ function bodyMotionInfluence(layer: LayerBinding, base: Point): number {
 function secondaryFree(layer: LayerBinding, base: Point): number {
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-  if (layer.role === "frontHair") return smoothstep01((v - 0.36) / 0.64) ** 2;
+  if (layer.role === "frontHair") {
+    const rootV = layer.secondaryAnchors?.frontHairRoot
+      ? clamp((layer.secondaryAnchors.frontHairRoot.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0.35, 0.78)
+      : 0.54;
+    return smoothstep01((v - rootV) / Math.max(0.08, 1 - rootV)) ** 1.35;
+  }
   if (layer.role === "headwear") {
     const hinge = base.x < layer.bounds.x + layer.bounds.width * 0.5
       ? layer.secondaryAnchors?.earHingeLeft
@@ -147,8 +152,11 @@ function ahogeFree(layer: LayerBinding, base: Point): number {
   if (layer.role !== "frontHair") return 0;
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-  const center = 1 - smoothstep01((Math.abs(u - 0.5) - 0.1) / 0.27);
-  const aboveRoot = smoothstep01((0.38 - v) / 0.34);
+  const root = layer.secondaryAnchors?.ahogeRoot;
+  const rootU = root ? clamp((root.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1) : 0.5;
+  const rootV = root ? clamp((root.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0.12, 0.42) : 0.24;
+  const center = 1 - smoothstep01((Math.abs(u - rootU) - 0.045) / 0.24);
+  const aboveRoot = smoothstep01((rootV - v) / Math.max(0.08, rootV));
   return center * aboveRoot;
 }
 
@@ -283,7 +291,7 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
       const hinge = earHingeFor(layer, base);
       if (hinge) addLocalBend(point, base, hinge.pivot, (state.earY * hinge.mirror * 20 + state.earX * 6) * weight, free);
     } else if (layer.role === "topWear" || layer.role === "bottomWear") {
-      const clothScale = layer.role === "bottomWear" ? 3.4 : 2.1;
+      const clothScale = layer.role === "bottomWear" ? 5.2 : 2.1;
       const clothChain = layer.role === "bottomWear" ? state.secondary?.skirt : state.secondary?.topCloth;
       const clothX = clothChain ? chainValue(clothChain, "x", free) : state.clothX * free;
       const clothY = clothChain ? chainValue(clothChain, "y", free) : state.clothY * free;
@@ -293,8 +301,9 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     } else if (layer.role === "tail") {
       const tailX = state.secondary ? chainValue(state.secondary.tail, "x", free) : state.tailX * free;
       const tailY = state.secondary ? chainValue(state.secondary.tail, "y", free) : state.tailY * free;
-      addLocalBend(point, base, layer.pivot, tailX * 3.1 * weight, 1);
-      addLocalStretch(point, base, layer.pivot, tailY * 0.52 * weight, 1);
+      addLocalBend(point, base, layer.pivot, tailX * 2.4 * weight, 1);
+      addLocalStretch(point, base, layer.pivot, tailY * 0.12 * weight, 1);
+      point.y += tailY * layer.bounds.height * 2.6 * weight * free;
     } else if (layer.role === "accessory") {
       const accessoryX = state.secondary ? chainValue(state.secondary.accessory, "x", free) : state.accessoryX * free;
       const accessoryY = state.secondary ? chainValue(state.secondary.accessory, "y", free) : state.accessoryY * free;
@@ -305,7 +314,8 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
       const ahoge = ahogeFree(layer, base);
       const ahogeX = state.secondary ? chainValue(state.secondary.ahoge, "x", ahoge) : state.ahogeX * ahoge;
       const ahogeY = state.secondary ? chainValue(state.secondary.ahoge, "y", ahoge) : state.ahogeY * ahoge;
-      addLocalBend(point, base, layer.pivot, ahogeX * 5.2 * weight, 1);
+      const ahogePivot = layer.secondaryAnchors?.ahogeRoot ?? layer.pivot;
+      addLocalBend(point, base, ahogePivot, ahogeX * 5.2 * weight, 1);
       point.y += ahogeY * faceHeight * 1.9 * weight;
       point.y += ahogeX * (u - 0.5) * faceHeight * 0.2 * weight;
     }

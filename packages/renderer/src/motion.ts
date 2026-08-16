@@ -289,8 +289,9 @@ export class CalmMotionController {
     const bodyLateral = bodyVelocity + this.trackedBodyRoll.velocity * 0.35;
     const bodyVertical = this.trackedBodyPitch.velocity;
     this.topCloth.advance(-bodyLateral * 0.014 + clothWind * 0.022, -bodyVertical * 0.006, delta);
-    this.skirt.advance(-bodyLateral * 0.024 + clothWind * 0.052, -bodyVertical * 0.012 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.009, delta);
-    this.tail.advance(-bodyLateral * 0.034 + tailWind * 0.035, -bodyVertical * 0.016 + Math.sin(timeSeconds * 0.34 + phase * 0.76) * 0.009, delta);
+    this.skirt.advance(-bodyLateral * 0.032 + clothWind * 0.095, -bodyVertical * 0.008 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.005, delta);
+    const tailLift = Math.sin(timeSeconds * 0.52 + phase * 0.76) * 0.042 + Math.sin(timeSeconds * 0.21 + phase * 1.32) * 0.018;
+    this.tail.advance(-bodyLateral * 0.018 + tailWind * 0.018, -bodyVertical * 0.018 + tailLift, delta);
     this.accessory.advance(-hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta);
 
     const secondary = {

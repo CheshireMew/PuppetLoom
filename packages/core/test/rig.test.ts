@@ -21,6 +21,27 @@ function importedLayer(id: string, role: SemanticRole, side: Side, x: number, y:
   };
 }
 
+function frontHairLayer(): ImportedLayer {
+  const layer = importedLayer("front", "frontHair", "center", 400, 40, 200, 300);
+  layer.pixels.data.fill(0);
+  let opaquePixels = 0;
+  for (let y = 0; y < layer.pixels.height; y += 1) {
+    const ranges = y < 60
+      ? [[92, 108]]
+      : y < 160
+        ? [[28, 172]]
+        : [[12, 60], [76, 124], [140, 188]];
+    for (const [start, end] of ranges) {
+      for (let x = start ?? 0; x < (end ?? 0); x += 1) {
+        layer.pixels.data[(y * layer.pixels.width + x) * 4 + 3] = 255;
+        opaquePixels += 1;
+      }
+    }
+  }
+  layer.opaquePixels = opaquePixels;
+  return layer;
+}
+
 describe("rig attachment pivots", () => {
   it("uses one eye-socket pivot for white, iris, lashes, and closed artwork", () => {
     const imported: ImportedPsd = {
@@ -55,7 +76,7 @@ describe("rig attachment pivots", () => {
       canvas: { width: 1000, height: 1000 },
       warnings: [],
       layers: [
-        importedLayer("front", "frontHair", "center", 400, 40, 200, 300),
+        frontHairLayer(),
         importedLayer("top", "topWear", "center", 400, 500, 200, 220),
         importedLayer("skirt", "bottomWear", "center", 340, 650, 320, 300)
       ]
@@ -66,7 +87,14 @@ describe("rig attachment pivots", () => {
       seed: 42,
       source: { originalFileName: "fixture.psd", psdSha256: "fixture", psdPath: "source/source.psd" }
     });
-    expect(project.layers.find((layer) => layer.role === "frontHair")?.pivot.y).toBeCloseTo(0.154, 6);
+    const frontHair = project.layers.find((layer) => layer.role === "frontHair");
+    expect(frontHair?.secondaryAnchors).toEqual({
+      ahogeRoot: { x: 0.5, y: 0.1 },
+      frontHairRoot: { x: 0.5, y: 0.2 }
+    });
+    expect(frontHair?.pivot).toEqual(frontHair?.secondaryAnchors?.frontHairRoot);
+    expect(frontHair?.mesh.rows).toBeGreaterThanOrEqual(18);
+    expect(frontHair?.mesh.cols).toBeGreaterThanOrEqual(12);
     expect(project.layers.find((layer) => layer.role === "topWear")?.pivot.y).toBeCloseTo(0.5396, 6);
     expect(project.layers.find((layer) => layer.role === "bottomWear")?.pivot.y).toBeCloseTo(0.686, 6);
   });

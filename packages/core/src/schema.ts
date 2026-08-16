@@ -74,7 +74,12 @@ export const puppetLoomProjectSchema = z.object({
       bounds: rectSchema,
       texture: z.string().min(1),
       pivot: pointSchema,
-      secondaryAnchors: z.object({ earHingeLeft: pointSchema.optional(), earHingeRight: pointSchema.optional() }).optional(),
+      secondaryAnchors: z.object({
+        earHingeLeft: pointSchema.optional(),
+        earHingeRight: pointSchema.optional(),
+        frontHairRoot: pointSchema.optional(),
+        ahogeRoot: pointSchema.optional()
+      }).optional(),
       mesh: meshSchema,
       weights: z.object({ head: z.number(), body: z.number(), gaze: z.number(), physics: z.number() }),
       clipLayerId: z.string().optional(),
