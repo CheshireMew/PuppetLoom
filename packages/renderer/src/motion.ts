@@ -179,8 +179,8 @@ export class CalmMotionController {
   private readonly ahoge = new SegmentedSpringChain({ segments: 5, stiffness: 12, damping: 4.8, propagation: 1.14, maxDisplacement: 0.13 });
   private readonly headwear = new SegmentedSpringChain({ segments: 3, stiffness: 36, damping: 11.4, propagation: 1.04, maxDisplacement: 0.045 });
   private readonly topCloth = new SegmentedSpringChain({ segments: 3, stiffness: 24, damping: 8.6, propagation: 1.06, maxDisplacement: 0.055 });
-  private readonly skirt = new SegmentedSpringChain({ segments: 4, stiffness: 13, damping: 5.8, propagation: 1.11, maxDisplacement: 0.085 });
-  private readonly tail = new SegmentedSpringChain({ segments: 5, stiffness: 8.5, damping: 4.1, propagation: 1.13, maxDisplacement: 0.11 });
+  private readonly skirt = new SegmentedSpringChain({ segments: 4, stiffness: 18, damping: 7, propagation: 1.09, maxDisplacement: 0.09 });
+  private readonly tail = new SegmentedSpringChain({ segments: 5, stiffness: 18, damping: 6.8, propagation: 1.09, maxDisplacement: 0.11 });
   private readonly accessory = new SegmentedSpringChain({ segments: 4, stiffness: 11, damping: 4.9, propagation: 1.1, maxDisplacement: 0.09 });
 
   constructor(project: PuppetLoomProject) {
@@ -289,9 +289,10 @@ export class CalmMotionController {
     const bodyLateral = bodyVelocity + this.trackedBodyRoll.velocity * 0.35;
     const bodyVertical = this.trackedBodyPitch.velocity;
     this.topCloth.advance(-bodyLateral * 0.014 + clothWind * 0.022, -bodyVertical * 0.006, delta);
-    this.skirt.advance(-bodyLateral * 0.032 + clothWind * 0.095, -bodyVertical * 0.008 + Math.sin(timeSeconds * 0.41 + phase * 0.47) * 0.005, delta);
-    const tailLift = Math.sin(timeSeconds * 0.52 + phase * 0.76) * 0.042 + Math.sin(timeSeconds * 0.21 + phase * 1.32) * 0.018;
-    this.tail.advance(-bodyLateral * 0.018 + tailWind * 0.018, -bodyVertical * 0.018 + tailLift, delta);
+    const skirtSway = Math.sin(timeSeconds * 0.82 + phase * 0.74) * 0.25 + Math.sin(timeSeconds * 1.37 + phase * 0.29) * 0.07;
+    this.skirt.advance(-bodyLateral * 0.028 + skirtSway * 0.12, -bodyVertical * 0.006, delta);
+    const tailSwing = Math.sin(timeSeconds * 1.18 + phase * 0.76) * 0.052 + Math.sin(timeSeconds * 0.52 + phase * 1.32) * 0.012;
+    this.tail.advance(-bodyLateral * 0.008 + tailWind * 0.006, -bodyVertical * 0.012 + tailSwing, delta);
     this.accessory.advance(-hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta);
 
     const secondary = {

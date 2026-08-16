@@ -90,6 +90,18 @@ describe("coherent semantic pose field", () => {
     expect(widthAfter(nearEye)).toBeGreaterThan(widthAfter(farEye));
   });
 
+  it("foreshortens the screen-right eye during an extreme left turn", () => {
+    const screenRight = layer("eyelash", "left");
+    const screenLeft = layer("eyelash", "right");
+    const widthAfter = (target: LayerBinding) => {
+      const left = { x: 0.4, y: target.pivot.y };
+      const right = { x: 0.6, y: target.pivot.y };
+      return applyCoherentPoseField(field, target, right, -0.85, 0).x - applyCoherentPoseField(field, target, left, -0.85, 0).x;
+    };
+    expect(widthAfter(screenRight)).toBeLessThan(0.2 * 0.82);
+    expect(widthAfter(screenRight)).toBeLessThan(widthAfter(screenLeft) * 0.82);
+  });
+
   it("bends the hair contour on the skull surface instead of translating it rigidly", () => {
     const hair = layer("frontHair");
     const left = { x: 0.36, y: 0.22 };

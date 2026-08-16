@@ -117,7 +117,11 @@ describe("secondary motion anchoring", () => {
     const movedTip = deformPoint(project, layer, tip, state);
     expect(movement(root, deformPoint(project, layer, root, state))).toBeLessThan(1e-8);
     expect(Math.abs(movedTip.y - tip.y)).toBeGreaterThan(0.02);
-    expect(Math.abs(movedTip.y - tip.y)).toBeGreaterThan(Math.abs(movedTip.x - tip.x) * 4);
+    expect(Math.abs(movedTip.x - tip.x)).toBeGreaterThan(0.01);
+    expect(Math.hypot(movedTip.x - layer.pivot.x, movedTip.y - layer.pivot.y)).toBeCloseTo(
+      Math.hypot(tip.x - layer.pivot.x, tip.y - layer.pivot.y),
+      8
+    );
   });
 
   it("pins merged ears at two face-side hinges and flaps both tips vertically", () => {

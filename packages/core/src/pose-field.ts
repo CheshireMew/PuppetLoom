@@ -4,6 +4,11 @@ import type { CoherentPoseField, LayerBinding, Point, SemanticCagePointId, Seman
 const skullRoles = new Set<SemanticRole>(["frontHair", "backHair", "sideHair", "headwear", "ear"]);
 const eyeSocketRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClosed"]);
 
+function smoothstep01(value: number): number {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 function roleDepth(role: SemanticRole): number {
   if (role === "nose") return 0.22;
   if (role === "mouth") return 0.08;
@@ -193,6 +198,41 @@ function cageBlendFor(role: SemanticRole): number {
   return 0;
 }
 
+function frontHairFaceCoupling(cage: SemanticControlCage, base: Point): number {
+  const forehead = cage.points.forehead.position;
+  const eyeY = (cage.points.eyeLeft.position.y + cage.points.eyeRight.position.y) * 0.5;
+  const faceLeft = cage.points.faceLeft.position.x;
+  const faceRight = cage.points.faceRight.position.x;
+  const centerX = (faceLeft + faceRight) * 0.5;
+  const halfWidth = Math.max(1e-6, (faceRight - faceLeft) * 0.5);
+  const side = Math.abs(base.x - centerX) / halfWidth;
+  const vertical = smoothstep01((base.y - (forehead.y + (eyeY - forehead.y) * 0.16)) / Math.max(1e-6, (eyeY - forehead.y) * 0.84));
+  const faceFramingSide = smoothstep01((side - 0.2) / 0.62);
+  return vertical * faceFramingSide;
+}
+
+function frontHairAttachmentDisplacement(
+  field: CoherentPoseField,
+  cage: SemanticControlCage,
+  layer: LayerBinding,
+  base: Point,
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number
+): Point {
+  const centerX = (cage.points.faceLeft.position.x + cage.points.faceRight.position.x) * 0.5;
+  const edge = base.x < centerX ? cage.points.faceLeft.position : cage.points.faceRight.position;
+  const anchor = { x: edge.x, y: base.y };
+  const faceLayer = { ...layer, role: "face" as const, side: "center" as const };
+  const surfaceTarget = projectSurface(field, faceLayer, anchor, yawAngle, pitchAngle);
+  const cageTarget = mappedBySemanticCage(field, cage, anchor, "face", yawAngle, pitchAngle, yaw);
+  const blend = cageBlendFor("face");
+  return {
+    x: surfaceTarget.x + (cageTarget.x - surfaceTarget.x) * blend - anchor.x,
+    y: surfaceTarget.y + (cageTarget.y - surfaceTarget.y) * blend - anchor.y
+  };
+}
+
 function projectSurface(field: CoherentPoseField, layer: LayerBinding, base: Point, yawAngle: number, pitchAngle: number): Point {
   const surface = surfaceFor(field, layer.role);
   const nx = (base.x - surface.center.x) / surface.radiusX;
@@ -231,10 +271,15 @@ function projectSurface(field: CoherentPoseField, layer: LayerBinding, base: Poi
 function applyEyePerspective(layer: LayerBinding, posed: Point, posedPivot: Point, yaw: number): Point {
   if (layer.side === "center" || (!eyeSocketRoles.has(layer.role) && layer.role !== "eyebrow")) return posed;
   const side = layer.side === "left" ? 1 : -1;
-  const strength = eyeSocketRoles.has(layer.role) ? 0.08 : 0.05;
-  const near = clamp(yaw, -1, 1) * side;
-  const scaleX = clamp(1 + near * strength, 0.88, 1.12);
-  const scaleY = clamp(1 + near * strength * 0.22, 0.97, 1.03);
+  const facing = clamp(yaw, -1, 1) * side;
+  const near = Math.max(0, facing);
+  const far = Math.max(0, -facing);
+  const scaleX = eyeSocketRoles.has(layer.role)
+    ? clamp(1 + near * 0.055 - far * 0.22, 0.76, 1.07)
+    : clamp(1 + near * 0.035 - far * 0.14, 0.84, 1.05);
+  const scaleY = eyeSocketRoles.has(layer.role)
+    ? clamp(1 + near * 0.012 - far * 0.035, 0.95, 1.02)
+    : clamp(1 + near * 0.008 - far * 0.02, 0.97, 1.02);
   return {
     x: posedPivot.x + (posed.x - posedPivot.x) * scaleX,
     y: posedPivot.y + (posed.y - posedPivot.y) * scaleY
@@ -285,10 +330,18 @@ export function applyCoherentPoseField(
   const cagePivot = semanticCage && region
     ? mappedBySemanticCage(field, semanticCage, layer.pivot, region, yawAngle, pitchAngle, yaw)
     : surfacePivot;
-  const posed = {
+  let posed = {
     x: surfacePosed.x + (cagePosed.x - surfacePosed.x) * cageBlend,
     y: surfacePosed.y + (cagePosed.y - surfacePosed.y) * cageBlend
   };
+  if (semanticCage && layer.role === "frontHair") {
+    const coupling = frontHairFaceCoupling(semanticCage, base) * 0.92;
+    const desired = frontHairAttachmentDisplacement(field, semanticCage, layer, base, yawAngle, pitchAngle, yaw);
+    posed = {
+      x: posed.x + (desired.x - (posed.x - base.x)) * coupling,
+      y: posed.y + (desired.y - (posed.y - base.y)) * coupling
+    };
+  }
   const posedPivot = {
     x: surfacePivot.x + (cagePivot.x - surfacePivot.x) * cageBlend,
     y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * cageBlend

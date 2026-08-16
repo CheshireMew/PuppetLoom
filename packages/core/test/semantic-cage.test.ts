@@ -102,6 +102,27 @@ describe("automatic semantic control cage", () => {
     expect(project.runtime.semanticCage?.validation.confidence).toBeGreaterThan(0.8);
   });
 
+  it("keeps face-framing front hair attached to both moving face edges", () => {
+    const project = rigFixture();
+    const field = project.runtime.poseField!;
+    const cage = project.runtime.semanticCage!;
+    const face = project.layers.find((entry) => entry.role === "face")!;
+    const hair = project.layers.find((entry) => entry.role === "frontHair")!;
+    const y = cage.points.eyeLeft.position.y + (cage.points.chin.position.y - cage.points.eyeLeft.position.y) * 0.28;
+    for (const yaw of [-0.85, 0.85]) {
+      for (const side of ["Left", "Right"] as const) {
+        const facePoint = { x: cage.points[`face${side}`].position.x, y };
+        const direction = side === "Left" ? -1 : 1;
+        const hairPoint = { x: facePoint.x + direction * face.bounds.width * 0.035, y };
+        const posedFace = applyCoherentPoseField(field, face, facePoint, yaw, 0, cage);
+        const posedHair = applyCoherentPoseField(field, hair, hairPoint, yaw, 0, cage);
+        const faceShift = posedFace.x - facePoint.x;
+        const hairShift = posedHair.x - hairPoint.x;
+        expect(Math.abs(faceShift - hairShift)).toBeLessThan(face.bounds.width * 0.01);
+      }
+    }
+  });
+
   it("keeps neutral points exact and preserves cage triangle winding at extreme poses", () => {
     const project = rigFixture();
     const field = project.runtime.poseField!;

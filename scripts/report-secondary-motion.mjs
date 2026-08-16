@@ -25,6 +25,7 @@ for (const layer of project.layers.filter((candidate) => inspectedRoles.has(cand
   const pointMaxima = neutral.map(() => 0);
   const pointMaximaX = neutral.map(() => 0);
   const pointMaximaY = neutral.map(() => 0);
+  const pointRadialDriftMaxima = neutral.map(() => 0);
   for (const state of states) {
     const secondaryState = { ...neutralMotionState, secondary: state.secondary };
     for (const key of secondaryKeys) secondaryState[key] = state[key] ?? 0;
@@ -39,6 +40,14 @@ for (const layer of project.layers.filter((candidate) => inspectedRoles.has(cand
       pointMaxima[index] = Math.max(pointMaxima[index] ?? 0, pixels);
       pointMaximaX[index] = Math.max(pointMaximaX[index] ?? 0, xPixels);
       pointMaximaY[index] = Math.max(pointMaximaY[index] ?? 0, yPixels);
+      if (layer.role === "tail") {
+        const neutralRadius = Math.hypot(from.x - layer.pivot.x, from.y - layer.pivot.y);
+        const currentRadius = Math.hypot(to.x - layer.pivot.x, to.y - layer.pivot.y);
+        pointRadialDriftMaxima[index] = Math.max(
+          pointRadialDriftMaxima[index] ?? 0,
+          Math.abs(currentRadius - neutralRadius) * Math.max(project.canvas.width, project.canvas.height)
+        );
+      }
     }
   }
   const sorted = [...pointMaxima].sort((left, right) => left - right);
@@ -57,6 +66,9 @@ for (const layer of project.layers.filter((candidate) => inspectedRoles.has(cand
     maximumPixels: Number((sorted.at(-1) ?? 0).toFixed(3)),
     maximumXPixels: Number(Math.max(...pointMaximaX).toFixed(3)),
     maximumYPixels: Number(Math.max(...pointMaximaY).toFixed(3)),
+    ...(layer.role === "tail" ? {
+      maximumRadialDriftPixels: Number(Math.max(...pointRadialDriftMaxima).toFixed(3))
+    } : {}),
     ...(crownIndices.length > 0 ? {
       protectedCrownMaximumPixels: Number(Math.max(...crownIndices.map((index) => pointMaxima[index] ?? 0)).toFixed(3))
     } : {})

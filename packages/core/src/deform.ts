@@ -112,7 +112,7 @@ function secondaryFree(layer: LayerBinding, base: Point): number {
   if (layer.role === "ear") return smoothstep01(v) ** 2;
   if (layer.role === "tail") {
     const distanceFromRoot = Math.hypot((u - 0.03) * 0.9, (v - 0.08) * 0.74);
-    return smoothstep01((distanceFromRoot - 0.14) / 0.68);
+    return smoothstep01((distanceFromRoot - 0.05) / 0.38);
   }
   if (layer.role === "topWear") return smoothstep01((v - 0.52) / 0.48) ** 2;
   if (layer.role === "bottomWear") return smoothstep01((v - 0.12) / 0.88) ** 2;
@@ -125,6 +125,13 @@ function addLocalBend(point: Point, base: Point, pivot: Point, radians: number, 
   const y = base.y - pivot.y;
   point.x += -y * radians * free;
   point.y += x * radians * free;
+}
+
+function addLocalRotation(point: Point, base: Point, pivot: Point, radians: number, free: number): void {
+  if (Math.abs(radians) < 1e-8 || free <= 0) return;
+  const rotated = rotate(base, pivot, radians * free);
+  point.x += rotated.x - base.x;
+  point.y += rotated.y - base.y;
 }
 
 function addLocalStretch(point: Point, base: Point, pivot: Point, amount: number, free: number): void {
@@ -299,11 +306,14 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
       point.y += clothY * faceHeight * 0.56 * weight;
       point.y += clothX * (u - 0.5) * faceHeight * 0.16 * weight;
     } else if (layer.role === "tail") {
-      const tailX = state.secondary ? chainValue(state.secondary.tail, "x", free) : state.tailX * free;
-      const tailY = state.secondary ? chainValue(state.secondary.tail, "y", free) : state.tailY * free;
-      addLocalBend(point, base, layer.pivot, tailX * 2.4 * weight, 1);
-      addLocalStretch(point, base, layer.pivot, tailY * 0.12 * weight, 1);
-      point.y += tailY * layer.bounds.height * 2.6 * weight * free;
+      const tailChain = state.secondary?.tail;
+      const rootX = tailChain?.x[0] ?? state.tailX;
+      const rootY = tailChain?.y[0] ?? state.tailY;
+      const sectionX = tailChain ? chainValue(tailChain, "x", free) : state.tailX;
+      const sectionY = tailChain ? chainValue(tailChain, "y", free) : state.tailY;
+      const horizontal = rootX * 0.8 + sectionX * 0.2;
+      const vertical = rootY * 0.72 + sectionY * 0.28;
+      addLocalRotation(point, base, layer.pivot, (vertical * 5.6 + horizontal * 0.72) * weight, free);
     } else if (layer.role === "accessory") {
       const accessoryX = state.secondary ? chainValue(state.secondary.accessory, "x", free) : state.accessoryX * free;
       const accessoryY = state.secondary ? chainValue(state.secondary.accessory, "y", free) : state.accessoryY * free;

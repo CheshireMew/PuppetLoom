@@ -93,6 +93,14 @@ describe("calm autonomous timeline", () => {
     expect(activeEars.filter(Boolean).length / states.length).toBeLessThan(0.3);
     expect(activeEars.some((active, index) => active && !activeEars[index - 1])).toBe(true);
     expect(states.some((state) => state.earY === 0 && state.earX === 0)).toBe(true);
+    const skirt = states.map((state) => state.clothX);
+    const tail = states.map((state) => state.tailY);
+    expect(Math.min(...skirt)).toBeLessThan(-0.02);
+    expect(Math.max(...skirt)).toBeGreaterThan(0.02);
+    expect(skirt.filter((value) => Math.abs(value) > 0.001).length / skirt.length).toBeGreaterThan(0.9);
+    expect(Math.min(...tail)).toBeLessThan(-0.035);
+    expect(Math.max(...tail)).toBeGreaterThan(0.035);
+    expect(tail.filter((value) => Math.abs(value) > 0.001).length / tail.length).toBeGreaterThan(0.9);
     const strongEars = states.map((state) => Math.abs(state.earY) > 0.008);
     const strongFlapStarts = strongEars.filter((active, index) => active && !strongEars[index - 1]).length;
     expect(strongFlapStarts).toBeGreaterThanOrEqual(6);
