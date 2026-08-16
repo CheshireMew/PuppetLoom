@@ -90,7 +90,11 @@ describe("rig attachment pivots", () => {
     const frontHair = project.layers.find((layer) => layer.role === "frontHair");
     expect(frontHair?.secondaryAnchors).toEqual({
       ahogeRoot: { x: 0.5, y: 0.1 },
-      frontHairRoot: { x: 0.5, y: 0.2 }
+      frontHairRoot: { x: 0.5, y: 0.2 },
+      frontHairRootLeft: { x: 0.436, y: 0.196 },
+      frontHairRootRight: { x: 0.564, y: 0.196 },
+      frontHairTipLeft: { x: 0.436, y: 0.339 },
+      frontHairTipRight: { x: 0.564, y: 0.339 }
     });
     expect(frontHair?.pivot).toEqual(frontHair?.secondaryAnchors?.frontHairRoot);
     expect(frontHair?.mesh.rows).toBeGreaterThanOrEqual(18);

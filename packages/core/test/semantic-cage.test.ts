@@ -102,7 +102,7 @@ describe("automatic semantic control cage", () => {
     expect(project.runtime.semanticCage?.validation.confidence).toBeGreaterThan(0.8);
   });
 
-  it("keeps face-framing hair outside the cheek without gluing its whole contour to the face", () => {
+  it("pins only the roots of face-framing hair and releases its tips", () => {
     const project = rigFixture();
     const field = project.runtime.poseField!;
     const cage = project.runtime.semanticCage!;
@@ -110,20 +110,62 @@ describe("automatic semantic control cage", () => {
     const hair = project.layers.find((entry) => entry.role === "frontHair")!;
     for (const yaw of [-0.85, 0.85]) {
       for (const side of ["Left", "Right"] as const) {
-        const direction = side === "Left" ? -1 : 1;
-        const neutralGap = face.bounds.width * 0.035;
-        for (const vertical of [0.18, 0.42, 0.66]) {
-          const y = cage.points.eyeLeft.position.y + (cage.points.chin.position.y - cage.points.eyeLeft.position.y) * vertical;
-          const facePoint = { x: cage.points[`face${side}`].position.x, y };
-          const hairPoint = { x: facePoint.x + direction * neutralGap, y };
-          const posedFace = applyCoherentPoseField(field, face, facePoint, yaw, 0, cage);
-          const posedHair = applyCoherentPoseField(field, hair, hairPoint, yaw, 0, cage);
-          const posedGap = direction * (posedHair.x - posedFace.x);
-          expect(posedGap).toBeGreaterThan(neutralGap * 0.55);
-          expect(posedGap).toBeLessThan(neutralGap * 1.55);
-        }
+        const root = hair.secondaryAnchors![`frontHairRoot${side}`]!;
+        const tip = hair.secondaryAnchors![`frontHairTip${side}`]!;
+        const faceRoot = { x: cage.points[`face${side}`].position.x, y: root.y };
+        const faceTip = { x: cage.points[`face${side}`].position.x, y: tip.y };
+        const posedFaceRoot = applyCoherentPoseField(field, face, faceRoot, yaw, 0, cage);
+        const posedRoot = applyCoherentPoseField(field, hair, root, yaw, 0, cage);
+        const posedFaceTip = applyCoherentPoseField(field, face, faceTip, yaw, 0, cage);
+        const posedTip = applyCoherentPoseField(field, hair, tip, yaw, 0, cage);
+        const rootFollowError = Math.abs((posedRoot.x - root.x) - (posedFaceRoot.x - faceRoot.x));
+        const tipFollowError = Math.abs((posedTip.x - tip.x) - (posedFaceTip.x - faceTip.x));
+        expect(rootFollowError).toBeLessThan(field.radiusX * 0.095);
+        expect(tipFollowError).toBeGreaterThan(rootFollowError * 0.98);
       }
     }
+  });
+
+  it("uses screen-space near and far sides consistently for eyes and face edges", () => {
+    const project = rigFixture();
+    const field = project.runtime.poseField!;
+    const cage = project.runtime.semanticCage!;
+    const screenLeftEye = project.layers.find((entry) => entry.id === "eye-screen-left")!;
+    const screenRightEye = project.layers.find((entry) => entry.id === "eye-screen-right")!;
+    const face = project.layers.find((entry) => entry.role === "face")!;
+    const widthAfter = (target: typeof screenLeftEye, yaw: number) => {
+      const y = target.pivot.y;
+      const left = applyCoherentPoseField(field, target, { x: target.bounds.x, y }, yaw, 0, cage);
+      const right = applyCoherentPoseField(field, target, { x: target.bounds.x + target.bounds.width, y }, yaw, 0, cage);
+      return right.x - left.x;
+    };
+
+    const rightTurnNearWidth = widthAfter(screenLeftEye, 0.85);
+    const rightTurnFarWidth = widthAfter(screenRightEye, 0.85);
+    const leftTurnNearWidth = widthAfter(screenRightEye, -0.85);
+    const leftTurnFarWidth = widthAfter(screenLeftEye, -0.85);
+    expect(rightTurnNearWidth).toBeGreaterThan(rightTurnFarWidth * 1.08);
+    expect(leftTurnNearWidth).toBeGreaterThan(leftTurnFarWidth * 1.08);
+
+    const nearEdge = cage.points.faceLeft.position;
+    const farEdge = cage.points.faceRight.position;
+    const posedNear = applyCoherentPoseField(field, face, nearEdge, 0.85, 0, cage);
+    const posedFar = applyCoherentPoseField(field, face, farEdge, 0.85, 0, cage);
+    expect(posedFar.x - farEdge.x).toBeLessThan(posedNear.x - nearEdge.x);
+  });
+
+  it("expands the jaw plane looking up and foreshortens it looking down", () => {
+    const project = rigFixture();
+    const field = project.runtime.poseField!;
+    const cage = project.runtime.semanticCage!;
+    const face = project.layers.find((entry) => entry.role === "face")!;
+    const lowerFaceHeight = (pitch: number) => {
+      const mouth = applyCoherentPoseField(field, face, cage.points.mouth.position, 0, pitch, cage);
+      const chin = applyCoherentPoseField(field, face, cage.points.chin.position, 0, pitch, cage);
+      return chin.y - mouth.y;
+    };
+    expect(lowerFaceHeight(-0.75)).toBeGreaterThan(lowerFaceHeight(0));
+    expect(lowerFaceHeight(0.75)).toBeLessThan(lowerFaceHeight(0));
   });
 
   it("keeps neutral points exact and preserves cage triangle winding at extreme poses", () => {

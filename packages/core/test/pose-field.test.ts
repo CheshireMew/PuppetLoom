@@ -77,9 +77,9 @@ describe("coherent semantic pose field", () => {
     expect(posedBottom).toEqual(bottom);
   });
 
-  it("widens the near eye and narrows the far eye during a turn", () => {
-    const nearEye = layer("eyelash", "left");
-    const farEye = layer("eyelash", "right");
+  it("widens the screen-left near eye and narrows the screen-right far eye when the nose turns right", () => {
+    const screenLeftEye = layer("eyelash", "right");
+    const screenRightEye = layer("eyelash", "left");
     const widthAfter = (target: LayerBinding, yaw: number) => {
       const left = { x: target.bounds.x, y: target.pivot.y };
       const right = { x: target.bounds.x + target.bounds.width, y: target.pivot.y };
@@ -87,13 +87,16 @@ describe("coherent semantic pose field", () => {
       const posedRight = applyCoherentPoseField(field, target, right, yaw, 0);
       return posedRight.x - posedLeft.x;
     };
-    const neutralWidth = widthAfter(nearEye, 0);
-    expect(widthAfter(nearEye, 0.75)).toBeGreaterThan(neutralWidth * 1.04);
-    expect(widthAfter(farEye, 0.75)).toBeLessThan(neutralWidth * 0.82);
-    expect(widthAfter(nearEye, 0.75)).toBeGreaterThan(widthAfter(farEye, 0.75));
+    const neutralWidth = widthAfter(screenLeftEye, 0);
+    const nearWidth = widthAfter(screenLeftEye, 0.75);
+    const farWidth = widthAfter(screenRightEye, 0.75);
+    expect(nearWidth).toBeGreaterThan(neutralWidth * 1.005);
+    expect(farWidth).toBeLessThan(neutralWidth * 0.95);
+    expect(farWidth).toBeGreaterThan(neutralWidth * 0.86);
+    expect(nearWidth).toBeGreaterThan(farWidth * 1.08);
   });
 
-  it("foreshortens the screen-right eye during an extreme left turn", () => {
+  it("mirrors eye perspective when the nose turns left", () => {
     const screenRight = layer("eyelash", "left");
     const screenLeft = layer("eyelash", "right");
     const widthAfter = (target: LayerBinding) => {
@@ -101,8 +104,20 @@ describe("coherent semantic pose field", () => {
       const right = { x: 0.6, y: target.pivot.y };
       return applyCoherentPoseField(field, target, right, -0.85, 0).x - applyCoherentPoseField(field, target, left, -0.85, 0).x;
     };
-    expect(widthAfter(screenRight)).toBeLessThan(0.2 * 0.82);
-    expect(widthAfter(screenRight)).toBeLessThan(widthAfter(screenLeft) * 0.82);
+    expect(widthAfter(screenLeft)).toBeLessThan(0.2 * 0.94);
+    expect(widthAfter(screenLeft)).toBeGreaterThan(0.2 * 0.86);
+    expect(widthAfter(screenRight)).toBeGreaterThan(0.2 * 1.01);
+    expect(widthAfter(screenLeft)).toBeLessThan(widthAfter(screenRight) * 0.9);
+  });
+
+  it("keeps the eye line stable when yaw and pitch are combined", () => {
+    const screenLeft = layer("eyelash", "right");
+    const screenRight = layer("eyelash", "left");
+    for (const pitch of [-0.75, 0.75]) {
+      const leftCenter = applyCoherentPoseField(field, screenLeft, screenLeft.pivot, 0.85, pitch);
+      const rightCenter = applyCoherentPoseField(field, screenRight, screenRight.pivot, 0.85, pitch);
+      expect(Math.abs(leftCenter.y - rightCenter.y)).toBeLessThan(field.radiusY * 0.01);
+    }
   });
 
   it("bends the hair contour on the skull surface instead of translating it rigidly", () => {
@@ -115,6 +130,89 @@ describe("coherent semantic pose field", () => {
     expect(posedLeft.y).not.toBeCloseTo(left.y, 4);
   });
 
+  it("keeps the near face-framing hair wider than the far side and mirrors the relationship", () => {
+    const hair = layer("frontHair");
+    const left = { x: 0.36, y: 0.38 };
+    const center = { x: 0.5, y: 0.38 };
+    const right = { x: 0.64, y: 0.38 };
+    const spans = (yaw: number) => {
+      const posedLeft = applyCoherentPoseField(field, hair, left, yaw, 0);
+      const posedCenter = applyCoherentPoseField(field, hair, center, yaw, 0);
+      const posedRight = applyCoherentPoseField(field, hair, right, yaw, 0);
+      return { left: posedCenter.x - posedLeft.x, right: posedRight.x - posedCenter.x };
+    };
+    const rightTurn = spans(0.8);
+    const leftTurn = spans(-0.8);
+    expect(rightTurn.left).toBeGreaterThan(rightTurn.right);
+    expect(leftTurn.right).toBeGreaterThan(leftTurn.left);
+    expect(rightTurn.left).toBeCloseTo(leftTurn.right, 6);
+    expect(rightTurn.right).toBeCloseTo(leftTurn.left, 6);
+  });
+
+  it("compresses visible crown height looking up and expands it looking down", () => {
+    const hair = layer("frontHair");
+    const top = { x: 0.5, y: 0.12 };
+    const forehead = { x: 0.5, y: 0.23 };
+    const crownHeight = (pitch: number) => {
+      const posedTop = applyCoherentPoseField(field, hair, top, 0, pitch);
+      const posedForehead = applyCoherentPoseField(field, hair, forehead, 0, pitch);
+      return posedForehead.y - posedTop.y;
+    };
+    expect(crownHeight(-0.8)).toBeLessThan(crownHeight(0));
+    expect(crownHeight(0.8)).toBeGreaterThan(crownHeight(0));
+  });
+
+  it("preserves ahoge length through combined head poses", () => {
+    const hair = layer("frontHair");
+    hair.secondaryAnchors = {
+      ahogeRoot: { x: 0.5, y: 0.18 },
+      frontHairRoot: { x: 0.5, y: 0.32 }
+    };
+    const root = hair.secondaryAnchors.ahogeRoot;
+    const tip = { x: 0.46, y: 0.1 };
+    const neutralLength = Math.hypot(tip.x - root.x, tip.y - root.y);
+    for (const pose of [{ yaw: -0.85, pitch: -0.75 }, { yaw: 0.85, pitch: 0.75 }]) {
+      const posedRoot = applyCoherentPoseField(field, hair, root, pose.yaw, pose.pitch);
+      const posedTip = applyCoherentPoseField(field, hair, tip, pose.yaw, pose.pitch);
+      expect(Math.hypot(posedTip.x - posedRoot.x, posedTip.y - posedRoot.y)).toBeCloseTo(neutralLength, 8);
+    }
+  });
+
+  it("leans the ahoge around its attached root instead of translating it as a floating piece", () => {
+    const hair = layer("frontHair");
+    hair.secondaryAnchors = {
+      ahogeRoot: { x: 0.5, y: 0.18 },
+      frontHairRoot: { x: 0.5, y: 0.32 }
+    };
+    const root = hair.secondaryAnchors.ahogeRoot;
+    const tip = { x: 0.46, y: 0.1 };
+    const rootRight = applyCoherentPoseField(field, hair, root, 0.85, 0);
+    const tipRight = applyCoherentPoseField(field, hair, tip, 0.85, 0);
+    const rootLeft = applyCoherentPoseField(field, hair, root, -0.85, 0);
+    const tipLeft = applyCoherentPoseField(field, hair, tip, -0.85, 0);
+
+    expect(tipRight.x - rootRight.x).not.toBeCloseTo(tipLeft.x - rootLeft.x, 6);
+    expect(tipRight.y - rootRight.y).not.toBeCloseTo(tipLeft.y - rootLeft.y, 6);
+  });
+
+  it("makes the near half of crown headwear larger and the far half smaller", () => {
+    const headwear = layer("headwear");
+    const y = headwear.bounds.y + headwear.bounds.height * 0.16;
+    const center = { x: headwear.bounds.x + headwear.bounds.width * 0.5, y };
+    const left = { x: center.x - headwear.bounds.width * 0.24, y };
+    const right = { x: center.x + headwear.bounds.width * 0.24, y };
+    const spans = (yaw: number) => {
+      const posedLeft = applyCoherentPoseField(field, headwear, left, yaw, 0);
+      const posedCenter = applyCoherentPoseField(field, headwear, center, yaw, 0);
+      const posedRight = applyCoherentPoseField(field, headwear, right, yaw, 0);
+      return { left: posedCenter.x - posedLeft.x, right: posedRight.x - posedCenter.x };
+    };
+    const noseRight = spans(0.85);
+    const noseLeft = spans(-0.85);
+    expect(noseRight.left).toBeGreaterThan(noseRight.right * 1.08);
+    expect(noseLeft.right).toBeGreaterThan(noseLeft.left * 1.08);
+  });
+
   it("pulls the far cheek inward and carries the lower face into the turn", () => {
     const face = layer("face");
     const leftCheek = { x: 0.36, y: 0.4 };
@@ -123,7 +221,7 @@ describe("coherent semantic pose field", () => {
     const posedLeft = applyCoherentPoseField(field, face, leftCheek, 0.8, 0);
     const posedRight = applyCoherentPoseField(field, face, rightCheek, 0.8, 0);
     const posedChin = applyCoherentPoseField(field, face, chin, 0.8, 0);
-    expect(posedLeft.x - leftCheek.x).toBeGreaterThan(posedRight.x - rightCheek.x);
+    expect(posedRight.x - rightCheek.x).toBeLessThan(posedLeft.x - leftCheek.x);
     expect(posedRight.x - posedLeft.x).toBeLessThan(rightCheek.x - leftCheek.x);
     expect(posedChin.x).toBeGreaterThan(chin.x);
   });

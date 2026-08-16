@@ -191,6 +191,13 @@ function createControlWindow(): BrowserWindow {
 const initialProject = queryProjectArgument();
 runtimeLogPath = initialProject ? join(initialProject, "reports", "runtime.log") : undefined;
 const automatedExit = Number(process.env.PUPPETLOOM_E2E_EXIT_AFTER_MS ?? 0);
+if (Number.isFinite(automatedExit) && automatedExit > 0) {
+  const automatedProfile = process.env.PUPPETLOOM_E2E_USER_DATA
+    ? resolve(process.env.PUPPETLOOM_E2E_USER_DATA)
+    : join("D:\\Tools", "PuppetLoom", "e2e", `electron-${process.pid}`);
+  app.setPath("userData", automatedProfile);
+  app.setPath("cache", join(automatedProfile, "cache"));
+}
 const allowMultipleInstances = process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || (Number.isFinite(automatedExit) && automatedExit > 0);
 const hasInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock({ project: initialProject ?? "" });
 runtimeLog("app-start", { argv: process.argv, initialProject, allowMultipleInstances, hasInstanceLock });

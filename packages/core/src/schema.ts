@@ -78,6 +78,10 @@ export const puppetLoomProjectSchema = z.object({
         earHingeLeft: pointSchema.optional(),
         earHingeRight: pointSchema.optional(),
         frontHairRoot: pointSchema.optional(),
+        frontHairRootLeft: pointSchema.optional(),
+        frontHairRootRight: pointSchema.optional(),
+        frontHairTipLeft: pointSchema.optional(),
+        frontHairTipRight: pointSchema.optional(),
         ahogeRoot: pointSchema.optional()
       }).optional(),
       mesh: meshSchema,

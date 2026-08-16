@@ -111,7 +111,43 @@ function countOpaqueWingPixels(layer: ImportedLayer, hingeX: number, hingeY: num
   return count;
 }
 
-function frontHairAnchorsFor(layer: ImportedLayer, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors {
+function nearestOpaquePoint(
+  layer: ImportedLayer,
+  target: Point,
+  side: -1 | 1,
+  preferTip = false
+): Point | undefined {
+  const centerX = layer.bounds.x + layer.bounds.width * 0.5;
+  let best: Point | undefined;
+  let bestScore = preferTip ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+  for (let y = 0; y < layer.pixels.height; y += 1) {
+    for (let x = 0; x < layer.pixels.width; x += 1) {
+      if ((layer.pixels.data[(y * layer.pixels.width + x) * 4 + 3] ?? 0) <= 8) continue;
+      const global = { x: layer.bounds.x + x, y: layer.bounds.y + y };
+      if ((global.x - centerX) * side < layer.bounds.width * 0.12) continue;
+      if (preferTip) {
+        if (global.y < target.y) continue;
+        const score = (global.y - target.y) / Math.max(1, layer.bounds.height)
+          - Math.abs(global.x - target.x) / Math.max(1, layer.bounds.width) * 0.12;
+        if (score > bestScore) {
+          best = global;
+          bestScore = score;
+        }
+      } else {
+        const dx = (global.x - target.x) / Math.max(1, layer.bounds.width);
+        const dy = (global.y - target.y) / Math.max(1, layer.bounds.height);
+        const score = dx * dx + dy * dy;
+        if (score < bestScore) {
+          best = global;
+          bestScore = score;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function frontHairAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | undefined, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors {
   const { width, height, data } = layer.pixels;
   const rows = Array.from({ length: height }, (_, y) => {
     let opaque = 0;
@@ -143,14 +179,34 @@ function frontHairAnchorsFor(layer: ImportedLayer, canvas: ImportedPsd["canvas"]
   const bang = rows.find((row) => row.y >= bangSearchY && row.spanRatio >= 0.65 && (row.runs >= 3 || row.fillRatio <= 0.96));
   const bangY = Math.max(crownY + Math.round(height * 0.18), Math.min(Math.round(height * 0.72), bang?.y ?? Math.round(height * 0.54)));
   const centerX = (layer.bounds.x + layer.bounds.width * 0.5) / canvas.width;
+  const rootY = faceLayer
+    ? faceLayer.bounds.y + faceLayer.bounds.height * 0.36
+    : layer.bounds.y + layer.bounds.height * 0.52;
+  const leftTarget = {
+    x: faceLayer ? faceLayer.bounds.x + faceLayer.bounds.width * 0.04 : layer.bounds.x + layer.bounds.width * 0.18,
+    y: rootY
+  };
+  const rightTarget = {
+    x: faceLayer ? faceLayer.bounds.x + faceLayer.bounds.width * 0.96 : layer.bounds.x + layer.bounds.width * 0.82,
+    y: rootY
+  };
+  const leftRootPx = nearestOpaquePoint(layer, leftTarget, -1) ?? leftTarget;
+  const rightRootPx = nearestOpaquePoint(layer, rightTarget, 1) ?? rightTarget;
+  const leftTipPx = nearestOpaquePoint(layer, leftRootPx, -1, true) ?? { x: leftRootPx.x, y: layer.bounds.y + layer.bounds.height };
+  const rightTipPx = nearestOpaquePoint(layer, rightRootPx, 1, true) ?? { x: rightRootPx.x, y: layer.bounds.y + layer.bounds.height };
+  const normalized = (point: Point): Point => roundPoint({ x: point.x / canvas.width, y: point.y / canvas.height });
   return {
     ahogeRoot: roundPoint({ x: centerX, y: (layer.bounds.y + crownY) / canvas.height }),
-    frontHairRoot: roundPoint({ x: centerX, y: (layer.bounds.y + bangY) / canvas.height })
+    frontHairRoot: roundPoint({ x: centerX, y: (layer.bounds.y + bangY) / canvas.height }),
+    frontHairRootLeft: normalized(leftRootPx),
+    frontHairRootRight: normalized(rightRootPx),
+    frontHairTipLeft: normalized(leftTipPx),
+    frontHairTipRight: normalized(rightTipPx)
   };
 }
 
 function secondaryAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | undefined, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors | undefined {
-  if (layer.role === "frontHair") return frontHairAnchorsFor(layer, canvas);
+  if (layer.role === "frontHair") return frontHairAnchorsFor(layer, faceLayer, canvas);
   if (layer.role !== "headwear" || !faceLayer) return undefined;
   const hingeLeftX = faceLayer.bounds.x + faceLayer.bounds.width * 0.03;
   const hingeRightX = faceLayer.bounds.x + faceLayer.bounds.width * 0.97;

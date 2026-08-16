@@ -65,6 +65,10 @@ export interface LayerSecondaryAnchors {
   earHingeLeft?: Point;
   earHingeRight?: Point;
   frontHairRoot?: Point;
+  frontHairRootLeft?: Point;
+  frontHairRootRight?: Point;
+  frontHairTipLeft?: Point;
+  frontHairTipRight?: Point;
   ahogeRoot?: Point;
 }
 

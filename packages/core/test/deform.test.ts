@@ -51,7 +51,11 @@ function secondaryLayer(role: SemanticRole, bounds = { x: 0.35, y: 0.15, width: 
   if (role === "frontHair") {
     layer.secondaryAnchors = {
       ahogeRoot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.24 },
-      frontHairRoot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.54 }
+      frontHairRoot: { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.54 },
+      frontHairRootLeft: { x: bounds.x + bounds.width * 0.18, y: bounds.y + bounds.height * 0.5 },
+      frontHairRootRight: { x: bounds.x + bounds.width * 0.82, y: bounds.y + bounds.height * 0.5 },
+      frontHairTipLeft: { x: bounds.x + bounds.width * 0.1, y: bounds.y + bounds.height },
+      frontHairTipRight: { x: bounds.x + bounds.width * 0.9, y: bounds.y + bounds.height }
     };
     layer.pivot = layer.secondaryAnchors.frontHairRoot;
   }
@@ -182,6 +186,19 @@ describe("secondary motion anchoring", () => {
     expect(deformPoint(project, layer, root, state)).toEqual(root);
     expect(Math.sign(movedLeft.x - leftTip.x)).toBe(-Math.sign(movedRight.x - rightTip.x));
     expect(movement(leftTip, movedLeft)).toBeGreaterThan(movement(root, deformPoint(project, layer, root, state)) + 0.003);
+  });
+
+  it("keeps both side-lock roots pinned while their tips move freely", () => {
+    const layer = secondaryLayer("frontHair");
+    const leftRoot = layer.secondaryAnchors!.frontHairRootLeft!;
+    const rightRoot = layer.secondaryAnchors!.frontHairRootRight!;
+    const leftTip = layer.secondaryAnchors!.frontHairTipLeft!;
+    const rightTip = layer.secondaryAnchors!.frontHairTipRight!;
+    const state = { ...neutralMotionState, hairX: 0.05, hairY: 0.025 };
+    expect(movement(leftRoot, deformPoint(project, layer, leftRoot, state))).toBeLessThan(1e-8);
+    expect(movement(rightRoot, deformPoint(project, layer, rightRoot, state))).toBeLessThan(1e-8);
+    expect(movement(leftTip, deformPoint(project, layer, leftTip, state))).toBeGreaterThan(0.006);
+    expect(movement(rightTip, deformPoint(project, layer, rightTip, state))).toBeGreaterThan(0.006);
   });
 });
 

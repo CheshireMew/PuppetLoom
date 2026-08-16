@@ -6,6 +6,8 @@ import sharp from "sharp";
 
 const projectDirectory = resolve(process.argv[2] ?? "");
 const outputPath = resolve(process.argv[3] ?? resolve(projectDirectory, "reports/turn-sheet.png"));
+const closeup = process.argv.includes("--closeup");
+const extreme = process.argv.includes("--extreme");
 if (!process.argv[2] || !existsSync(resolve(projectDirectory, "puppetloom.json"))) {
   throw new Error("用法：npm run test:turns -- <project-dir> [output.png]");
 }
@@ -17,23 +19,39 @@ const headTop = project.anchors?.headTop?.y ?? 0.04;
 const chin = project.anchors?.chin?.y ?? 0.28;
 const headCenterX = project.anchors?.nose?.x ?? 0.5;
 const headSize = Math.max(0.18, Math.min(0.36, (chin - headTop) * 1.3));
-const cropWidth = Math.round(headSize * previewSize * 1.55);
-const cropHeight = Math.round(headSize * previewSize * 1.9);
+const cropWidth = Math.round(headSize * previewSize * (closeup ? 1.35 : 1.55));
+const cropHeight = Math.round(headSize * previewSize * (closeup ? 1.24 : 1.9));
 const crop = {
   width: cropWidth,
   height: cropHeight,
   left: Math.max(0, Math.min(previewSize - cropWidth, Math.round(headCenterX * previewSize - cropWidth / 2))),
   top: Math.max(0, Math.min(previewSize - cropHeight, Math.round((headTop - headSize * 0.08) * previewSize)))
 };
+const poseState = (yaw, pitch) => ({
+  headYaw: yaw,
+  headPitch: pitch,
+  gazeX: yaw * 0.29,
+  gazeY: pitch * 0.24,
+  bodySway: yaw * 0.62,
+  bodyPitch: pitch * 0.46,
+  bodyRoll: yaw * 0.16
+});
+const yawLimit = extreme ? 1 : 0.85;
+const pitchLimit = extreme ? 1 : 0.75;
 const poses = [
-  { label: "left 0.85", state: { headYaw: -0.85, gazeX: -0.25, bodySway: -0.527, bodyRoll: -0.136 } },
-  { label: "left 0.55", state: { headYaw: -0.55, gazeX: -0.14, bodySway: -0.341, bodyRoll: -0.088 } },
-  { label: "neutral", state: { headYaw: 0, gazeX: 0, bodySway: 0, bodyRoll: 0 } },
-  { label: "right 0.55", state: { headYaw: 0.55, gazeX: 0.14, bodySway: 0.341, bodyRoll: 0.088 } },
-  { label: "right 0.85", state: { headYaw: 0.85, gazeX: 0.25, bodySway: 0.527, bodyRoll: 0.136 } },
-  { label: "look up 0.75", state: { headPitch: -0.75, gazeY: -0.18, bodyPitch: -0.345 } },
-  { label: "look down 0.75", state: { headPitch: 0.75, gazeY: 0.18, bodyPitch: 0.345 } }
+  { label: "left + up", state: poseState(-yawLimit, -pitchLimit) },
+  { label: "up", state: poseState(0, -pitchLimit) },
+  { label: "right + up", state: poseState(yawLimit, -pitchLimit) },
+  { label: "left", state: poseState(-yawLimit, 0) },
+  { label: "neutral", state: poseState(0, 0) },
+  { label: "right", state: poseState(yawLimit, 0) },
+  { label: "left + down", state: poseState(-yawLimit, pitchLimit) },
+  { label: "down", state: poseState(0, pitchLimit) },
+  { label: "right + down", state: poseState(yawLimit, pitchLimit) }
 ];
+const tileWidth = closeup ? 512 : 320;
+const tileImageHeight = closeup ? 466 : 390;
+const labelHeight = 38;
 
 const app = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js"), "--project", projectDirectory],
@@ -58,17 +76,17 @@ try {
       return output.toDataURL("image/png");
     }, previewSize);
     const frame = Buffer.from(dataUrl.split(",")[1], "base64");
-    const head = await sharp(frame).extract(crop).resize(320, 390, { fit: "fill", kernel: sharp.kernel.lanczos3 }).png().toBuffer();
-    const label = Buffer.from(`<svg width="320" height="38"><rect width="320" height="38" fill="#111722"/><text x="12" y="25" fill="#e8eef8" font-family="Arial" font-size="16">${pose.label}</text></svg>`);
-    tiles.push(await sharp({ create: { width: 320, height: 428, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-      .composite([{ input: head, left: 0, top: 0 }, { input: label, left: 0, top: 390 }]).png().toBuffer());
+    const head = await sharp(frame).extract(crop).resize(tileWidth, tileImageHeight, { fit: "fill", kernel: sharp.kernel.lanczos3 }).png().toBuffer();
+    const label = Buffer.from(`<svg width="${tileWidth}" height="${labelHeight}"><rect width="${tileWidth}" height="${labelHeight}" fill="#111722"/><text x="12" y="25" fill="#e8eef8" font-family="Arial" font-size="16">${pose.label}</text></svg>`);
+    tiles.push(await sharp({ create: { width: tileWidth, height: tileImageHeight + labelHeight, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: head, left: 0, top: 0 }, { input: label, left: 0, top: tileImageHeight }]).png().toBuffer());
   }
 } finally {
   await app.close();
 }
 
-await sharp({ create: { width: 320 * tiles.length, height: 428, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-  .composite(tiles.map((input, index) => ({ input, left: index * 320, top: 0 })))
+await sharp({ create: { width: tileWidth * 3, height: (tileImageHeight + labelHeight) * 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+  .composite(tiles.map((input, index) => ({ input, left: (index % 3) * tileWidth, top: Math.floor(index / 3) * (tileImageHeight + labelHeight) })))
   .png()
   .toFile(outputPath);
 process.stdout.write(`${JSON.stringify({ ok: true, project: basename(projectDirectory), outputPath, poses: poses.map(({ label }) => label) }, null, 2)}\n`);

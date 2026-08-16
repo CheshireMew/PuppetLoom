@@ -183,7 +183,7 @@ export class CalmMotionController {
   private readonly frontHairRight = new SegmentedSpringChain({ segments: 4, stiffness: 28, damping: 9.4, propagation: 1.1, maxDisplacement: 0.075 });
   private readonly backHairLeft = new SegmentedSpringChain({ segments: 5, stiffness: 23, damping: 7.4, propagation: 1.09, maxDisplacement: 0.105 });
   private readonly backHairRight = new SegmentedSpringChain({ segments: 5, stiffness: 21, damping: 6.9, propagation: 1.11, maxDisplacement: 0.105 });
-  private readonly ahoge = new SegmentedSpringChain({ segments: 5, stiffness: 12, damping: 4.8, propagation: 1.14, maxDisplacement: 0.13 });
+  private readonly ahoge = new SegmentedSpringChain({ segments: 5, stiffness: 19, damping: 5.6, propagation: 1.12, maxDisplacement: 0.14 });
   private readonly headwear = new SegmentedSpringChain({ segments: 3, stiffness: 36, damping: 11.4, propagation: 1.04, maxDisplacement: 0.045 });
   private readonly topCloth = new SegmentedSpringChain({ segments: 3, stiffness: 24, damping: 8.6, propagation: 1.06, maxDisplacement: 0.055 });
   private readonly skirt = new SegmentedSpringChain({ segments: 4, stiffness: 18, damping: 7, propagation: 1.09, maxDisplacement: 0.09 });
@@ -289,8 +289,8 @@ export class CalmMotionController {
     this.backHairRight.advance(backTargetX + Math.sin(timeSeconds * 0.41 + phase * 1.37) * 0.0075, backTargetY * 1.06, delta);
 
     this.ahoge.advance(
-      -hairLateral * 0.018 + ahogeWind * 0.074,
-      -hairVertical * 0.008 + frontHairLift * 0.012 - ahogePerk * 0.052,
+      -hairLateral * 0.026 + ahogeWind * 0.1,
+      -hairVertical * 0.011 + frontHairLift * 0.016 - ahogePerk * 0.08,
       delta
     );
     this.headwear.advance(
