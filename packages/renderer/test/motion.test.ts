@@ -54,6 +54,18 @@ describe("calm autonomous timeline", () => {
     expect(Math.abs(peakTurn.gazeX)).toBeLessThan(0.8);
   });
 
+  it("builds each lively phrase from left, right, up, and down looks", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    const phrase = controller.events.slice(0, 4);
+    expect(phrase).toHaveLength(4);
+    expect(Math.sign(phrase[0]!.yaw)).toBe(-Math.sign(phrase[1]!.yaw));
+    expect(Math.abs(phrase[0]!.yaw)).toBeGreaterThan(0.6);
+    expect(Math.abs(phrase[1]!.yaw)).toBeGreaterThan(0.6);
+    expect(phrase[2]!.pitch).toBeLessThan(-0.25);
+    expect(phrase[3]!.pitch).toBeGreaterThan(0.29);
+    expect(phrase[3]!.start).toBeLessThan(15);
+  });
+
   it("keeps secondary parts gently moving between deliberate head turns", () => {
     const controller = new CalmMotionController(fixtureProject());
     const states = Array.from({ length: 105 }, (_, index) => controller.sample(index / 60));
@@ -125,9 +137,11 @@ describe("calm autonomous timeline", () => {
     expect(states[8]!.gazeX).toBeGreaterThan(states[8]!.headYaw * 0.35);
     expect(states.at(-1)!.headYaw).toBeGreaterThan(0.75);
     expect(states.at(-1)!.headPitch).toBeLessThan(-0.62);
-    expect(states.at(-1)!.bodySway).toBeGreaterThan(0.3);
-    expect(states.at(-1)!.bodyPitch).toBeLessThan(-0.2);
+    expect(states.at(-1)!.bodySway).toBeGreaterThan(0.45);
+    expect(states.at(-1)!.bodyPitch).toBeLessThan(-0.28);
     expect(Math.abs(states.at(-1)!.bodySway)).toBeLessThan(Math.abs(states.at(-1)!.headYaw));
+    const settled = states.slice(-90).map((state) => state.headYaw);
+    expect(Math.max(...settled) - Math.min(...settled)).toBeGreaterThan(0.001);
   });
 
   it("returns smoothly to autonomous motion when pointer tracking is disabled", () => {
@@ -139,14 +153,19 @@ describe("calm autonomous timeline", () => {
     expect(release.at(-1)!.headYaw).toBeGreaterThan(-0.7);
   });
 
-  it("opens and closes the mouth occasionally instead of chattering continuously", () => {
+  it("speaks in short syllable phrases instead of holding one mouth shape", () => {
     const controller = new CalmMotionController(fixtureProject(42, true));
     const states = Array.from({ length: 1200 }, (_, index) => controller.sample(index / 60));
     expect(states.some((state) => state.mouthOpen > 0.8)).toBe(true);
     expect(states.some((state) => state.mouthOpen === 0)).toBe(true);
-    expect(states.filter((state) => state.mouthOpen > 0).length / states.length).toBeLessThan(0.3);
+    expect(states.filter((state) => state.mouthOpen > 0).length / states.length).toBeLessThan(0.42);
+    const peaks = states.filter((state, index) => index > 0 && index < states.length - 1
+      && state.mouthOpen > states[index - 1]!.mouthOpen
+      && state.mouthOpen >= states[index + 1]!.mouthOpen
+      && state.mouthOpen > 0.35);
+    expect(peaks.length).toBeGreaterThanOrEqual(8);
     const steps = states.slice(1).map((state, index) => Math.abs(state.mouthOpen - states[index]!.mouthOpen));
-    expect(Math.max(...steps)).toBeLessThan(0.14);
+    expect(Math.max(...steps)).toBeLessThan(0.19);
   });
 });
 

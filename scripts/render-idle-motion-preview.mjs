@@ -9,8 +9,9 @@ import sharp from "sharp";
 const projectDirectory = resolve(process.argv[2] ?? "");
 const durationSeconds = Math.max(4, Math.min(30, Number(process.argv[3] ?? 12)));
 const outputPath = resolve(process.argv[4] ?? resolve(projectDirectory, "reports/idle-secondary-preview.webm"));
+const primaryMotion = process.argv.includes("--primary");
 if (!process.argv[2] || !existsSync(resolve(projectDirectory, "puppetloom.json"))) {
-  throw new Error("用法：npm run test:idle-motion -- <project-dir> [seconds] [output.webm]");
+  throw new Error("用法：npm run test:idle-motion -- <project-dir> [seconds] [output.webm] [--primary]");
 }
 
 const ffmpeg = process.env.PUPPETLOOM_FFMPEG || (existsSync("D:\\Code\\MediaFlow\\bin\\ffmpeg.exe") ? "D:\\Code\\MediaFlow\\bin\\ffmpeg.exe" : "ffmpeg");
@@ -69,7 +70,10 @@ const app = await electron.launch({
   cwd: resolve("."),
   env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1" }
 });
-const sampleIndices = new Set(Array.from({ length: 6 }, (_, index) => Math.min(frameCount - 1, Math.round(index * (frameCount - 1) / 5))));
+const sampleTimes = primaryMotion
+  ? [0, ...controller.events.slice(0, 4).map((event) => event.start + event.transition + event.hold * 0.5), durationSeconds]
+  : Array.from({ length: 6 }, (_, index) => index * durationSeconds / 5);
+const sampleIndices = new Set(sampleTimes.map((time) => Math.min(frameCount - 1, Math.round(time * fps))));
 const samples = [];
 const secondaryKeys = ["hairX", "hairY", "ahogeX", "ahogeY", "backHairX", "backHairY", "headwearX", "headwearY", "earX", "earY", "clothX", "clothY", "tailX", "tailY", "accessoryX", "accessoryY"];
 const extrema = Object.fromEntries(secondaryKeys.map((key) => [key, 0]));
@@ -88,7 +92,7 @@ try {
     return pixel[3] > 0;
   });
   for (let index = 0; index < frameCount; index += 1) {
-    const state = controller.sample(index / fps, { primaryMotion: false });
+    const state = controller.sample(index / fps, { primaryMotion });
     for (const key of secondaryKeys) extrema[key] = Math.max(extrema[key], Math.abs(state[key] ?? 0));
     const frozen = {
       ...state,
@@ -104,7 +108,7 @@ try {
       blink: 0,
       mouthOpen: 0
     };
-    const rendered = await viewer.evaluate((pose) => window.puppetloomRenderTestPose?.(pose) ?? false, frozen);
+    const rendered = await viewer.evaluate((pose) => window.puppetloomRenderTestPose?.(pose) ?? false, primaryMotion ? state : frozen);
     if (!rendered) throw new Error("无法渲染静止头部次级运动姿态。");
     const dataUrl = await viewer.locator("canvas").evaluate((canvas, size) => {
       const output = document.createElement("canvas");
@@ -146,7 +150,7 @@ const report = {
   projectDirectory,
   durationSeconds,
   fps,
-  headAndBodyFrozen: true,
+  headAndBodyFrozen: !primaryMotion,
   outputPath,
   upperPath,
   sheetPath,

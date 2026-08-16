@@ -52,23 +52,25 @@ function eventValue(event: MotionEvent, time: number, key: "yaw" | "pitch" | "ro
 function makeEvents(seed: number, seconds = 900): MotionEvent[] {
   const random = mulberry32(seed);
   const events: MotionEvent[] = [];
-  let cursor = 1.8 + random() * 0.8;
+  let cursor = 1.15 + random() * 0.55;
   let index = 0;
+  const firstDirection = random() < 0.5 ? -1 : 1;
   while (cursor < seconds) {
-    const direction = random() < 0.5 ? -1 : 1;
-    const magnitude = 0.55 + random() * 0.23;
-    const isVertical = index > 0 && index % 3 === 2;
-    const looksUp = isVertical && index % 6 === 5;
+    const phraseStep = index % 4;
+    const isVertical = phraseStep >= 2;
+    const looksUp = phraseStep === 2;
+    const direction = phraseStep === 0 ? firstDirection : phraseStep === 1 ? -firstDirection : (random() < 0.5 ? -1 : 1);
+    const magnitude = 0.62 + random() * 0.16;
     events.push({
       start: cursor,
-      transition: 0.9 + random() * 0.3,
-      hold: 1.05 + random() * 0.45,
-      returnDuration: 1.25 + random() * 0.35,
-      yaw: direction * (isVertical ? 0.16 + random() * 0.12 : magnitude),
-      pitch: isVertical ? (looksUp ? -(0.14 + random() * 0.08) : 0.24 + random() * 0.14) : (random() - 0.5) * 0.16,
-      roll: direction * (isVertical ? 0.04 + random() * 0.04 : 0.1 + random() * 0.12)
+      transition: 0.68 + random() * 0.22,
+      hold: 0.55 + random() * 0.28,
+      returnDuration: 0.88 + random() * 0.24,
+      yaw: direction * (isVertical ? 0.08 + random() * 0.08 : magnitude),
+      pitch: isVertical ? (looksUp ? -(0.26 + random() * 0.1) : 0.3 + random() * 0.12) : (random() - 0.5) * 0.1,
+      roll: direction * (isVertical ? 0.03 + random() * 0.035 : 0.12 + random() * 0.08)
     });
-    cursor += 5.4 + random() * 1.8;
+    cursor += 3.6 + random() * 0.65;
     index += 1;
   }
   return events;
@@ -99,17 +101,22 @@ function blinkValue(time: number, seed: number): number {
 
 function mouthValue(time: number, seed: number): number {
   const random = mulberry32(seed ^ 0x6a09e667);
-  let cursor = 2.2 + random() * 1.2;
-  while (cursor <= time) {
-    const duration = 1.2 + random() * 0.3;
-    const peak = 0.94 + random() * 0.06;
-    if (time <= cursor + duration) {
-      const phase = (time - cursor) / duration;
-      if (phase < 0.3) return peak * smoothstep(phase / 0.3);
-      if (phase < 0.5) return peak;
-      return peak * (1 - smoothstep((phase - 0.5) / 0.5));
+  let cursor = 1.45 + random() * 0.85;
+  while (cursor <= time + 0.4) {
+    const syllableCount = 4 + Math.floor(random() * 4);
+    let syllableStart = 0;
+    for (let index = 0; index < syllableCount; index += 1) {
+      const duration = 0.3 + random() * 0.12;
+      const gap = 0.045 + random() * 0.065;
+      const peak = 0.48 + random() * 0.52;
+      const local = time - cursor - syllableStart;
+      if (local >= 0 && local <= duration) {
+        const phase = local / duration;
+        return peak * (phase < 0.46 ? smoothstep(phase / 0.46) : 1 - smoothstep((phase - 0.46) / 0.54));
+      }
+      syllableStart += duration + gap;
     }
-    cursor += 5.8 + random() * 3;
+    cursor += syllableStart + 3.2 + random() * 2.4;
   }
   return 0;
 }
@@ -223,9 +230,9 @@ export class CalmMotionController {
     const pointerYaw = this.trackedLookX.value * 0.92 * tuning.amplitude;
     const pointerPitch = this.trackedLookY.value * 0.96 * tuning.amplitude;
     const pointerRoll = this.trackedLookX.value * 0.1 * tuning.amplitude;
-    const desiredYaw = Math.max(-1, Math.min(1, autonomousYaw * (1 - lookStrength) + pointerYaw * lookStrength));
-    const desiredPitch = Math.max(-1, Math.min(1, autonomousPitch * (1 - lookStrength) + pointerPitch * lookStrength));
-    const desiredRoll = Math.max(-1, Math.min(1, autonomousRoll * (1 - lookStrength) + pointerRoll * lookStrength));
+    const desiredYaw = Math.max(-1, Math.min(1, autonomousYaw * (1 - lookStrength) + (pointerYaw + microYaw * 0.2) * lookStrength));
+    const desiredPitch = Math.max(-1, Math.min(1, autonomousPitch * (1 - lookStrength) + (pointerPitch + microPitch * 0.18) * lookStrength));
+    const desiredRoll = Math.max(-1, Math.min(1, autonomousRoll * (1 - lookStrength) + (pointerRoll + microRoll * 0.24) * lookStrength));
     const autonomousGazeX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.25 : 0) + microYaw * 0.7) * tuning.amplitude;
     const autonomousGazeY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.05 : 0) + microPitch * 0.55) * tuning.amplitude;
     const gazeTargetX = autonomousGazeX * (1 - lookStrength) + this.trackedLookX.value * 1.1 * tuning.amplitude * lookStrength;
@@ -240,9 +247,9 @@ export class CalmMotionController {
     const gazeX = gazeTargetX - yaw * 0.55;
     const gazeY = gazeTargetY - pitch * 0.42;
 
-    advanceTracking(this.trackedBody, yaw * 0.5, delta, 0, Math.min(1, tuning.stability + 0.35));
-    advanceTracking(this.trackedBodyPitch, pitch * 0.38, delta, 0, Math.min(1, tuning.stability + 0.4));
-    advanceTracking(this.trackedBodyRoll, roll * 0.4 + yaw * 0.12, delta, 0, Math.min(1, tuning.stability + 0.35));
+    advanceTracking(this.trackedBody, yaw * 0.62, delta, 0, Math.min(1, tuning.stability + 0.35));
+    advanceTracking(this.trackedBodyPitch, pitch * 0.46, delta, 0, Math.min(1, tuning.stability + 0.4));
+    advanceTracking(this.trackedBodyRoll, roll * 0.52 + yaw * 0.16, delta, 0, Math.min(1, tuning.stability + 0.35));
 
     const headVelocity = Math.max(-2.5, Math.min(2.5, (yaw - this.previousHead) / delta));
     const pitchVelocity = Math.max(-2.5, Math.min(2.5, (pitch - this.previousPitch) / delta));
@@ -266,18 +273,18 @@ export class CalmMotionController {
     const accessoryWind = Math.sin(timeSeconds * 0.66 + phase * 1.31) * 0.09;
     const hairLateral = headVelocity * 0.6 + bodyVelocity * 0.4 + rollVelocity * 0.18;
     const hairVertical = pitchVelocity * 0.6 + this.trackedBodyPitch.velocity * 0.4;
-    const frontTargetX = -hairLateral * 0.016 + frontHairWind * 0.022;
-    const frontTargetY = -hairVertical * 0.011 + frontHairLift * 0.017;
+    const frontTargetX = -hairLateral * 0.02 + frontHairWind * 0.027;
+    const frontTargetY = -hairVertical * 0.013 + frontHairLift * 0.019;
     this.frontHairLeft.advance(frontTargetX + Math.sin(timeSeconds * 0.53 + phase * 1.91) * 0.0045, frontTargetY, delta);
     this.frontHairRight.advance(frontTargetX + Math.sin(timeSeconds * 0.61 + phase * 0.31) * 0.004, frontTargetY * 0.92, delta);
 
-    const backTargetX = -hairLateral * 0.026 + backHairWind * 0.062;
-    const backTargetY = -hairVertical * 0.019 + backHairLift * 0.024;
+    const backTargetX = -hairLateral * 0.034 + backHairWind * 0.072;
+    const backTargetY = -hairVertical * 0.023 + backHairLift * 0.028;
     this.backHairLeft.advance(backTargetX + Math.sin(timeSeconds * 0.33 + phase * 0.43) * 0.008, backTargetY, delta);
     this.backHairRight.advance(backTargetX + Math.sin(timeSeconds * 0.41 + phase * 1.37) * 0.0075, backTargetY * 1.06, delta);
 
     this.ahoge.advance(
-      -hairLateral * 0.014 + ahogeWind * 0.065,
+      -hairLateral * 0.018 + ahogeWind * 0.074,
       -hairVertical * 0.008 + frontHairLift * 0.012 - ahogePerk * 0.052,
       delta
     );
@@ -288,11 +295,11 @@ export class CalmMotionController {
     );
     const bodyLateral = bodyVelocity + this.trackedBodyRoll.velocity * 0.35;
     const bodyVertical = this.trackedBodyPitch.velocity;
-    this.topCloth.advance(-bodyLateral * 0.014 + clothWind * 0.022, -bodyVertical * 0.006, delta);
-    const skirtSway = Math.sin(timeSeconds * 0.82 + phase * 0.74) * 0.25 + Math.sin(timeSeconds * 1.37 + phase * 0.29) * 0.07;
-    this.skirt.advance(-bodyLateral * 0.028 + skirtSway * 0.12, -bodyVertical * 0.006, delta);
-    const tailSwing = Math.sin(timeSeconds * 1.18 + phase * 0.76) * 0.052 + Math.sin(timeSeconds * 0.52 + phase * 1.32) * 0.012;
-    this.tail.advance(-bodyLateral * 0.008 + tailWind * 0.006, -bodyVertical * 0.012 + tailSwing, delta);
+    this.topCloth.advance(-bodyLateral * 0.021 + clothWind * 0.032, -bodyVertical * 0.008, delta);
+    const skirtSway = Math.sin(timeSeconds * 0.95 + phase * 0.74) * 0.25 + Math.sin(timeSeconds * 1.65 + phase * 0.29) * 0.07;
+    this.skirt.advance(-bodyLateral * 0.036 + skirtSway * 0.13, -bodyVertical * 0.008, delta);
+    const tailSwing = Math.sin(timeSeconds * 1.35 + phase * 0.76) * 0.056 + Math.sin(timeSeconds * 0.63 + phase * 1.32) * 0.012;
+    this.tail.advance(-bodyLateral * 0.01 + tailWind * 0.008, -bodyVertical * 0.015 + tailSwing, delta);
     this.accessory.advance(-hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta);
 
     const secondary = {
@@ -311,7 +318,8 @@ export class CalmMotionController {
     const pairTip = (left: number[], right: number[]): number => (tip(left) + tip(right)) * 0.5;
 
     const breathPeriod = 5.1 + ((this.project.runtime.seed % 17) / 17) * 0.7;
-    const breath = Math.sin((timeSeconds / breathPeriod) * Math.PI * 2 - Math.PI * 0.5);
+    const breathPhase = (timeSeconds / breathPeriod) * Math.PI * 2 - Math.PI * 0.5;
+    const breath = Math.max(-1, Math.min(1, Math.sin(breathPhase) * 0.86 + Math.sin(breathPhase * 0.5 + phase) * 0.1));
 
     return {
       headYaw: yaw,
