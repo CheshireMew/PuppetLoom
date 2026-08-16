@@ -1,4 +1,4 @@
-export const PUPPETLOOM_PROJECT_VERSION = 1 as const;
+export const PUPPETLOOM_PROJECT_VERSION = 2 as const;
 
 export type RigLevel = "semantic" | "grouped" | "minimal";
 export type Side = "left" | "right" | "center";
@@ -52,7 +52,12 @@ export interface MeshBinding {
   points: Point[];
   uvs: Point[];
   triangles: number[];
+  influences?: MeshInfluences;
 }
+
+export type MeshInfluenceChannel = "head" | "body" | "gaze" | "physics" | "pin";
+
+export type MeshInfluences = Partial<Record<MeshInfluenceChannel, number[]>>;
 
 export interface LayerWeights {
   head: number;
@@ -262,6 +267,121 @@ export interface PuppetLoomProject {
   runtime: RuntimeSettings;
   quality: QualitySummary;
   disabledReasons: string[];
+}
+
+export interface LayerCalibrationOverride {
+  role?: SemanticRole;
+  side?: Side;
+  parentGroup?: LayerBinding["parentGroup"];
+  pivot?: Point;
+  secondaryAnchors?: LayerSecondaryAnchors;
+  weights?: Partial<LayerWeights>;
+  meshPointDeltas?: Record<string, Point>;
+  vertexInfluences?: Partial<Record<MeshInfluenceChannel, Record<string, number>>>;
+}
+
+export interface CalibrationOverrides {
+  anchors?: Partial<AnchorGraph>;
+  semanticPoints?: Partial<Record<SemanticCagePointId, Point>>;
+  layers?: Record<string, LayerCalibrationOverride>;
+  runtime?: {
+    envelope?: Partial<MotionEnvelope>;
+    motionTuning?: Partial<MotionTuning>;
+  };
+}
+
+export interface CalibrationDocument {
+  version: 1;
+  baseProjectSha256: string;
+  revision: number;
+  updatedAt: string;
+  label?: string;
+  overrides: CalibrationOverrides;
+}
+
+export interface CalibrationPatch {
+  label?: string;
+  overrides: CalibrationOverrides;
+  clear?: {
+    anchors?: Array<keyof AnchorGraph>;
+    semanticPoints?: SemanticCagePointId[];
+    layers?: string[];
+    runtime?: Array<"envelope" | "motionTuning">;
+  };
+}
+
+export interface CalibrationSessionDocument {
+  version: 1;
+  id: string;
+  createdAt: string;
+  label: string;
+  fromRevision: number;
+  toRevision: number;
+  beforeFingerprint: string;
+  afterFingerprint: string;
+  patch: CalibrationPatch;
+  beforeOverrides: CalibrationOverrides;
+  afterOverrides: CalibrationOverrides;
+  evidenceStatus: "unreviewed" | "accepted" | "rejected";
+}
+
+export interface CalibrationSaveResult {
+  project: PuppetLoomProject;
+  calibration: CalibrationDocument;
+  session: CalibrationSessionDocument;
+  sessionPath: string;
+}
+
+export interface ProjectDescription {
+  project: string;
+  directory: string;
+  version: number;
+  calibrationRevision: number;
+  canvas: Size;
+  rigLevel: RigLevel;
+  anchors: AnchorGraph;
+  semanticPoints: Partial<Record<SemanticCagePointId, SemanticCagePoint>>;
+  runtime: RuntimeSettings;
+  layers: Array<{
+    id: string;
+    sourceName: string;
+    role: SemanticRole;
+    side: Side;
+    parentGroup: LayerBinding["parentGroup"];
+    bounds: Rect;
+    pivot: Point;
+    secondaryAnchors?: LayerSecondaryAnchors;
+    mesh: { rows: number; cols: number; pointCount: number };
+    weights: LayerWeights;
+  }>;
+}
+
+export type RenderSuiteKind = "calibration" | "poses" | "motion";
+
+export interface RenderArtifact {
+  id: string;
+  kind: "pose" | "motion" | "sheet" | "difference";
+  path: string;
+  state?: Partial<MotionState>;
+}
+
+export interface RenderSuiteResult {
+  project: string;
+  revision: number;
+  suite: RenderSuiteKind;
+  outputDirectory: string;
+  artifacts: RenderArtifact[];
+}
+
+export interface RevisionComparisonResult {
+  project: string;
+  fromRevision: number;
+  toRevision: number;
+  outputDirectory: string;
+  before: RenderSuiteResult;
+  after: RenderSuiteResult;
+  comparisonSheet: string;
+  differenceImage: string;
 }
 
 export interface AssetRequest {

@@ -142,8 +142,8 @@ function applyBlendMode(gl: WebGL2RenderingContext, mode: string): void {
 export class PuppetRenderer {
   readonly canvas: HTMLCanvasElement;
   readonly gl: WebGL2RenderingContext;
-  readonly project: PuppetLoomProject;
-  readonly controller: CalmMotionController;
+  private currentProject: PuppetLoomProject;
+  controller: CalmMotionController;
   private readonly program: WebGLProgram;
   private readonly vertexBuffer: WebGLBuffer;
   private readonly resources = new Map<string, LayerGpuResources>();
@@ -154,7 +154,7 @@ export class PuppetRenderer {
 
   private constructor(canvas: HTMLCanvasElement, project: PuppetLoomProject) {
     this.canvas = canvas;
-    this.project = project;
+    this.currentProject = project;
     const gl = canvas.getContext("webgl2", { alpha: true, antialias: true, stencil: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
     if (!gl) throw new Error("当前环境不支持 WebGL2。" );
     this.gl = gl;
@@ -163,6 +163,10 @@ export class PuppetRenderer {
     if (!vertexBuffer) throw new Error("无法创建 WebGL 顶点缓冲区。" );
     this.vertexBuffer = vertexBuffer;
     this.controller = new CalmMotionController(project);
+  }
+
+  get project(): PuppetLoomProject {
+    return this.currentProject;
   }
 
   static async create(canvas: HTMLCanvasElement, project: PuppetLoomProject, resolveTexture: TextureResolver): Promise<PuppetRenderer> {
@@ -293,6 +297,22 @@ export class PuppetRenderer {
       y: Math.max(-1, Math.min(1, target.y)),
       strength: Math.max(0, Math.min(1, target.strength))
     };
+  }
+
+  updateProject(project: PuppetLoomProject): void {
+    const currentIds = new Set(this.currentProject.layers.map((layer) => layer.id));
+    if (project.layers.length !== currentIds.size || project.layers.some((layer) => !currentIds.has(layer.id))) {
+      throw new Error("编辑期间不能增加或移除纹理图层，请重新打开项目。" );
+    }
+    for (const layer of project.layers) {
+      const resource = this.resources.get(layer.id);
+      if (!resource) continue;
+      this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
+      this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(layer.mesh.triangles), this.gl.STATIC_DRAW);
+      resource.indexCount = layer.mesh.triangles.length;
+    }
+    this.currentProject = project;
+    this.controller = new CalmMotionController(project);
   }
 
   dispose(): void {

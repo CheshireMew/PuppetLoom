@@ -1,8 +1,21 @@
 import { appendFileSync, mkdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createProject, inspectPsd, loadProject, verifyProject } from "@puppetloom/core";
+import {
+  compareProjectRevisions,
+  createProject,
+  inspectPsd,
+  listCalibrationSessions,
+  loadBaseProject,
+  loadCalibration,
+  loadProject,
+  restoreCalibrationRevision,
+  saveCalibrationPatch,
+  setCalibrationEvidenceStatus,
+  verifyProject
+} from "@puppetloom/core";
+import type { CalibrationPatch } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen } from "electron";
 import type { DesktopCreateRequest, ViewerState } from "./global.js";
@@ -15,6 +28,12 @@ const viewerProjects = new Map<number, string>();
 const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 let runtimeLogPath: string | undefined;
 
+interface RecentProject {
+  directory: string;
+  name: string;
+  openedAt: string;
+}
+
 function runtimeLog(event: string, details: Record<string, unknown> = {}): void {
   if (!runtimeLogPath) return;
   try {
@@ -25,11 +44,34 @@ function runtimeLog(event: string, details: Record<string, unknown> = {}): void 
   }
 }
 
+async function recentProjects(): Promise<RecentProject[]> {
+  try {
+    const value = JSON.parse(await readFile(join(applicationProfile, "recent-projects.json"), "utf8"));
+    return Array.isArray(value) ? value.filter((entry): entry is RecentProject => entry && typeof entry.directory === "string" && typeof entry.name === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function rememberProject(projectDirectory: string): Promise<RecentProject[]> {
+  const directory = resolve(projectDirectory);
+  const project = await loadProject(directory);
+  const current = (await recentProjects()).filter((entry) => !samePath(entry.directory, directory));
+  const next = [{ directory, name: project.name, openedAt: new Date().toISOString() }, ...current].slice(0, 12);
+  mkdirSync(applicationProfile, { recursive: true });
+  await writeFile(join(applicationProfile, "recent-projects.json"), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  return next;
+}
+
 function queryProjectArgument(commandLine = process.argv): string | undefined {
   const index = commandLine.indexOf("--project");
   const candidate = index >= 0 ? commandLine[index + 1] : undefined;
   const cleaned = candidate?.replace(/^"+|"+$/g, "");
   return cleaned ? resolve(cleaned) : undefined;
+}
+
+function queryEditArgument(commandLine = process.argv): boolean {
+  return commandLine.includes("--edit");
 }
 
 function errorMessage(cause: unknown): string {
@@ -40,10 +82,11 @@ function samePath(left: string, right: string): boolean {
   return resolve(left).toLocaleLowerCase() === resolve(right).toLocaleLowerCase();
 }
 
-function projectFromAdditionalData(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const project = (value as Record<string, unknown>).project;
-  return typeof project === "string" && project ? resolve(project) : undefined;
+function launchFromAdditionalData(value: unknown): { project?: string; edit: boolean } {
+  if (!value || typeof value !== "object") return { edit: false };
+  const data = value as Record<string, unknown>;
+  const project = typeof data.project === "string" && data.project ? resolve(data.project) : undefined;
+  return { ...(project ? { project } : {}), edit: data.edit === true };
 }
 
 function ownerWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | undefined {
@@ -174,44 +217,58 @@ async function createViewer(projectDirectory: string): Promise<BrowserWindow> {
   return window;
 }
 
-function createControlWindow(): BrowserWindow {
+function createControlWindow(projectDirectory?: string, editor = false): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1040,
-    height: 760,
-    minWidth: 860,
-    minHeight: 640,
+    width: editor ? 1440 : 1040,
+    height: editor ? 900 : 760,
+    minWidth: editor ? 1100 : 860,
+    minHeight: editor ? 700 : 640,
     backgroundColor: "#11131a",
-    title: "PuppetLoom",
+    title: editor ? "PuppetLoom 编辑器" : "PuppetLoom",
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
   });
-  void window.loadFile(rendererPage);
+  const query = editor && projectDirectory ? { editor: "1", project: resolve(projectDirectory) } : undefined;
+  void window.loadFile(rendererPage, query ? { query } : undefined);
   return window;
 }
 
+async function withCalibrationEvidence(projectDirectory: string, result: Awaited<ReturnType<typeof saveCalibrationPatch>>) {
+  const evidence = await compareProjectRevisions(
+    projectDirectory,
+    result.session.fromRevision,
+    result.session.toRevision,
+    join(projectDirectory, "reports", "calibration", result.session.id)
+  );
+  return { ...result, evidence };
+}
+
 const initialProject = queryProjectArgument();
+const initialEdit = queryEditArgument();
 runtimeLogPath = initialProject ? join(initialProject, "reports", "runtime.log") : undefined;
 const automatedExit = Number(process.env.PUPPETLOOM_E2E_EXIT_AFTER_MS ?? 0);
-if (Number.isFinite(automatedExit) && automatedExit > 0) {
-  const automatedProfile = process.env.PUPPETLOOM_E2E_USER_DATA
-    ? resolve(process.env.PUPPETLOOM_E2E_USER_DATA)
-    : join("D:\\Tools", "PuppetLoom", "e2e", `electron-${process.pid}`);
-  app.setPath("userData", automatedProfile);
-  app.setPath("cache", join(automatedProfile, "cache"));
-}
+const applicationProfile = process.env.PUPPETLOOM_E2E_USER_DATA
+  ? resolve(process.env.PUPPETLOOM_E2E_USER_DATA)
+  : process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || Number.isFinite(automatedExit) && automatedExit > 0
+    ? join("D:\\Tools", "PuppetLoom", "e2e", `electron-${process.pid}`)
+    : join("D:\\Tools", "PuppetLoom", "user-data");
+app.setPath("userData", applicationProfile);
+app.setPath("cache", join(applicationProfile, "cache"));
 const allowMultipleInstances = process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || (Number.isFinite(automatedExit) && automatedExit > 0);
-const hasInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock({ project: initialProject ?? "" });
-runtimeLog("app-start", { argv: process.argv, initialProject, allowMultipleInstances, hasInstanceLock });
+const hasInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock({ project: initialProject ?? "", edit: initialEdit });
+runtimeLog("app-start", { argv: process.argv, initialProject, initialEdit, allowMultipleInstances, hasInstanceLock });
 
 if (!hasInstanceLock) app.quit();
 
 if (hasInstanceLock && !allowMultipleInstances) {
   app.on("second-instance", (_event, commandLine, _workingDirectory, additionalData) => {
-    const fromData = projectFromAdditionalData(additionalData);
-    const project = fromData ?? queryProjectArgument(commandLine);
+    const fromData = launchFromAdditionalData(additionalData);
+    const project = fromData.project ?? queryProjectArgument(commandLine);
+    const edit = fromData.edit || queryEditArgument(commandLine);
     void app.whenReady().then(async () => {
       if (project) {
         try {
-          await createViewer(project);
+          if (edit) createControlWindow(project, true);
+          else await createViewer(project);
         } catch (cause) {
           dialog.showErrorBox("无法启动角色", errorMessage(cause));
         }
@@ -249,9 +306,50 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       ...(request.reference ? { reference: resolve(request.reference) } : {}),
       ...(request.name ? { name: request.name } : {})
     });
+    await rememberProject(result.outputDirectory);
     return { outputDirectory: result.outputDirectory, report: result.report, verify: await verifyProject(result.outputDirectory) };
   });
-  ipcMain.handle("project:read", (_event, directory: string) => loadProject(resolve(directory)));
+  ipcMain.handle("project:recent", () => recentProjects());
+  ipcMain.handle("project:read", async (_event, directory: string) => {
+    const projectDirectory = resolve(directory);
+    const project = await loadProject(projectDirectory);
+    await rememberProject(projectDirectory);
+    return project;
+  });
+  ipcMain.handle("editor:read", async (_event, directory: string) => {
+    const projectDirectory = resolve(directory);
+    await rememberProject(projectDirectory);
+    return {
+      projectDirectory,
+      baseProject: await loadBaseProject(projectDirectory),
+      project: await loadProject(projectDirectory),
+      calibration: await loadCalibration(projectDirectory),
+      sessions: await listCalibrationSessions(projectDirectory)
+    };
+  });
+  ipcMain.handle("editor:save", async (_event, directory: string, patch: CalibrationPatch) => {
+    const projectDirectory = resolve(directory);
+    return withCalibrationEvidence(projectDirectory, await saveCalibrationPatch(projectDirectory, patch));
+  });
+  ipcMain.handle("editor:restore", async (_event, directory: string, revision: number, label?: string) => {
+    const projectDirectory = resolve(directory);
+    return withCalibrationEvidence(projectDirectory, await restoreCalibrationRevision(projectDirectory, revision, label));
+  });
+  ipcMain.handle("editor:evidence", (_event, directory: string, sessionId: string, status: "accepted" | "rejected" | "unreviewed") => {
+    return setCalibrationEvidenceStatus(resolve(directory), sessionId, status);
+  });
+  ipcMain.handle("window:editor-mode", (event, enabled: boolean) => {
+    const window = ownerWindow(event);
+    if (!window) return false;
+    if (enabled) {
+      window.setMinimumSize(1100, 700);
+      const [width = 1100, height = 700] = window.getSize();
+      if (width < 1320 || height < 820) window.setSize(Math.max(width, 1440), Math.max(height, 900), true);
+    } else {
+      window.setMinimumSize(860, 640);
+    }
+    return true;
+  });
   ipcMain.handle("project:asset", async (_event, directory: string, relative: string) => {
     const root = resolve(directory);
     const target = resolve(root, relative);
@@ -260,7 +358,9 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     return { mime, bytes: new Uint8Array(await readFile(target)) };
   });
   ipcMain.handle("viewer:launch", async (_event, directory: string) => {
-    const window = await createViewer(resolve(directory));
+    const projectDirectory = resolve(directory);
+    await rememberProject(projectDirectory);
+    const window = await createViewer(projectDirectory);
     return { id: window.id, state: stateFor(window) };
   });
   ipcMain.handle("viewer:control", (_event, id: number, action: string) => {
@@ -290,7 +390,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   const project = initialProject;
   if (project) {
     try {
-      await createViewer(project);
+      if (initialEdit) createControlWindow(project, true);
+      else await createViewer(project);
     } catch (cause) {
       dialog.showErrorBox("无法启动角色", errorMessage(cause));
       createControlWindow();

@@ -1,12 +1,12 @@
 # PuppetLoom 项目格式
 
-项目是普通目录。`puppetloom.json` 的顶层 `version` 当前为 `1`；读取器会用严格结构验证必要字段，但不会依赖输出目录名。
+项目是普通目录。`puppetloom.json` 的顶层 `version` 当前为 `2`；读取器仍兼容版本 1，并在内存中补齐版本 2 默认值，不会为了读取旧项目而改写文件。读取器用严格结构验证必要字段，但不依赖输出目录名。
 
 ## 顶层字段
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 项目格式版本，当前为 `1` |
+| `version` | 项目格式版本，当前为 `2` |
 | `name` | 创建时指定的名称，默认使用 PSD 文件名 |
 | `canvas` | 原 PSD 画布像素尺寸 |
 | `source` | 原文件名、PSD SHA-256、相对路径，以及可选参考图路径和哈希 |
@@ -33,6 +33,7 @@
 - 语义 `role`、左右侧 `side`、原顺序 `order`、`opacity` 和 `blendMode`；
 - 标准化 `bounds` 与相对纹理路径 `texture`；
 - 变形中心 `pivot`、规则网格顶点/UV/三角形，以及可选的局部固定点 `secondaryAnchors`；
+- 可选的逐顶点 `mesh.influences`：`head`、`body`、`gaze`、`physics` 和 `pin`。前四项调节某个顶点受对应运动的比例，`pin` 用于固定根部或必须保持连接的位置；
 - 头部、身体、视线和惯性的作用权重；
 - 所属头部或身体组、虹膜可选的 `clipLayerId`，以及嘴部可选的 `mouthVariant`（`closed`、`slight` 或 `open`）。
 
@@ -49,6 +50,18 @@
 语义项目还会生成 `reports/semantic-cage.png`、带编号与置信度表的 `reports/semantic-cage-head.png`，以及机器可读的 `reports/landmark-report.json`。JSON 同时列出控制点、三角形、修正记录和实际被脸部/头骨控制网作用的 PSD 图层，可由 Agent 在无需人工绑点的情况下复核结果。
 
 角色窗口运行后会按需创建 `reports/runtime.log`。它使用逐行 JSON 记录启动参数、项目读取、窗口创建、页面加载、渲染进程异常和正常关闭事件，用于诊断“进程存在但窗口没有出现”等桌面问题；它不包含纹理像素或用户素材。
+
+## 校准与修订
+
+`puppetloom.json` 是自动绑定基线，不因用户拖动控制点而重写。当前校准在 `calibration/current.json` 中保存：
+
+- `baseProjectSha256` 指向对应基线，避免把补丁误用到另一个项目；
+- `revision` 从 0 递增；
+- `overrides` 只保存改变过的锚点、语义点、图层属性、稀疏网格位移、逐顶点作用权重和运行参数。
+
+每次保存都会创建 `calibration/sessions/<session-id>.json`，其中包含前后修订、补丁、修改前后覆盖、项目指纹和 `unreviewed/accepted/rejected` 证据状态。恢复旧修订也会创建新修订，不覆盖或删除历史。
+
+桌面编辑器和 CLI 都会在 `reports/calibration/<session-id>/` 生成同一份视觉证据：九个主姿态、九个次级运动、`before-after.png`、`difference.png` 与机器可读清单。项目级校准记录是对当前角色的事实；只有多个项目反复出现并经过复核的问题，才应进入自动绑定算法或 Agent Skill 的通用规则。
 
 ## 补充素材请求
 

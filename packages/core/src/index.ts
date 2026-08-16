@@ -1,4 +1,5 @@
 export * from "./assets.js";
+export * from "./calibration.js";
 export * from "./classify.js";
 export * from "./deform.js";
 export * from "./errors.js";
@@ -6,6 +7,7 @@ export * from "./math.js";
 export * from "./offline-render.js";
 export * from "./project.js";
 export * from "./psd.js";
+export * from "./render-suite.js";
 export * from "./pose-field.js";
 export * from "./rig.js";
 export * from "./safety.js";

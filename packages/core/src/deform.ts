@@ -194,7 +194,12 @@ function hasSidePerspective(layer: LayerBinding): boolean {
   return layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash" || layer.role === "eyeClosed" || layer.role === "eyebrow" || layer.role === "ear";
 }
 
-export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState): Point {
+function vertexInfluence(layer: LayerBinding, channel: "head" | "body" | "gaze" | "physics" | "pin", index: number | undefined, fallback: number): number {
+  if (index === undefined) return fallback;
+  return clamp(layer.mesh.influences?.[channel]?.[index] ?? fallback, 0, 1);
+}
+
+export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
   const envelope = project.runtime.envelope;
   const faceWidth = Math.max(0.08, Math.abs((project.anchors.cheekLeft?.x ?? 0.6) - (project.anchors.cheekRight?.x ?? 0.4)) / 0.64);
   const faceHeight = Math.max(0.1, Math.abs((project.anchors.chin?.y ?? 0.5) - (project.anchors.forehead?.y ?? 0.25)) / 0.78);
@@ -204,6 +209,11 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   const pitch = clamp(state.headPitch, -1, 1) * envelope.headPitch;
   const headRoll = (clamp(state.headRoll, -1, 1) * envelope.headRollDegrees * Math.PI) / 180;
   const bodyRoll = (clamp(state.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180;
+  const release = 1 - vertexInfluence(layer, "pin", vertexIndex, 0);
+  const bodyLayerWeight = layer.weights.body * vertexInfluence(layer, "body", vertexIndex, 1) * release;
+  const headLayerWeight = layer.weights.head * vertexInfluence(layer, "head", vertexIndex, 1) * release;
+  const gazeLayerWeight = layer.weights.gaze * vertexInfluence(layer, "gaze", vertexIndex, 1) * release;
+  const physicsLayerWeight = layer.weights.physics * vertexInfluence(layer, "physics", vertexIndex, 1) * release;
   let point = { ...base };
 
   if ((layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && state.blink > 0) {
@@ -211,11 +221,11 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     point.y = layer.pivot.y + (point.y - layer.pivot.y) * (1 - closing * 0.72);
   }
 
-  if (layer.weights.body > 0) {
-    const bodyWeight = layer.weights.body * bodyMotionInfluence(layer, base);
+  if (bodyLayerWeight > 0) {
+    const bodyWeight = bodyLayerWeight * bodyMotionInfluence(layer, base);
     const breath = clamp(state.breath, -1, 1);
     const bodyPitch = clamp(state.bodyPitch, -1, 1);
-    const breathWeight = breathInfluence(layer) * layer.weights.body;
+    const breathWeight = breathInfluence(layer) * bodyLayerWeight;
     if (breathWeight > 0) {
       const scaleX = 1 + breath * envelope.breath * breathWeight;
       const scaleY = 1 + breath * envelope.breath * 0.28 * breathWeight;
@@ -244,10 +254,13 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     point = rotated;
   }
 
-  if (layer.weights.head > 0) {
+  if (headLayerWeight > 0) {
     const neckV = layer.role === "neck" ? clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1) : 0;
-    const headWeight = layer.weights.head * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
-    if (project.runtime.poseField) point = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch, project.runtime.semanticCage);
+    const headWeight = headLayerWeight * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
+    if (project.runtime.poseField) {
+      const posed = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch, project.runtime.semanticCage);
+      point = { x: point.x + (posed.x - point.x) * headWeight, y: point.y + (posed.y - point.y) * headWeight };
+    }
     else {
       if (layer.side !== "center" && hasSidePerspective(layer)) {
         // Layer side is anatomical, so character-left is screen-right.
@@ -272,17 +285,17 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     point = rotate(point, headPivot, headRoll * headWeight);
   }
 
-  if (layer.weights.gaze > 0) {
+  if (gazeLayerWeight > 0) {
     const eyeWidth = layer.bounds.width;
     const eyeHeight = layer.bounds.height;
-    point.x += clamp(state.gazeX, -1, 1) * envelope.gazeX * eyeWidth;
-    point.y += clamp(state.gazeY, -1, 1) * envelope.gazeY * eyeHeight;
+    point.x += clamp(state.gazeX, -1, 1) * envelope.gazeX * eyeWidth * gazeLayerWeight;
+    point.y += clamp(state.gazeY, -1, 1) * envelope.gazeY * eyeHeight * gazeLayerWeight;
   }
 
-  if (layer.weights.physics > 0) {
+  if (physicsLayerWeight > 0) {
     const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
     const free = secondaryFree(layer, base);
-    const weight = layer.weights.physics;
+    const weight = physicsLayerWeight;
     if (layer.role === "frontHair") {
       if (state.secondary) {
         const bend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, free);
@@ -359,7 +372,7 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
 }
 
 export function deformedPoints(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): Point[] {
-  return layer.mesh.points.map((point) => deformPoint(project, layer, point, state));
+  return layer.mesh.points.map((point, index) => deformPoint(project, layer, point, state, index));
 }
 
 export const neutralMotionState: MotionState = {

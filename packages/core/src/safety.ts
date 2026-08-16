@@ -186,7 +186,7 @@ export function validatePose(project: PuppetLoomProject, id: string, state: Moti
   };
 }
 
-function validateAll(project: PuppetLoomProject): PoseValidation[] {
+export function validateProjectPoses(project: PuppetLoomProject): PoseValidation[] {
   return safetyPoses.map((pose) => validatePose(project, pose.id, safetyPoseState(pose.yaw, pose.pitch, pose.roll)));
 }
 
@@ -251,12 +251,12 @@ export function applySafetyLimits(input: PuppetLoomProject): PuppetLoomProject {
   const originalEnvelope = input.runtime.envelope;
   for (const scale of scales) {
     const project = { ...input, runtime: { ...input.runtime, envelope: scaleEnvelope(originalEnvelope, scale) } };
-    const poses = validateAll(project);
+    const poses = validateProjectPoses(project);
     if (poses.every((pose) => pose.passed)) return { ...project, quality: qualityFrom(project, poses, scale) };
   }
 
   if (input.rigLevel === "semantic") return applySafetyLimits(downgrade(input, "grouped"));
   if (input.rigLevel === "grouped") return applySafetyLimits(downgrade(input, "minimal"));
-  const poses = validateAll(input);
+  const poses = validateProjectPoses(input);
   return { ...input, quality: qualityFrom(input, poses, 0.25) };
 }

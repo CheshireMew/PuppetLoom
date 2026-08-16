@@ -1,20 +1,42 @@
-import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { access, copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, parse, resolve } from "node:path";
 import sharp from "sharp";
 import { makeAssetRequests } from "./assets.js";
+import { applyCalibrationOverrides, clearCalibrationOverrides, mergeCalibrationOverrides } from "./calibration.js";
 import { PuppetLoomError } from "./errors.js";
 import { renderProjectPosePng } from "./offline-render.js";
 import { importPsd, inspectionFromImported, type ImportedPsd, type PixelBuffer } from "./psd.js";
 import { buildRig } from "./rig.js";
-import { applySafetyLimits, safetyPoses, safetyPoseState } from "./safety.js";
-import { puppetLoomProjectSchema } from "./schema.js";
-import type { BuildReport, BuildResult, CreateOptions, PuppetLoomProject, SourceDescriptor } from "./types.js";
+import { applySafetyLimits, safetyPoses, safetyPoseState, validateProjectPoses } from "./safety.js";
+import { calibrationDocumentSchema, calibrationPatchSchema, calibrationSessionSchema, puppetLoomProjectSchema } from "./schema.js";
+import type {
+  BuildReport,
+  BuildResult,
+  CalibrationDocument,
+  CalibrationPatch,
+  CalibrationSaveResult,
+  CalibrationSessionDocument,
+  CreateOptions,
+  ProjectDescription,
+  PuppetLoomProject,
+  SourceDescriptor
+} from "./types.js";
 
 async function sha256(path: string): Promise<string> {
   const hash = createHash("sha256");
   hash.update(await readFile(path));
   return hash.digest("hex");
+}
+
+function projectFingerprint(project: PuppetLoomProject): string {
+  return createHash("sha256").update(JSON.stringify(project)).digest("hex");
+}
+
+async function atomicJson(path: string, value: unknown): Promise<void> {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await rename(temporary, path);
 }
 
 async function ensureWritableOutput(output: string): Promise<void> {
@@ -241,7 +263,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   const requests = makeAssetRequests(project);
   const report = buildReport(project, inspection.recognizedLayerCount, imported.warnings, requests.requests.length);
 
-  for (const directory of ["source", "textures", "reports", "requests", "supplements"]) await mkdir(join(output, directory), { recursive: true });
+  for (const directory of ["source", "textures", "reports", "requests", "supplements", "calibration", "calibration/sessions", "reports/calibration"]) await mkdir(join(output, directory), { recursive: true });
   await copyFile(input, join(output, "source", "source.psd"));
   if (options.reference) await sharp(resolve(options.reference)).png().toFile(join(output, "source", "reference.png"));
   await Promise.all(
@@ -265,17 +287,229 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   }));
   await writePoseSheet(join(output, "reports", "pose-sheet.png"), imported, project);
   await writeFile(join(output, "puppetloom.json"), `${JSON.stringify(project, null, 2)}\n`, "utf8");
+  await writeFreshCalibration(output);
   await writeFile(join(output, "reports", "build-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await writeFile(join(output, "requests", "asset-requests.json"), `${JSON.stringify(requests, null, 2)}\n`, "utf8");
   return { project, report, assetRequests: requests, outputDirectory: output };
 }
 
-export async function loadProject(projectDirectory: string): Promise<PuppetLoomProject> {
+async function readBaseProject(projectDirectory: string): Promise<{ project: PuppetLoomProject; hash: string }> {
   const path = join(resolve(projectDirectory), "puppetloom.json");
   try {
     await access(path);
-    return puppetLoomProjectSchema.parse(JSON.parse(await readFile(path, "utf8"))) as PuppetLoomProject;
+    const text = await readFile(path, "utf8");
+    const parsed = puppetLoomProjectSchema.parse(JSON.parse(text)) as unknown as PuppetLoomProject & { version: 1 | 2 };
+    return { project: { ...parsed, version: 2 }, hash: createHash("sha256").update(text).digest("hex") };
   } catch (error) {
     throw new PuppetLoomError("INVALID_PROJECT", `无法读取 PuppetLoom 项目：${projectDirectory}`, { cause: error });
   }
+}
+
+function emptyCalibration(baseProjectSha256: string): CalibrationDocument {
+  return {
+    version: 1,
+    baseProjectSha256,
+    revision: 0,
+    updatedAt: new Date().toISOString(),
+    overrides: {}
+  };
+}
+
+async function writeFreshCalibration(projectDirectory: string): Promise<CalibrationDocument> {
+  const root = resolve(projectDirectory);
+  const { hash } = await readBaseProject(root);
+  const document = emptyCalibration(hash);
+  await mkdir(join(root, "calibration", "sessions"), { recursive: true });
+  await atomicJson(join(root, "calibration", "current.json"), document);
+  return document;
+}
+
+export async function loadBaseProject(projectDirectory: string): Promise<PuppetLoomProject> {
+  return (await readBaseProject(projectDirectory)).project;
+}
+
+export async function loadCalibration(projectDirectory: string): Promise<CalibrationDocument> {
+  const root = resolve(projectDirectory);
+  const { hash } = await readBaseProject(root);
+  const path = join(root, "calibration", "current.json");
+  try {
+    const document = calibrationDocumentSchema.parse(JSON.parse(await readFile(path, "utf8"))) as CalibrationDocument;
+    if (document.baseProjectSha256 !== hash) {
+      if (document.revision === 0 && Object.keys(document.overrides).length === 0) return emptyCalibration(hash);
+      throw new Error("基础项目已改变，现有校准不能安全套用。" );
+    }
+    return document;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyCalibration(hash);
+    throw new PuppetLoomError("INVALID_PROJECT", `无法读取项目校准：${projectDirectory}`, { cause: error });
+  }
+}
+
+export async function loadProject(projectDirectory: string): Promise<PuppetLoomProject> {
+  const base = await loadBaseProject(projectDirectory);
+  const calibration = await loadCalibration(projectDirectory);
+  try {
+    return applyCalibrationOverrides(base, calibration.overrides);
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_PROJECT", `无法应用项目校准：${projectDirectory}`, { cause: error });
+  }
+}
+
+export async function describeProject(projectDirectory: string): Promise<ProjectDescription> {
+  const directory = resolve(projectDirectory);
+  const project = await loadProject(directory);
+  const calibration = await loadCalibration(directory);
+  return {
+    project: project.name,
+    directory,
+    version: project.version,
+    calibrationRevision: calibration.revision,
+    canvas: project.canvas,
+    rigLevel: project.rigLevel,
+    anchors: project.anchors,
+    semanticPoints: project.runtime.semanticCage?.points ?? {},
+    runtime: project.runtime,
+    layers: project.layers.map((layer) => ({
+      id: layer.id,
+      sourceName: layer.sourceName,
+      role: layer.role,
+      side: layer.side,
+      parentGroup: layer.parentGroup,
+      bounds: layer.bounds,
+      pivot: layer.pivot,
+      ...(layer.secondaryAnchors ? { secondaryAnchors: layer.secondaryAnchors } : {}),
+      mesh: { rows: layer.mesh.rows, cols: layer.mesh.cols, pointCount: layer.mesh.points.length },
+      weights: layer.weights
+    }))
+  };
+}
+
+export async function saveCalibrationPatch(projectDirectory: string, rawPatch: CalibrationPatch): Promise<CalibrationSaveResult> {
+  const root = resolve(projectDirectory);
+  let patch: CalibrationPatch;
+  try {
+    patch = calibrationPatchSchema.parse(rawPatch) as CalibrationPatch;
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_INPUT", "校准补丁格式无效。", { cause: error });
+  }
+  const { project: base, hash } = await readBaseProject(root);
+  const current = await loadCalibration(root);
+  if (current.baseProjectSha256 !== hash && current.revision > 0) throw new PuppetLoomError("INVALID_PROJECT", "基础项目已改变，不能继续追加校准。" );
+  const before = applyCalibrationOverrides(base, current.overrides);
+  const overrides = mergeCalibrationOverrides(clearCalibrationOverrides(current.overrides, patch.clear), patch.overrides);
+  const after = applyCalibrationOverrides(base, overrides);
+  const poses = validateProjectPoses(after);
+  const failed = poses.filter((pose) => !pose.passed);
+  if (failed.length > 0) {
+    const summary = [...new Set(failed.flatMap((pose) => pose.issues.map((issue) => issue.message)))].slice(0, 4).join("；");
+    throw new PuppetLoomError("INVALID_INPUT", `校准导致 ${failed.length} 个姿态不安全：${summary}`);
+  }
+  after.quality = { ...after.quality, poseValidations: poses, issues: [], safetyScale: 1 };
+  const now = new Date().toISOString();
+  const revision = current.revision + 1;
+  const id = `${String(revision).padStart(4, "0")}-${randomUUID()}`;
+  const label = patch.label?.trim() || `校准 ${revision}`;
+  const calibration: CalibrationDocument = {
+    version: 1,
+    baseProjectSha256: hash,
+    revision,
+    updatedAt: now,
+    label,
+    overrides
+  };
+  const session: CalibrationSessionDocument = {
+    version: 1,
+    id,
+    createdAt: now,
+    label,
+    fromRevision: current.revision,
+    toRevision: revision,
+    beforeFingerprint: projectFingerprint(before),
+    afterFingerprint: projectFingerprint(after),
+    patch,
+    beforeOverrides: current.overrides,
+    afterOverrides: overrides,
+    evidenceStatus: "unreviewed"
+  };
+  const sessions = join(root, "calibration", "sessions");
+  await mkdir(sessions, { recursive: true });
+  const sessionPath = join(sessions, `${id}.json`);
+  await atomicJson(sessionPath, session);
+  await atomicJson(join(root, "calibration", "current.json"), calibration);
+  return { project: after, calibration, session, sessionPath };
+}
+
+export async function listCalibrationSessions(projectDirectory: string): Promise<CalibrationSessionDocument[]> {
+  const directory = join(resolve(projectDirectory), "calibration", "sessions");
+  try {
+    const files = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+    return await Promise.all(files.map(async (name) => calibrationSessionSchema.parse(JSON.parse(await readFile(join(directory, name), "utf8"))) as CalibrationSessionDocument));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new PuppetLoomError("IO_ERROR", `无法读取校准历史：${projectDirectory}`, { cause: error });
+  }
+}
+
+export async function loadProjectRevision(projectDirectory: string, revision: number): Promise<PuppetLoomProject> {
+  if (!Number.isInteger(revision) || revision < 0) throw new PuppetLoomError("INVALID_INPUT", "校准修订号必须是非负整数。" );
+  const base = await loadBaseProject(projectDirectory);
+  if (revision === 0) return base;
+  const current = await loadCalibration(projectDirectory);
+  if (revision === current.revision) return applyCalibrationOverrides(base, current.overrides);
+  const session = (await listCalibrationSessions(projectDirectory)).find((candidate) => candidate.toRevision === revision);
+  if (!session) throw new PuppetLoomError("INVALID_INPUT", `找不到校准修订 ${revision}。`);
+  return applyCalibrationOverrides(base, session.afterOverrides);
+}
+
+export async function setCalibrationEvidenceStatus(
+  projectDirectory: string,
+  sessionId: string,
+  status: CalibrationSessionDocument["evidenceStatus"]
+): Promise<CalibrationSessionDocument> {
+  const path = join(resolve(projectDirectory), "calibration", "sessions", `${sessionId}.json`);
+  try {
+    if (!["accepted", "rejected", "unreviewed"].includes(status)) throw new Error("证据状态无效。");
+    const session = calibrationSessionSchema.parse(JSON.parse(await readFile(path, "utf8"))) as CalibrationSessionDocument;
+    const next = { ...session, evidenceStatus: status };
+    await atomicJson(path, next);
+    return next;
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_INPUT", `找不到校准会话：${sessionId}`, { cause: error });
+  }
+}
+
+export async function restoreCalibrationRevision(projectDirectory: string, revision: number, label?: string): Promise<CalibrationSaveResult> {
+  if (!Number.isInteger(revision) || revision < 0) throw new PuppetLoomError("INVALID_INPUT", "校准修订号必须是非负整数。" );
+  const sessions = await listCalibrationSessions(projectDirectory);
+  const overrides = revision === 0 ? {} : sessions.find((session) => session.toRevision === revision)?.afterOverrides;
+  if (!overrides) throw new PuppetLoomError("INVALID_INPUT", `找不到校准修订 ${revision}。`);
+  const current = await loadCalibration(projectDirectory);
+  const resetPatch: CalibrationPatch = { label: label ?? `恢复到校准 ${revision}`, overrides };
+  const root = resolve(projectDirectory);
+  const { project: base, hash } = await readBaseProject(root);
+  const before = applyCalibrationOverrides(base, current.overrides);
+  const after = applyCalibrationOverrides(base, overrides);
+  const poses = validateProjectPoses(after);
+  if (poses.some((pose) => !pose.passed)) throw new PuppetLoomError("INVALID_INPUT", `校准修订 ${revision} 未通过当前安全检查。`);
+  const now = new Date().toISOString();
+  const nextRevision = current.revision + 1;
+  const id = `${String(nextRevision).padStart(4, "0")}-${randomUUID()}`;
+  const calibration: CalibrationDocument = {
+    version: 1,
+    baseProjectSha256: hash,
+    revision: nextRevision,
+    updatedAt: now,
+    ...(resetPatch.label ? { label: resetPatch.label } : {}),
+    overrides
+  };
+  const session: CalibrationSessionDocument = {
+    version: 1, id, createdAt: now, label: resetPatch.label!, fromRevision: current.revision, toRevision: nextRevision,
+    beforeFingerprint: projectFingerprint(before), afterFingerprint: projectFingerprint(after), patch: resetPatch,
+    beforeOverrides: current.overrides, afterOverrides: overrides, evidenceStatus: "unreviewed"
+  };
+  const sessionPath = join(root, "calibration", "sessions", `${id}.json`);
+  await mkdir(dirname(sessionPath), { recursive: true });
+  await atomicJson(sessionPath, session);
+  await atomicJson(join(root, "calibration", "current.json"), calibration);
+  return { project: after, calibration, session, sessionPath };
 }

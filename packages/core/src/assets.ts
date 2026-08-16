@@ -1,7 +1,8 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import sharp from "sharp";
-import { assetRequestDocumentSchema, puppetLoomProjectSchema } from "./schema.js";
+import { assetRequestDocumentSchema, calibrationDocumentSchema, puppetLoomProjectSchema } from "./schema.js";
 import { makeGridMesh } from "./rig.js";
 import type { AssetRequest, AssetRequestDocument, EnhanceOptions, EnhanceResult, LayerBinding, PuppetLoomProject, Rect } from "./types.js";
 
@@ -178,6 +179,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
   const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant && layer.opacity > 0));
   const nextProject: PuppetLoomProject = {
     ...project,
+    version: 2,
     layers: layers.sort((a, b) => a.order - b.order),
     runtime: {
       ...project.runtime,
@@ -197,7 +199,22 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
     } catch {
       // A previous enhancement backup is intentionally preserved.
     }
-    await writeFile(join(projectDirectory, "puppetloom.json"), `${JSON.stringify(nextProject, null, 2)}\n`, "utf8");
+    const projectText = `${JSON.stringify(nextProject, null, 2)}\n`;
+    await writeFile(join(projectDirectory, "puppetloom.json"), projectText, "utf8");
+    const calibrationPath = join(projectDirectory, "calibration", "current.json");
+    try {
+      const calibration = calibrationDocumentSchema.parse(JSON.parse(await readFile(calibrationPath, "utf8")));
+      const nextCalibration = {
+        ...calibration,
+        baseProjectSha256: createHash("sha256").update(projectText).digest("hex"),
+        updatedAt: new Date().toISOString()
+      };
+      const temporary = `${calibrationPath}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(temporary, `${JSON.stringify(nextCalibration, null, 2)}\n`, "utf8");
+      await rename(temporary, calibrationPath);
+    } catch {
+      // Projects created before calibration support remain valid; calibration is created on the first edit.
+    }
     const reportPath = join(projectDirectory, "reports", "build-report.json");
     try {
       const report = JSON.parse(await readFile(reportPath, "utf8")) as {

@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { join, resolve } from "node:path";
 import { deformedPoints } from "./deform.js";
 import type { ImportedPsd, PixelBuffer } from "./psd.js";
 import type { MotionState, Point, PuppetLoomProject, Rect } from "./types.js";
@@ -17,6 +18,22 @@ function deformedBounds(project: PuppetLoomProject, layerId: string, state: Moti
   const right = Math.max(...points.map((point) => point.x));
   const bottom = Math.max(...points.map((point) => point.y));
   return { x, y, width: right - x, height: bottom - y };
+}
+
+function smoothstep(value: number): number {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * (3 - 2 * t);
+}
+
+function renderedOpacity(layer: PuppetLoomProject["layers"][number], state: MotionState): number {
+  if (layer.role === "eyeClosed") return layer.opacity === 0 ? state.blink : layer.opacity * state.blink;
+  if (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") return layer.opacity * (1 - state.blink);
+  if (layer.role !== "mouth") return layer.opacity;
+  const openness = Math.max(0, Math.min(1, state.mouthOpen));
+  const variant = layer.mouthVariant ?? "closed";
+  if (variant === "closed") return layer.opacity * (1 - smoothstep(openness / 0.42));
+  if (variant === "slight") return layer.opacity * smoothstep(openness / 0.42) * (1 - smoothstep((openness - 0.5) / 0.38));
+  return layer.opacity * smoothstep((openness - 0.42) / 0.58);
 }
 
 function edge(a: Point, b: Point, point: Point): number {
@@ -72,7 +89,7 @@ function rasterTriangle(
   }
 }
 
-export function renderProjectPose(project: PuppetLoomProject, imported: ImportedPsd, state: MotionState, width: number, height: number): PixelBuffer {
+export function renderProjectPoseWithSources(project: PuppetLoomProject, sources: Map<string, PixelBuffer>, state: MotionState, width: number, height: number): PixelBuffer {
   const output: PixelBuffer = { width, height, data: new Uint8ClampedArray(width * height * 4) };
   const scale = Math.min(width / project.canvas.width, height / project.canvas.height);
   const drawnWidth = project.canvas.width * scale;
@@ -81,10 +98,10 @@ export function renderProjectPose(project: PuppetLoomProject, imported: Imported
   const offsetY = (height - drawnHeight) * 0.5;
   const toPixel = (point: Point): Point => ({ x: offsetX + point.x * project.canvas.width * scale, y: offsetY + point.y * project.canvas.height * scale });
   const pixelToNormalized = (x: number, y: number): Point => ({ x: (x - offsetX) / Math.max(1, drawnWidth), y: (y - offsetY) / Math.max(1, drawnHeight) });
-  const sources = new Map(imported.layers.map((layer) => [layer.id, layer.pixels]));
   for (const layer of [...project.layers].sort((left, right) => left.order - right.order)) {
     const source = sources.get(layer.id);
-    if (!source || layer.role === "eyeClosed") continue;
+    const opacity = renderedOpacity(layer, state);
+    if (!source || opacity <= 0) continue;
     const points = deformedPoints(project, layer, state);
     const clip = layer.clipLayerId ? deformedBounds(project, layer.clipLayerId, state) : undefined;
     for (let index = 0; index < layer.mesh.triangles.length; index += 3) {
@@ -98,13 +115,47 @@ export function renderProjectPose(project: PuppetLoomProject, imported: Imported
       const a = { ...toPixel(pa), u: ua.x, v: ua.y };
       const b = { ...toPixel(pb), u: ub.x, v: ub.y };
       const c = { ...toPixel(pc), u: uc.x, v: uc.y };
-      rasterTriangle(output, source, [a, b, c], layer.opacity, clip, pixelToNormalized);
+      rasterTriangle(output, source, [a, b, c], opacity, clip, pixelToNormalized);
     }
   }
   return output;
 }
 
+export function renderProjectPose(project: PuppetLoomProject, imported: ImportedPsd, state: MotionState, width: number, height: number): PixelBuffer {
+  return renderProjectPoseWithSources(project, new Map(imported.layers.map((layer) => [layer.id, layer.pixels])), state, width, height);
+}
+
 export async function renderProjectPosePng(project: PuppetLoomProject, imported: ImportedPsd, state: MotionState, width: number, height: number): Promise<Buffer> {
   const pixels = renderProjectPose(project, imported, state, width, height);
+  return sharp(Buffer.from(pixels.data), { raw: { width, height, channels: 4 } }).png().toBuffer();
+}
+
+export async function loadProjectTextureSources(projectDirectory: string, project: PuppetLoomProject): Promise<Map<string, PixelBuffer>> {
+  const root = resolve(projectDirectory);
+  const entries = await Promise.all(project.layers.map(async (layer) => {
+    const image = await sharp(join(root, layer.texture)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    return [layer.id, { width: image.info.width, height: image.info.height, data: new Uint8ClampedArray(image.data) }] as const;
+  }));
+  return new Map(entries);
+}
+
+export async function renderProjectDirectoryPose(
+  projectDirectory: string,
+  project: PuppetLoomProject,
+  state: MotionState,
+  width: number,
+  height: number
+): Promise<PixelBuffer> {
+  return renderProjectPoseWithSources(project, await loadProjectTextureSources(projectDirectory, project), state, width, height);
+}
+
+export async function renderProjectDirectoryPosePng(
+  projectDirectory: string,
+  project: PuppetLoomProject,
+  state: MotionState,
+  width: number,
+  height: number
+): Promise<Buffer> {
+  const pixels = await renderProjectDirectoryPose(projectDirectory, project, state, width, height);
   return sharp(Buffer.from(pixels.data), { raw: { width, height, channels: 4 } }).png().toBuffer();
 }

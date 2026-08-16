@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuildReport, InspectionReport, PuppetLoomProject } from "@puppetloom/core";
 import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
-import type { ViewerState } from "../electron/global.js";
+import type { RecentProject, ViewerState } from "../electron/global.js";
+import { Editor } from "./Editor.js";
 
 type ViewerAction = "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close";
 
@@ -134,7 +135,7 @@ function Report({ report }: { report: BuildReport }): React.JSX.Element {
   );
 }
 
-function Creator(): React.JSX.Element {
+function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): React.JSX.Element {
   const [input, setInput] = useState("");
   const [reference, setReference] = useState("");
   const [output, setOutput] = useState("");
@@ -144,6 +145,9 @@ function Creator(): React.JSX.Element {
   const [viewerId, setViewerId] = useState<number>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [recent, setRecent] = useState<RecentProject[]>([]);
+
+  useEffect(() => { void window.puppetloom.recentProjects().then(setRecent).catch(() => setRecent([])); }, []);
 
   useEffect(() => {
     if (!input) { setInspection(undefined); return; }
@@ -183,8 +187,7 @@ function Creator(): React.JSX.Element {
     try {
       await window.puppetloom.readProject(directory);
       setProjectDirectory(directory);
-      const launched = await window.puppetloom.launchViewer(directory);
-      setViewerId(launched.id);
+      onEdit(directory);
     } catch (cause) { setError(messageOf(cause)); }
   }
 
@@ -226,6 +229,7 @@ function Creator(): React.JSX.Element {
           {report && <Report report={report} />}
           {projectDirectory && <section className="result-actions">
             <p>项目已写入：<br/><code>{projectDirectory}</code></p>
+            <button className="primary" onClick={() => onEdit(projectDirectory)}>打开绑定与校准编辑器</button>
             <button className="primary" onClick={() => void launch()}>打开透明角色窗口</button>
             {viewerId !== undefined && <div className="remote-controls">
               <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}>暂停 / 继续</button>
@@ -237,6 +241,10 @@ function Creator(): React.JSX.Element {
           {error && <div className="error" role="alert">{error}</div>}
         </aside>
       </div>
+      {recent.length > 0 && <section className="recent-projects">
+        <h2>最近项目</h2>
+        <div>{recent.map((entry) => <button key={entry.directory} onClick={() => onEdit(entry.directory)}><strong>{entry.name}</strong><span>{entry.directory}</span></button>)}</div>
+      </section>}
     </main>
   );
 }
@@ -244,5 +252,8 @@ function Creator(): React.JSX.Element {
 export function App(): React.JSX.Element {
   const params = new URLSearchParams(window.location.search);
   const project = params.get("project");
-  return params.get("viewer") === "1" && project ? <Viewer projectDirectory={project} /> : <Creator />;
+  const [editorProject, setEditorProject] = useState(params.get("editor") === "1" && project ? project : "");
+  if (params.get("viewer") === "1" && project) return <Viewer projectDirectory={project} />;
+  if (editorProject) return <Editor projectDirectory={editorProject} onBack={() => setEditorProject("")} />;
+  return <Creator onEdit={setEditorProject} />;
 }

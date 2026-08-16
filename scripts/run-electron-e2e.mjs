@@ -4,6 +4,7 @@ import { _electron as electron } from "playwright";
 
 const root = resolve(".");
 const output = resolve("test/artifacts", `electron-e2e-${process.pid}-${Date.now()}`);
+const editorScreenshot = resolve("test/artifacts", `editor-e2e-${process.pid}-${Date.now()}.png`);
 await mkdir(resolve("test/artifacts"), { recursive: true });
 
 const electronApp = await electron.launch({
@@ -19,6 +20,56 @@ try {
     return window.puppetloom.create({ input, output: outputDirectory, seed: 42 });
   }, { input: resolve("test/fixtures/semantic.psd"), outputDirectory: output });
   if (!createResult.verify.valid || createResult.report.rigLevel !== "semantic") throw new Error("桌面创建链未返回有效 semantic 项目。" );
+  const recent = await control.evaluate(() => window.puppetloom.recentProjects());
+  if (!recent.some((entry) => entry.directory.toLocaleLowerCase() === output.toLocaleLowerCase())) throw new Error("创建后的项目没有进入最近项目列表。" );
+
+  const workspace = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
+  if (workspace.calibration.revision !== 0 || workspace.project.version !== 2) throw new Error(`桌面编辑工作区没有读取 v2 基线：${JSON.stringify(workspace.calibration)}`);
+  await control.evaluate((projectDirectory) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("editor", "1");
+    url.searchParams.set("project", projectDirectory);
+    window.location.href = url.toString();
+  }, output);
+  await control.getByTestId("editor").waitFor();
+  const controlWindow = await electronApp.browserWindow(control);
+  await control.waitForFunction(() => window.innerWidth >= 1300 && window.innerHeight >= 800);
+  const editorWindowSize = await controlWindow.evaluate((window) => window.getSize());
+  if (editorWindowSize[0] < 1300 || editorWindowSize[1] < 800) throw new Error(`编辑器窗口没有扩展到可操作尺寸：${JSON.stringify(editorWindowSize)}`);
+  await control.waitForFunction(() => {
+    const canvas = document.querySelector(".editor-canvas");
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) return false;
+    const gl = canvas.getContext("webgl2");
+    if (!gl) return false;
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
+    return false;
+  }, undefined, { timeout: 30_000 });
+  await control.screenshot({ path: editorScreenshot });
+  await control.getByRole("button", { name: "网格顶点" }).click();
+  await control.locator(".mesh-handle").first().waitFor();
+  const vertex = await control.locator(".mesh-handle").first().boundingBox();
+  if (!vertex) throw new Error("编辑器没有可拖动的网格顶点。" );
+  await control.mouse.move(vertex.x + vertex.width / 2, vertex.y + vertex.height / 2);
+  await control.mouse.down();
+  await control.mouse.move(vertex.x + vertex.width / 2 + 2, vertex.y + vertex.height / 2, { steps: 3 });
+  await control.mouse.up();
+  const saveButton = control.getByRole("button", { name: "保存校准" });
+  await saveButton.waitFor({ state: "attached" });
+  const undoButton = control.getByRole("button", { name: "撤销" });
+  const redoButton = control.getByRole("button", { name: "重做" });
+  if (await undoButton.isDisabled()) throw new Error("拖动网格后撤销仍不可用。" );
+  await undoButton.click();
+  if (!(await saveButton.isDisabled())) throw new Error("撤销网格修改后仍被标记为待保存。" );
+  if (await redoButton.isDisabled()) throw new Error("撤销后重做仍不可用。" );
+  await redoButton.click();
+  await saveButton.scrollIntoViewIfNeeded();
+  if (await saveButton.isDisabled()) throw new Error("拖动网格后保存校准仍不可用。" );
+  await saveButton.click();
+  await control.getByText(/已保存 revision 1/).waitFor({ timeout: 30_000 });
+  const calibratedWorkspace = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
+  if (calibratedWorkspace.calibration.revision !== 1) throw new Error("桌面编辑器没有持久化校准修订。" );
 
   const viewerPromise = electronApp.waitForEvent("window");
   const launched = await control.evaluate((projectDirectory) => window.puppetloom.launchViewer(projectDirectory), output);
@@ -62,7 +113,7 @@ try {
   const resumed = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pause"), { id: launched.id });
   if (resumed?.paused) throw new Error("桌面端未能恢复自主运动。" );
 
-  process.stdout.write(`${JSON.stringify({ ok: true, project: output, viewerId: launched.id, nativeState }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, project: output, editorScreenshot, viewerId: launched.id, nativeState }, null, 2)}\n`);
 } finally {
   await electronApp.close();
 }

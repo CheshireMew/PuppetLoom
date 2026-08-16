@@ -1,6 +1,7 @@
 import { rectCenter, rectUnion, roundPoint, roundRect } from "./math.js";
 import { suggestedRigLevel, type ImportedLayer, type ImportedPsd } from "./psd.js";
 import { buildSemanticControlCage } from "./semantic-cage.js";
+import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 import type {
   AnchorGraph,
   LayerBinding,
@@ -74,7 +75,20 @@ export function makeGridMesh(bounds: Rect, rows: number, cols: number): MeshBind
       triangles.push(topLeft, bottomLeft, topRight, topRight, bottomLeft, bottomRight);
     }
   }
-  return { rows, cols, points, uvs, triangles };
+  return {
+    rows,
+    cols,
+    points,
+    uvs,
+    triangles,
+    influences: {
+      head: Array(points.length).fill(1),
+      body: Array(points.length).fill(1),
+      gaze: Array(points.length).fill(1),
+      physics: Array(points.length).fill(1),
+      pin: Array(points.length).fill(0)
+    }
+  };
 }
 
 function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], anchors: AnchorGraph, secondaryAnchors?: LayerSecondaryAnchors): Point {
@@ -394,7 +408,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
   const poseField = poseFieldFor(anchors, level);
   const semanticCage = level === "semantic" ? buildSemanticControlCage(imported) : undefined;
   return {
-    version: 1,
+    version: PUPPETLOOM_PROJECT_VERSION,
     name: input.name,
     canvas: imported.canvas,
     source: input.source,

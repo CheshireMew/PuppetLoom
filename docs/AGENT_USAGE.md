@@ -1,85 +1,69 @@
 # Agent 调用说明
 
-Agent 的职责是选择输入、调用命令并阅读结果，不需要操作绑定编辑器，也不应修改 PSD 来追求更复杂动作。最可靠的调用顺序如下。
+Agent 通过 CLI 完成从 PSD 到可运行角色的确定性工作，也可以用同一校准接口和桌面编辑器与用户协作。软件负责格式、渲染、安全检查和历史；Agent 负责观察证据、判断应改哪个稳定控制量，以及把“当前角色校准”和“通用算法缺陷”分开。
 
-## 1. 检查输入
+下面用 `$cli = "E:\Code\PuppetLoom\apps\cli\dist\index.js"` 表示入口。
 
-```powershell
-node E:\Code\PuppetLoom\apps\cli\dist\index.js inspect --input E:\Input\character.psd --json
-```
+## 从零创建
 
-只有退出码 2 表示 PSD 本身不可用。`suggestedRigLevel` 为 `grouped` 或 `minimal` 不是失败：它表示程序会减少局部变形，仍可继续创建。
+先运行 `inspect --input <psd> --json`，再运行 `create --input <psd> [--reference <image>] --output <new-directory> --seed 42 --json`。参考图必须与 PSD 对应；没有就省略，不得找别的图片代替。`grouped` 或 `minimal` 是保守的可用结果，不是失败。
 
-## 2. 创建项目
-
-输出必须是不存在的新目录或空目录，防止把生成文件混入用户现有资料。
+创建后依次运行：
 
 ```powershell
-node E:\Code\PuppetLoom\apps\cli\dist\index.js create `
-  --input E:\Input\character.psd `
-  --reference E:\Input\character.png `
-  --output E:\Puppets\CharacterName `
-  --seed 42 `
-  --json
+node $cli verify --project E:\Puppets\CharacterName --json
+node $cli describe --project E:\Puppets\CharacterName --json
+node $cli render --project E:\Puppets\CharacterName --output E:\Puppets\CharacterName\reports\agent-baseline --suite calibration --json
 ```
 
-参考图不是创建前提。若用户只提供 PSD，省略 `--reference`；不得自行找一张不对应的图代替。成功时读取 `report.rigLevel`、`report.disabledFeatures`、`report.warnings` 和 `report.assetRequestCount`，不要把关闭眨眼或视线说成整个项目失败。
+`verify.valid` 证明文件和安全约束通过，不能代替视觉检查。Agent 必须实际查看 `pose-sheet.png` 与 `motion-sheet.png`，重点比较中立、左右转、上下看、四个组合方向，以及前后发、呆毛、耳朵、衣摆和尾巴的独立运动。
 
-## 3. 独立复核
+## 校准闭环
+
+先从 `describe` 读取稳定的图层 ID、控制点、轴心、网格规模和当前 revision。只提交需要改变的稀疏字段，不复制整份 `puppetloom.json`。补丁示例：
+
+```json
+{
+  "label": "固定呆毛根部并降低头部作用",
+  "overrides": {
+    "layers": {
+      "layer-000-front-hair": {
+        "vertexInfluences": {
+          "pin": { "0": 1 },
+          "head": { "0": 0.2 }
+        }
+      }
+    }
+  }
+}
+```
+
+保存与比较：
 
 ```powershell
-node E:\Code\PuppetLoom\apps\cli\dist\index.js verify --project E:\Puppets\CharacterName --json
+node $cli calibrate --project E:\Puppets\CharacterName --patch E:\Puppets\change.json --json
+node $cli compare --project E:\Puppets\CharacterName --from 0 --to 1 --output E:\Puppets\Compare --json
+node $cli history --project E:\Puppets\CharacterName --json
 ```
 
-`valid: true` 表示纹理齐全且 13 个姿态通过。不要通过手工放大动作上限绕过自动收缩或降级；那会让生成报告与实际运行状态失去一致性。
+`calibrate` 会先验证坐标、图层、顶点和 13 个姿态；不安全的补丁不会落盘。成功时它自动在项目内生成修改前后证据。Agent 要查看人物本身，而不是只看差异图：差异图能证明哪里改变了，不能证明改变自然。
 
-## 4. 处理可选素材请求
+如果用户在桌面编辑器中拖动了控制点，Agent 重新运行 `history` 和 `compare` 就能读取精确前后数值并看到对应渲染。用户确认效果后，用 `evidence --session <id> --status accepted --json` 标记；不满意则标记 `rejected`。这只是当前角色的可靠证据，不得因为一次接受就改写所有角色的通用规则。
 
-先读取：
+需要回到旧状态时运行 `restore --revision <n> --json`。恢复本身会创建新 revision，因此所有尝试仍可追踪。用户想直接操作时运行 `edit --project <directory>`。
 
-```text
-E:\Puppets\CharacterName\requests\asset-requests.json
-```
+## 应该改哪里
 
-每项请求都给出 `reference.path`、短提示词和约束。若调用外部图像生成能力，必须提供对应参考裁切；PuppetLoom 自身不调用任何图像 API。不要相信“提示透明背景”就能得到 Alpha：常见生图接口会把白底或棋盘格直接画进不透明 PNG。应明确生成纯白背景，再用 `scripts/extract-generated-supplement.mjs` 按浅色背景抠图、缩放并放回请求画布，最后由 `enhance` 检查真实 Alpha、尺寸和覆盖率。生成失败、身份变化或尺寸不符时可以直接停止，当前角色仍能运行。
+- 只在一个角色上出现，且可由控制点、轴心、网格或权重解决：保存项目校准。
+- 多个结构相似角色重复出现，自动结果方向一致地错误：修改 PuppetLoom 算法，加入通用夹具和视觉回归测试。
+- Agent 经常选错命令、跳过视觉检查或把局部校准误当通用知识：在用户确认后改进 `live2d-puppet` Skill。
 
-抠图脚本需要目标画布和内容尺寸。例如：
+不要直接编辑 `puppetloom.json`，不要绕过安全缩放，不要为了“更多动作”凭空生成未知脸部内容。左右转头需要检查近大远小、两侧眼角和脸缘关系；上下看是俯视/仰视，不是整颗头上下平移；头、脖子和上半身是结构连接，前后发、呆毛、耳朵、裙摆和尾巴才有独立惯性。视频参考用于学习关系，除非用户明确要求，不把视频复制进项目运行素材。
 
-```powershell
-node E:\Code\PuppetLoom\scripts\extract-generated-supplement.mjs `
-  --input E:\Temp\generated.png `
-  --output E:\Puppets\CharacterName\supplements\mouth-slight.png `
-  --canvas-width 52 --canvas-height 32 `
-  --content-width 18 --content-height 5
-```
+## 可选补充素材
 
-实际数值读取当前请求和参考裁切，不能照抄示例到其它角色。
+`requests/asset-requests.json` 中的闭眼和嘴形请求不阻塞可动结果。若使用图像模型，必须提供对应裁切。不要相信提示词能直接保证透明通道：先验证文件 Alpha；不透明结果要按纯色背景抠图，再交给 `enhance`。只有 `accepted` 的素材算接入成功，失败文件不能覆盖安全回退。
 
-素材准备完成后：
+## 运行和退出码
 
-```powershell
-node E:\Code\PuppetLoom\apps\cli\dist\index.js enhance `
-  --project E:\Puppets\CharacterName `
-  --assets E:\Puppets\CharacterName\supplements `
-  --json
-```
-
-只把 `accepted` 中的项目视为接入成功。`rejected` 不需要人工强塞进项目，也不能覆盖原眼睛纹理。
-
-## 5. 运行
-
-```powershell
-node E:\Code\PuppetLoom\apps\cli\dist\index.js play --project E:\Puppets\CharacterName
-```
-
-角色窗口由用户关闭后命令结束。窗口开启鼠标穿透后，按 `Ctrl+Shift+P` 恢复交互。
-
-## 退出码
-
-| 退出码 | 含义 | Agent 行为 |
-| --- | --- | --- |
-| `0` | 命令完成；任一安全绑定等级都算成功 | 继续读取 JSON 或打开角色 |
-| `2` | PSD 无效、空白或参数本身无效 | 请求用户重新提供 PSD |
-| `3` | 文件系统、项目结构或运行时错误 | 保留错误信息，检查路径与构建状态 |
-
-不要把命令标准输出和标准错误混在一起解析。成功 JSON 在标准输出，结构化错误 JSON 在标准错误。
+`play --project <directory>` 打开透明角色窗口；鼠标穿透后按 `Ctrl+Shift+P` 恢复。退出码 0 表示命令或任一安全绑定成功，2 表示输入/补丁无效，3 表示文件系统、项目结构或运行时错误。成功 JSON 在标准输出，结构化错误在标准错误，不能混合解析。
