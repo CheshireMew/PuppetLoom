@@ -34,7 +34,17 @@ try {
     throw new Error(`真实项目读取结果不符合 r34：${JSON.stringify({ name: baseline.project.name, layers: baseline.project.layers.length })}`);
   }
   if (baseline.project.quality.safetyScale !== 1) throw new Error(`真实项目未在满幅安全边界打开：${baseline.project.quality.safetyScale}`);
+  const expectedRevision = baseline.calibration.revision + 1;
+  const scopedMeshes = await editor.evaluate(
+    ({ directory, layerId }) => window.puppetloom.generateArtMeshes(directory, [layerId]),
+    { directory: project, layerId: baseline.project.layers[0].id }
+  );
+  if (Object.keys(scopedMeshes).length !== 1 || !(baseline.project.layers[0].id in scopedMeshes)) {
+    throw new Error(`真实项目的逐图层网格生成越过了选中范围：${JSON.stringify(Object.keys(scopedMeshes))}`);
+  }
 
+  await editor.getByRole("button", { name: /02 结构与网格/ }).click();
+  await editor.getByRole("button", { name: "动作", exact: true }).click();
   const frontHairAmplitude = editor.locator('.save-panel .range-row input[type="range"]').nth(6);
   await frontHairAmplitude.evaluate((element) => {
     const input = element;
@@ -49,9 +59,12 @@ try {
   await editor.getByRole("button", { name: "返回主页" }).click();
   await editor.getByTestId("creator").waitFor();
   await editor.locator(".recent-projects button").filter({ hasText: project }).click();
+  await editor.getByTestId("editor").waitFor();
+  await editor.getByRole("button", { name: /02 结构与网格/ }).click();
+  await editor.getByRole("button", { name: "动作", exact: true }).click();
   await editor.getByText(/已恢复 .*自动保存的草稿/).waitFor();
   await editor.getByRole("button", { name: "保存校准" }).click();
-  await editor.getByText(/已保存 revision 1，安全系数 1\.00/).waitFor({ timeout: 30_000 });
+  await editor.getByText(`已保存 revision ${expectedRevision}，安全系数 1.00。`, { exact: true }).waitFor({ timeout: 30_000 });
   await editor.getByTestId("comparison-view").waitFor();
   await editor.getByRole("button", { name: "叠加", exact: true }).click();
   await editor.waitForFunction(() => {
@@ -61,13 +74,13 @@ try {
   await editor.getByText("草稿已保存", { exact: true }).waitFor({ timeout: 10_000 });
   if (await editor.locator(".save-panel .error").count()) throw new Error(await editor.locator(".save-panel .error").innerText());
   const authoringSummary = await editor.locator(".authoring-summary").innerText();
-  if (!authoringSummary.includes("AI Authoring") || !authoringSummary.includes("参数") || !authoringSummary.includes("行为")) {
-    throw new Error(`真实项目没有显示完整 AI authoring 检查面板：${authoringSummary}`);
+  if (!authoringSummary.includes("绑定系统") || !authoringSummary.includes("参数") || !authoringSummary.includes("行为")) {
+    throw new Error(`真实项目没有显示完整绑定系统检查面板：${authoringSummary}`);
   }
   await editor.screenshot({ path: screenshot, fullPage: true });
 
   const saved = await editor.evaluate((directory) => window.puppetloom.readEditorWorkspace(directory), project);
-  if (saved.calibration.revision !== 1 || saved.project.quality.safetyScale !== 1) {
+  if (saved.calibration.revision !== expectedRevision || saved.project.quality.safetyScale !== 1) {
     throw new Error(`真实项目校准没有保持 revision 与满幅安全：${JSON.stringify({ revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale })}`);
   }
   if (saved.project.runtime.secondaryMotionTuning?.frontHair?.amplitude !== 1.02) throw new Error("真实项目没有消费已保存的前发响应校准。" );
@@ -78,7 +91,6 @@ try {
   await viewer.getByTestId("viewer").waitFor();
   await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
   const viewerReady = await viewer.evaluate(() => {
-    window.puppetloomRenderTestPose?.({});
     const canvas = document.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement) || !canvas.width || !canvas.height) return false;
     const gl = canvas.getContext("webgl2");
@@ -88,6 +100,23 @@ try {
     return pixels.some((value, index) => index % 4 === 3 && value > 0);
   });
   if (!viewerReady) throw new Error(`真实项目运行窗口没有可见像素：${await viewer.locator(".viewer-error").textContent() ?? "无界面错误"}`);
+  const frameSignature = () => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("真实项目运行窗口缺少画布。");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) throw new Error("真实项目运行窗口缺少 WebGL2 上下文。");
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let hash = 2166136261;
+    for (const value of pixels) hash = Math.imul(hash ^ value, 16777619) >>> 0;
+    return hash;
+  };
+  const firstFrame = await viewer.evaluate(frameSignature);
+  await viewer.waitForTimeout(1_200);
+  const secondFrame = await viewer.evaluate(frameSignature);
+  if (firstFrame === secondFrame) throw new Error("真实 r34 角色窗口默认启动后画面没有自主运动。" );
+  const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
+  if (pointer.strength !== 0) throw new Error(`真实 r34 角色窗口没有默认使用自主观察：${JSON.stringify(pointer)}`);
 
   process.stdout.write(`${JSON.stringify({ ok: true, source, projectCopy: project, screenshot, revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale }, null, 2)}\n`);
 } finally {

@@ -160,6 +160,17 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...settled) - Math.min(...settled)).toBeGreaterThan(0.001);
   });
 
+  it("keeps a visible idle head performance under a stationary pointer", () => {
+    const autonomous = new CalmMotionController(fixtureProject());
+    const tracked = new CalmMotionController(fixtureProject());
+    const autonomousStates = Array.from({ length: 900 }, (_, index) => autonomous.sample(index / 60));
+    const trackedStates = Array.from({ length: 900 }, (_, index) => tracked.sample(index / 60, { lookTarget: { x: 0, y: 0, strength: 1 } }));
+    const autonomousPeak = Math.max(...autonomousStates.map((state) => Math.abs(state.headYaw)));
+    const trackedPeak = Math.max(...trackedStates.map((state) => Math.abs(state.headYaw)));
+    expect(trackedPeak).toBeGreaterThan(0.18);
+    expect(trackedPeak / autonomousPeak).toBeGreaterThan(0.3);
+  });
+
   it("returns smoothly to autonomous motion when pointer tracking is disabled", () => {
     const controller = new CalmMotionController(fixtureProject());
     for (let index = 0; index < 120; index += 1) controller.sample(index / 60, { lookTarget: { x: -0.9, y: 0.4, strength: 1 } });

@@ -205,10 +205,12 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [behaviorPlaying, project, selectedBehaviorId]);
 
   useEffect(() => {
-    setPreviewState((current) => ({
-      ...current,
-      ...(selectedBehaviorId ? { behavior: { id: selectedBehaviorId, timeSeconds: behaviorTime } } : { behavior: undefined })
-    }));
+    setPreviewState((current) => {
+      const next = { ...current };
+      if (selectedBehaviorId) next.behavior = { id: selectedBehaviorId, timeSeconds: behaviorTime };
+      else delete next.behavior;
+      return next;
+    });
   }, [selectedBehaviorId, behaviorTime]);
 
   useEffect(() => () => {
@@ -495,24 +497,24 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     setNotice("已生成基础表情和行为预览；确认效果后保存更改。" );
   }
 
-  async function upgradeLegacyMeshes(): Promise<void> {
+  async function upgradeSelectedMesh(): Promise<void> {
+    if (!selectedLayer) return;
     setMeshUpgrading(true);
     setError("");
     try {
-      const replacements = await window.puppetloom.generateArtMeshes(projectDirectory);
-      const entries = Object.entries(replacements);
-      if (entries.length === 0) {
-        setNotice("没有可升级的非矩形图层；完全不透明的矩形素材会继续使用规则网格。" );
+      const replacements = await window.puppetloom.generateArtMeshes(projectDirectory, [selectedLayer.id]);
+      const mesh = replacements[selectedLayer.id];
+      if (!mesh) {
+        setNotice("当前图层没有生成新的轮廓网格；完全不透明的矩形素材会继续使用规则网格。" );
         return;
       }
-      const layers = Object.fromEntries(entries.map(([layerId, mesh]) => [layerId, { mesh }]));
-      commit(mergeCalibrationOverrides(pending, { layers }));
+      commit(mergeCalibrationOverrides(pending, { layers: { [selectedLayer.id]: { mesh } } }));
       setSelectedVertex(undefined);
       setMode("mesh");
       setSection("rig");
-      setNotice(`已为 ${entries.length} 个图层生成 Alpha ArtMesh，结果已进入草稿。`);
+      setNotice(`已为“${selectedLayer.sourceName}”生成 Alpha ArtMesh。请先检查中立与九向姿态，再保存这个图层。`);
     } catch (cause) {
-      setError(`旧网格升级失败：${messageOf(cause)}`);
+      setError(`当前图层网格升级失败：${messageOf(cause)}`);
     } finally {
       setMeshUpgrading(false);
     }
@@ -649,7 +651,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       </section>
 
       <section className={`editor-workspace preview-background-${previewBackground}`}>
-        {section === "overview" ? <OverviewLeftPanel project={project} onSection={setSection} upgradingMeshes={meshUpgrading} onUpgradeMeshes={() => void upgradeLegacyMeshes()} /> : section === "rig" ? <EditorLayerPanel
+        {section === "overview" ? <OverviewLeftPanel project={project} onSection={setSection} /> : section === "rig" ? <EditorLayerPanel
           project={project}
           selectedLayerId={selectedLayerId}
           onSelect={(layerId) => { setSelectedLayerId(layerId); setSelectedVertex(undefined); }}
@@ -689,11 +691,13 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           error={error}
           sessions={sessions}
           comparison={comparison}
+          meshUpgrading={meshUpgrading}
           onLayerProperty={setLayerProperty}
           onMoveLayer={moveSelectedLayer}
           onSoftRadius={setSoftRadius}
           onVertexInfluence={setVertexInfluence}
           onResetLayer={() => void resetSelectedLayer()}
+          onUpgradeMesh={() => void upgradeSelectedMesh()}
           onRuntimeTuning={setRuntimeTuning}
           onSecondaryPart={setSecondaryPart}
           onSecondaryTuning={setSecondaryTuning}

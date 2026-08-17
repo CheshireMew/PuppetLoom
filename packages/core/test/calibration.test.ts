@@ -110,7 +110,39 @@ describe("project calibration", () => {
     expect(comparisonMetadata.height).toBeGreaterThan(1_500);
     expect(differenceMetadata.height).toBe(comparisonMetadata.height);
     expect((comparisonMetadata.width ?? 0) / 2).toBe(differenceMetadata.width);
+    expect(comparison.visualDifference.changedPixelRatio).toBeGreaterThanOrEqual(0);
+    expect(comparison.visualDifference.changedPixelRatio).toBeLessThanOrEqual(1);
+    expect(comparison.visualDifference.meanAbsoluteDifference).toBeGreaterThanOrEqual(0);
+    expect(comparison.visualDifference.significantPixelRatio).toBeLessThanOrEqual(comparison.visualDifference.changedPixelRatio);
   });
+
+  it("rejects rebuilding more than one layer mesh in a calibration", async () => {
+    const project = await loadProject(output);
+    const artLayers = project.layers.filter((layer) => layer.mesh.topology === "art" && layer.mesh.art).slice(0, 2);
+    expect(artLayers).toHaveLength(2);
+    const layers = Object.fromEntries(artLayers.map((layer) => [layer.id, {
+      meshDetail: layer.mesh.art!.detail < 256 ? layer.mesh.art!.detail + 1 : layer.mesh.art!.detail - 1
+    }]));
+    await expect(saveCalibrationPatch(output, {
+      baseRevision: 4,
+      label: "不允许批量重建网格",
+      overrides: { layers }
+    })).rejects.toThrow(/一次校准重建了 2 个图层网格/);
+    expect((await loadCalibration(output)).revision).toBe(4);
+  });
+
+  it("rejects a single rebuilt mesh when rendered evidence changes too much", async () => {
+    const project = await loadProject(output);
+    const target = [...project.layers].sort((left, right) => right.bounds.width * right.bounds.height - left.bounds.width * left.bounds.height)[0]!;
+    const mesh = JSON.parse(JSON.stringify(target.mesh)) as typeof target.mesh;
+    mesh.uvs = mesh.uvs.map(() => ({ x: 0, y: 0 }));
+    await expect(saveCalibrationPatch(output, {
+      baseRevision: 4,
+      label: "拒绝视觉失真的单层网格",
+      overrides: { layers: { [target.id]: { mesh } } }
+    })).rejects.toThrow(/当前图层重建后的视觉差异过大/);
+    expect((await loadCalibration(output)).revision).toBe(4);
+  }, 120_000);
 
   it("rejects invalid canvas coordinates and unknown vertices", async () => {
     await expect(saveCalibrationPatch(output, {

@@ -65,12 +65,18 @@ export class CalibrationIpcService {
         draft: await loadCalibrationDraft(projectDirectory)
       };
     });
-    ipcMain.handle("editor:generate-art-meshes", async (_event, directory: string) => {
+    ipcMain.handle("editor:generate-art-meshes", async (_event, directory: string, layerIds: string[]) => {
       const projectDirectory = resolve(directory);
       const project = await loadProject(projectDirectory);
+      if (!Array.isArray(layerIds) || layerIds.length !== 1) throw new Error("每次必须且只能选择一个图层重建网格。");
+      const requested = new Set(layerIds);
+      const known = new Set(project.layers.map((layer) => layer.id));
+      const unknown = [...requested].filter((layerId) => !known.has(layerId));
+      if (unknown.length > 0) throw new Error(`找不到要重建网格的图层：${unknown.join("、")}`);
       const sources = await loadProjectTextureSources(projectDirectory, project);
       const replacements: Record<string, MeshBinding> = {};
       for (const layer of project.layers) {
+        if (!requested.has(layer.id)) continue;
         const detail = artMeshDetailForRole(layer.role);
         const pixels = sources.get(layer.id);
         const mesh = layer.mesh.topology === "art" && layer.mesh.art

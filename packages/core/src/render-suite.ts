@@ -157,13 +157,38 @@ export async function renderProjectSuiteFromProject(
   return result;
 }
 
-async function absoluteDifference(leftPath: string, rightPath: string, output: string): Promise<void> {
+async function absoluteDifference(
+  leftPath: string,
+  rightPath: string,
+  output: string
+): Promise<RevisionComparisonResult["visualDifference"]> {
   const left = await sharp(leftPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const right = await sharp(rightPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   if (left.info.width !== right.info.width || left.info.height !== right.info.height || left.info.channels !== right.info.channels) throw new Error("前后图片尺寸不一致，无法比较。" );
   const data = Buffer.alloc(left.data.length);
-  for (let index = 0; index < data.length; index += 1) data[index] = Math.abs((left.data[index] ?? 0) - (right.data[index] ?? 0));
+  let changedPixels = 0;
+  let significantPixels = 0;
+  let absoluteChannelDifference = 0;
+  for (let pixel = 0; pixel < left.info.width * left.info.height; pixel += 1) {
+    let maximumDifference = 0;
+    for (let channel = 0; channel < left.info.channels; channel += 1) {
+      const index = pixel * left.info.channels + channel;
+      const difference = Math.abs((left.data[index] ?? 0) - (right.data[index] ?? 0));
+      data[index] = difference;
+      maximumDifference = Math.max(maximumDifference, difference);
+      absoluteChannelDifference += difference;
+    }
+    if (maximumDifference > 0) changedPixels += 1;
+    if (maximumDifference > 12) significantPixels += 1;
+  }
   await sharp(data, { raw: { width: left.info.width, height: left.info.height, channels: left.info.channels } }).png().toFile(output);
+  const pixelCount = left.info.width * left.info.height;
+  const rounded = (value: number): number => Number(value.toFixed(6));
+  return {
+    changedPixelRatio: rounded(changedPixels / pixelCount),
+    meanAbsoluteDifference: rounded(absoluteChannelDifference / (data.length * 255)),
+    significantPixelRatio: rounded(significantPixels / pixelCount)
+  };
 }
 
 export async function compareProjectRevisions(
@@ -225,7 +250,7 @@ export async function compareProjectStates(
     .png()
     .toFile(comparisonSheet);
   const differenceImage = join(output, "difference.png");
-  await absoluteDifference(beforeEvidence, afterEvidence, differenceImage);
+  const visualDifference = await absoluteDifference(beforeEvidence, afterEvidence, differenceImage);
   const [beforeEvidenceSha256, afterEvidenceSha256, comparisonSheetSha256, differenceImageSha256] = await Promise.all([
     fileSha256(beforeEvidence), fileSha256(afterEvidence), fileSha256(comparisonSheet), fileSha256(differenceImage)
   ]);
@@ -238,6 +263,7 @@ export async function compareProjectStates(
     after,
     comparisonSheet,
     differenceImage,
+    visualDifference,
     artifactSha256: {
       beforeEvidence: beforeEvidenceSha256,
       afterEvidence: afterEvidenceSha256,

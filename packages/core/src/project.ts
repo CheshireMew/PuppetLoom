@@ -27,6 +27,7 @@ import type {
   CreateOptions,
   ProjectDescription,
   PuppetLoomProject,
+  MeshBinding,
   RigLevel,
   SourceDescriptor
 } from "./types.js";
@@ -39,6 +40,28 @@ async function sha256(path: string): Promise<string> {
 
 function projectFingerprint(project: PuppetLoomProject): string {
   return createHash("sha256").update(JSON.stringify(project)).digest("hex");
+}
+
+function meshLayoutFingerprint(mesh: MeshBinding): string {
+  return JSON.stringify({
+    topology: mesh.topology,
+    rows: mesh.rows,
+    cols: mesh.cols,
+    art: mesh.art,
+    pointCount: mesh.points.length,
+    uvs: mesh.uvs,
+    triangles: mesh.triangles
+  });
+}
+
+function rebuiltMeshLayerIds(before: PuppetLoomProject, after: PuppetLoomProject): string[] {
+  const beforeLayers = new Map(before.layers.map((layer) => [layer.id, layer]));
+  return after.layers
+    .filter((layer) => {
+      const previous = beforeLayers.get(layer.id);
+      return previous !== undefined && meshLayoutFingerprint(previous.mesh) !== meshLayoutFingerprint(layer.mesh);
+    })
+    .map((layer) => layer.id);
 }
 
 async function atomicJson(path: string, value: unknown): Promise<void> {
@@ -770,6 +793,13 @@ async function commitCalibrationPatch(root: string, patch: CalibrationPatch, rep
     const before = applySafetyLimits(applyCalibrationOverrides(base, current.overrides));
     const overrides = replacementOverrides ?? mergeCalibrationOverrides(clearCalibrationOverrides(current.overrides, patch.clear), patch.overrides);
     const after = applySafetyLimits(applyCalibrationOverrides(base, overrides));
+    const rebuiltLayers = rebuiltMeshLayerIds(before, after);
+    if (replacementOverrides === undefined && rebuiltLayers.length > 1) {
+      throw new PuppetLoomError(
+        "INVALID_INPUT",
+        `一次校准重建了 ${rebuiltLayers.length} 个图层网格。为避免整套角色外观和动作同时失真，每次只能重建一个图层，并在保存前检查中立与九向姿态。`
+      );
+    }
     const rigRank: Record<RigLevel, number> = { minimal: 0, grouped: 1, semantic: 2 };
     if (rigRank[after.rigLevel] < rigRank[before.rigLevel] || after.quality.safetyScale + 1e-9 < before.quality.safetyScale) {
       throw new PuppetLoomError(
@@ -803,6 +833,13 @@ async function commitCalibrationPatch(root: string, patch: CalibrationPatch, rep
     const evidence = await (await import("./render-suite.js")).compareProjectStates(
       root, before, after, current.revision, revision, evidenceDirectory, patch.authoring?.previews ?? []
     );
+    if (replacementOverrides === undefined && rebuiltLayers.length === 1
+      && (evidence.visualDifference.changedPixelRatio > 0.02 || evidence.visualDifference.meanAbsoluteDifference > 0.0015)) {
+      throw new PuppetLoomError(
+        "INVALID_INPUT",
+        `当前图层重建后的视觉差异过大（${(evidence.visualDifference.changedPixelRatio * 100).toFixed(2)}% 像素发生变化，平均差异 ${evidence.visualDifference.meanAbsoluteDifference.toFixed(6)}）。本次校准没有写入，请调整网格密度或顶点后再保存。`
+      );
+    }
     const calibration: CalibrationDocument = {
       version: 2,
       baseProjectSha256: hash,

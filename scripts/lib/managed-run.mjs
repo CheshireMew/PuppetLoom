@@ -181,7 +181,7 @@ async function recoverInterruptedRuns(runsRoot) {
 export async function startManagedRun({
   category,
   producer,
-  root = resolve("test/artifacts"),
+  root = process.env.PUPPETLOOM_ARTIFACT_ROOT || resolve("test/artifacts"),
   estimatedBytes,
   reuse,
   maximumManagedBytes = process.env.PUPPETLOOM_ARTIFACT_MAX_BYTES,

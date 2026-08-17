@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld("puppetloom", {
   recentProjects: () => ipcRenderer.invoke("project:recent"),
   readProject: (projectDirectory: string, revision?: number) => ipcRenderer.invoke("project:read", projectDirectory, revision),
   readEditorWorkspace: (projectDirectory: string) => ipcRenderer.invoke("editor:read", projectDirectory),
-  generateArtMeshes: (projectDirectory: string) => ipcRenderer.invoke("editor:generate-art-meshes", projectDirectory),
+  generateArtMeshes: (projectDirectory: string, layerIds: string[]) => ipcRenderer.invoke("editor:generate-art-meshes", projectDirectory, layerIds),
   saveCalibrationDraft: (projectDirectory: string, baseRevision: number, overrides: unknown, label?: string) => ipcRenderer.invoke("editor:save-draft", projectDirectory, baseRevision, overrides, label),
   discardCalibrationDraft: (projectDirectory: string) => ipcRenderer.invoke("editor:discard-draft", projectDirectory),
   saveCalibration: (projectDirectory: string, patch: unknown) => ipcRenderer.invoke("editor:save", projectDirectory, patch),

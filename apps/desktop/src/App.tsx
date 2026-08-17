@@ -28,7 +28,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const [project, setProject] = useState<PuppetLoomProject>();
-  const [state, setState] = useState<ViewerState>({ paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: true, scale: 1 });
+  const [state, setState] = useState<ViewerState>({ paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: false, scale: 1 });
   const [error, setError] = useState("");
 
   useEffect(() => window.puppetloom.onViewerState((next) => {

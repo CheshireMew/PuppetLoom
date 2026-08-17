@@ -137,7 +137,10 @@ function registerControlWindowShell(window: BrowserWindow): void {
 function stateFor(window: BrowserWindow): ViewerState {
   const existing = viewerStates.get(window.id);
   if (existing) return existing;
-  const state = { paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: true, scale: 1 };
+  // A newly opened character should perform on its own. Pointer tracking is
+  // opt-in because a stationary pointer used to suppress almost all head
+  // motion and made a healthy rig look frozen.
+  const state = { paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: false, scale: 1 };
   viewerStates.set(window.id, state);
   return state;
 }

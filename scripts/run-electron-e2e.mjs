@@ -186,7 +186,11 @@ try {
     throw new Error(`滚轮缩放没有锁定鼠标所指位置：${JSON.stringify({ zoomAnchor, anchoredAfterZoom })}`);
   }
   await control.getByRole("button", { name: "适配" }).click();
-  await control.waitForFunction(() => document.querySelector(".viewport-navigation output")?.textContent === "100%");
+  await control.waitForFunction(({ x, width }) => {
+    if (document.querySelector(".viewport-navigation output")?.textContent !== "100%") return false;
+    const rect = document.querySelector("[data-testid='editor-stage']")?.getBoundingClientRect();
+    return Boolean(rect && Math.abs(rect.x - x) < 2 && Math.abs(rect.width - width) < 2);
+  }, { x: stageBeforeNavigation.x, width: stageBeforeNavigation.width });
   const fittedStage = await editorStage.boundingBox();
   if (!fittedStage) throw new Error("适配后编辑画布消失。");
   const panStart = {
@@ -336,7 +340,6 @@ try {
   await viewer.locator("canvas").waitFor({ state: "visible" });
   await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
   const viewerReady = await viewer.evaluate(() => {
-    window.puppetloomRenderTestPose?.({});
     const canvas = document.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement) || !canvas.width || !canvas.height) return false;
     const gl = canvas.getContext("webgl2");
@@ -347,6 +350,22 @@ try {
     return false;
   });
   if (!viewerReady) throw new Error(`角色窗口没有渲染可见像素：${await viewer.locator(".viewer-error").textContent() ?? "无界面错误"}`);
+
+  const liveFrameSignature = () => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("角色窗口缺少画布。");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) throw new Error("角色窗口缺少 WebGL2 上下文。");
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let hash = 2166136261;
+    for (const value of pixels) hash = Math.imul(hash ^ value, 16777619) >>> 0;
+    return hash;
+  };
+  const firstLiveFrame = await viewer.evaluate(liveFrameSignature);
+  await viewer.waitForTimeout(1_200);
+  const secondLiveFrame = await viewer.evaluate(liveFrameSignature);
+  if (firstLiveFrame === secondLiveFrame) throw new Error("角色窗口默认启动后画面没有自主运动。" );
 
   const viewerWindow = await electronApp.browserWindow(viewer);
   const viewerId = await viewerWindow.evaluate((window) => window.id);
@@ -419,13 +438,15 @@ try {
   });
 
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
-  if (![pointer.x, pointer.y, pointer.strength].every(Number.isFinite) || pointer.strength !== 1) throw new Error(`系统鼠标目标无效：${JSON.stringify(pointer)}`);
-  const trackingOff = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: viewerId });
-  if (trackingOff?.mouseTracking) throw new Error("桌面端未能关闭鼠标跟随。" );
-  const disabledPointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
-  if (disabledPointer.strength !== 0) throw new Error(`关闭鼠标跟随后仍返回活动目标：${JSON.stringify(disabledPointer)}`);
+  if (![pointer.x, pointer.y, pointer.strength].every(Number.isFinite) || pointer.strength !== 0) throw new Error(`角色窗口没有默认使用自主观察：${JSON.stringify(pointer)}`);
   const trackingOn = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: viewerId });
-  if (!trackingOn?.mouseTracking) throw new Error("桌面端未能恢复鼠标跟随。" );
+  if (!trackingOn?.mouseTracking) throw new Error("桌面端未能开启鼠标跟随。" );
+  const activePointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
+  if (activePointer.strength !== 1) throw new Error(`开启鼠标跟随后没有返回活动目标：${JSON.stringify(activePointer)}`);
+  const trackingOff = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: viewerId });
+  if (trackingOff?.mouseTracking) throw new Error("桌面端未能恢复自主观察。" );
+  const disabledPointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
+  if (disabledPointer.strength !== 0) throw new Error(`恢复自主观察后仍返回活动目标：${JSON.stringify(disabledPointer)}`);
 
   await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "larger"), { id: viewerId });
   const scaledSize = await browserWindow.evaluate((window) => window.getSize());

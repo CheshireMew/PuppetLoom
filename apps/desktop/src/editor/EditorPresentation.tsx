@@ -254,11 +254,13 @@ export function EditorInspectorPanel({
   error,
   sessions,
   comparison,
+  meshUpgrading,
   onLayerProperty,
   onMoveLayer,
   onSoftRadius,
   onVertexInfluence,
   onResetLayer,
+  onUpgradeMesh,
   onRuntimeTuning,
   onSecondaryPart,
   onSecondaryTuning,
@@ -282,11 +284,13 @@ export function EditorInspectorPanel({
   error: string;
   sessions: CalibrationSessionDocument[];
   comparison: ComparisonImages | undefined;
+  meshUpgrading: boolean;
   onLayerProperty: (patch: LayerPatch) => void;
   onMoveLayer: (direction: -1 | 1) => void;
   onSoftRadius: (radius: number) => void;
   onVertexInfluence: (channel: VertexChannel, value: number) => void;
   onResetLayer: () => void;
+  onUpgradeMesh: () => void;
   onRuntimeTuning: (kind: "motionTuning" | "envelope", key: string, value: number) => void;
   onSecondaryPart: (part: SecondaryMotionPart) => void;
   onSecondaryTuning: (part: SecondaryMotionPart, key: "amplitude" | "response" | "stability", value: number) => void;
@@ -329,8 +333,9 @@ export function EditorInspectorPanel({
           </> : selectedLayer.mesh.rows !== undefined && selectedLayer.mesh.cols !== undefined ? <>
             <div><label>行<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.rows} onChange={(event) => onLayerProperty({ meshDensity: { rows: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))), cols: selectedLayer.mesh.cols! } })} /></label><label>列<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.cols} onChange={(event) => onLayerProperty({ meshDensity: { rows: selectedLayer.mesh.rows!, cols: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))) } })} /></label></div>
             <small>规则网格仅用于完全不透明的矩形图层和旧项目兼容。</small>
+            <button disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}>{meshUpgrading ? "正在读取当前纹理轮廓…" : "将当前图层升级为轮廓 ArtMesh"}</button>
           </> : <small>当前网格缺少可重建信息。</small>}
-          <small>重建会重新投影权重，并退出旧顶点编辑。</small>
+          <small>每次只重建当前图层并重新投影权重；保存前请检查中立、左右、上下和对角姿态。</small>
         </section>
 
         {selectedVertex !== undefined && <section className="vertex-inspector">

@@ -249,13 +249,18 @@ export class CalmMotionController {
     const pointerYaw = this.trackedLookX.value * 0.92 * tuning.amplitude;
     const pointerPitch = this.trackedLookY.value * 0.96 * tuning.amplitude;
     const pointerRoll = this.trackedLookX.value * 0.1 * tuning.amplitude;
-    const desiredYaw = Math.max(-1, Math.min(1, autonomousYaw * (1 - lookStrength) + (pointerYaw + microYaw * 0.2) * lookStrength));
-    const desiredPitch = Math.max(-1, Math.min(1, autonomousPitch * (1 - lookStrength) + (pointerPitch + microPitch * 0.18) * lookStrength));
-    const desiredRoll = Math.max(-1, Math.min(1, autonomousRoll * (1 - lookStrength) + (pointerRoll + microRoll * 0.24) * lookStrength));
+    // Pointer tracking is an interactive layer, not a replacement for the
+    // character's idle performance. Keeping part of the autonomous pose alive
+    // prevents a stationary cursor from freezing the entire head.
+    const pointerDistance = Math.max(Math.abs(this.trackedLookX.value), Math.abs(this.trackedLookY.value));
+    const autonomousRetention = 1 - lookStrength * Math.min(1, 0.65 + pointerDistance * 0.35);
+    const desiredYaw = Math.max(-1, Math.min(1, autonomousYaw * autonomousRetention + (pointerYaw + microYaw * 0.2) * lookStrength));
+    const desiredPitch = Math.max(-1, Math.min(1, autonomousPitch * autonomousRetention + (pointerPitch + microPitch * 0.18) * lookStrength));
+    const desiredRoll = Math.max(-1, Math.min(1, autonomousRoll * autonomousRetention + (pointerRoll + microRoll * 0.24) * lookStrength));
     const autonomousGazeX = ((active ? eventValue(active, timeSeconds, "yaw", 0.38) * 1.25 : 0) + microYaw * 0.7) * tuning.amplitude;
     const autonomousGazeY = ((active ? eventValue(active, timeSeconds, "pitch", 0.32) * 1.05 : 0) + microPitch * 0.55) * tuning.amplitude;
-    const gazeTargetX = autonomousGazeX * (1 - lookStrength) + this.trackedLookX.value * 1.1 * tuning.amplitude * lookStrength;
-    const gazeTargetY = autonomousGazeY * (1 - lookStrength) + this.trackedLookY.value * 0.92 * tuning.amplitude * lookStrength;
+    const gazeTargetX = autonomousGazeX * autonomousRetention + this.trackedLookX.value * 1.1 * tuning.amplitude * lookStrength;
+    const gazeTargetY = autonomousGazeY * autonomousRetention + this.trackedLookY.value * 0.92 * tuning.amplitude * lookStrength;
 
     advanceTracking(this.trackedYaw, desiredYaw, delta, tuning.response, tuning.stability);
     advanceTracking(this.trackedPitch, desiredPitch, delta, tuning.response, tuning.stability);

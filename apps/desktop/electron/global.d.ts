@@ -83,7 +83,7 @@ export interface PuppetLoomDesktopApi {
   recentProjects(): Promise<RecentProject[]>;
   readProject(projectDirectory: string, revision?: number): Promise<PuppetLoomProject>;
   readEditorWorkspace(projectDirectory: string): Promise<EditorWorkspace>;
-  generateArtMeshes(projectDirectory: string): Promise<Record<string, LayerBinding["mesh"]>>;
+  generateArtMeshes(projectDirectory: string, layerIds: string[]): Promise<Record<string, LayerBinding["mesh"]>>;
   saveCalibrationDraft(projectDirectory: string, baseRevision: number, overrides: CalibrationPatch["overrides"], label?: string): Promise<CalibrationDraftDocument>;
   discardCalibrationDraft(projectDirectory: string): Promise<boolean>;
   saveCalibration(projectDirectory: string, patch: CalibrationPatch): Promise<DesktopCalibrationResponse>;

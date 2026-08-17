@@ -57,13 +57,13 @@ export function StudioNavigation({ section, onSection }: { section: StudioSectio
   </nav>;
 }
 
-export function OverviewLeftPanel({ project, onSection, upgradingMeshes, onUpgradeMeshes }: { project: PuppetLoomProject; onSection: (section: StudioSection) => void; upgradingMeshes: boolean; onUpgradeMeshes: () => void }): React.JSX.Element {
+export function OverviewLeftPanel({ project, onSection }: { project: PuppetLoomProject; onSection: (section: StudioSection) => void }): React.JSX.Element {
   const artMeshes = project.layers.filter((layer) => layer.mesh.topology === "art").length;
   const parented = project.layers.filter((layer) => layer.parentLayerId || layer.deformerId).length;
   return <aside className="studio-side-panel overview-left">
     <div className="panel-eyebrow">PROJECT MAP</div><h2>从这里判断下一步</h2>
     <p className="panel-intro">每个工作区解决一个明确问题。先处理标为“待完善”的项目，再进入干净预览验收。</p>
-    <button className="starter-system-action artmesh-upgrade-action" disabled={upgradingMeshes} onClick={onUpgradeMeshes}><strong>{upgradingMeshes ? "正在读取纹理轮廓…" : artMeshes < project.layers.length ? "升级旧网格" : "按推荐密度重建网格"}</strong><small>{artMeshes < project.layers.length ? "从现有 PNG 的 Alpha 轮廓生成 ArtMesh，结果先进入草稿，不覆盖基础项目" : "重新生成轮廓与内部三角形并投影现有权重，用于统一网格质量"}</small></button>
+    <button className="starter-system-action artmesh-upgrade-action" onClick={() => onSection("rig")}><strong>{artMeshes < project.layers.length ? "逐层升级网格" : "检查 ArtMesh 密度"}</strong><small>先选择一个图层，对比中立与九向姿态后再保存；不会一次替换整套模型</small></button>
     <div className="studio-task-list">
       <button onClick={() => onSection("rig")}><span>结构与网格</span><strong>{artMeshes}/{project.layers.length} ArtMesh</strong><small>{parented} 个图层已有层级归属</small></button>
       <button onClick={() => onSection("parameters")}><span>参数与姿态</span><strong>{project.model.parameters.length} 个参数</strong><small>检查九向姿态、视线、眨眼与口型</small></button>

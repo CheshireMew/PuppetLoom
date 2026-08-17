@@ -743,6 +743,14 @@ export interface RevisionComparisonResult {
   after: RenderSuiteResult;
   comparisonSheet: string;
   differenceImage: string;
+  visualDifference: {
+    /** Pixels with any channel-level difference. */
+    changedPixelRatio: number;
+    /** Mean absolute channel difference normalized to the 0..1 range. */
+    meanAbsoluteDifference: number;
+    /** Pixels whose largest channel difference is greater than 12/255. */
+    significantPixelRatio: number;
+  };
   artifactSha256: Record<"beforeEvidence" | "afterEvidence" | "comparisonSheet" | "differenceImage", string>;
 }
 
