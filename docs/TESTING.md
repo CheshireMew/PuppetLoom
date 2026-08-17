@@ -12,15 +12,23 @@ npm run fixtures
 
 ```powershell
 npm run build
+npm run typecheck
 npm test
 npm run test:e2e
+npm run test:launcher
+npm run test:real-project
+npm run test:motion-evidence
 npm run test:visual
 npm run test:performance
+npm run artifacts:report
 ```
 
-- `npm test`：分类、自动关键点定位与修正、控制笼三角方向、作用图层、网格、自动收缩/降级、确定性动作、多段物理链、三档项目创建、项目格式 v2、稀疏校准、逐顶点权重、修订/恢复/用户证据、九姿态与九运动证据、前后比较、中立合成、补图拒绝和所有 CLI 命令/退出码。
-- `test:e2e`：用真实 Electron 主进程完成创建、最近项目、进入编辑器、等待角色纹理实际显示、拖动网格、撤销/重做、保存修订与证据，再打开透明窗口并检查系统光标目标、跟随开关、缩放、暂停、置顶和鼠标穿透恢复。
-- `test:visual`：直接导出 WebGL 画布的两帧 PNG，确认画布同时存在透明与可见像素，并确认自主运动让前后帧发生变化。Windows 系统截窗会把透明区保存为不透明黑色，因此不作为 Alpha 真源。
+- `npm test`：分类、自动关键点定位与修正、控制笼三角方向、作用图层、网格、自动收缩/降级、确定性动作、多段物理链、三档项目创建、项目格式 v3 与 v1/v2 内存迁移、标准/自定义参数、一维/二维关键形态、变形器层级、表情、参数物理、行为、AI authoring 事务和自动预览、统一安全消费边界、草稿生命周期、图层层级/顺序/可见性/锁定、网格密度重采样、脸部与头骨逐顶点权重、分部响应、修订/恢复/用户证据、九姿态与九运动证据、前后比较、可移植导出、Cubism 标准参数映射、JSON 侧车、Editor API 版本边界、事务回滚、model3/moc3/纹理验证、中立合成、补图拒绝和所有 CLI 命令/退出码。
+- `test:e2e`：用真实 Electron 主进程从最近项目进入编辑器，操作显示/锁定，使用软选择拖动多个网格顶点，设置分部响应，等待草稿落盘，返回主页并恢复草稿，撤销/重做，保存修订，逐一打开五种证据视图并确认会话；随后从编辑器按钮打开透明窗口，检查系统光标目标、跟随开关、缩放、暂停、置顶、鼠标穿透恢复、重复启动复用和窗口比例改变后角色不拉伸。
+- `test:launcher`：通过用户实际双击入口调用的 Windows PowerShell 脚本启动编译后的 Electron，使用隔离的 D 盘外配置，确认抵达 `app-ready` 并正常退出。
+- `test:real-project`：复制本机 `workspace/blue-whale-maid-r34` 到新的测试产物目录，在真实 29 层角色上完成旧格式迁移读取、满幅安全检查、AI authoring 检查面板、分部响应修改、草稿重启恢复、revision 保存、叠加证据和透明窗口实际渲染；不修改源角色项目，也不删除测试副本。
+- `test:motion-evidence`：通过公开 `record` 命令分别录制 autonomous 和 secondary 透明 WebM，检查准确 revision、项目指纹、窗口比例、非零帧差、局部视频、接触表和报告；secondary 还要求头、身体、视线、呼吸、眨眼和嘴部极值全部为零。
+- `test:visual`：确定性渲染两个相反头部姿态并直接导出 WebGL 画布 PNG，确认画布同时存在透明与可见像素、模板缓冲可用，并确认姿态实际改变像素。Windows 系统截窗会把透明区保存为不透明黑色，因此不作为 Alpha 真源。
 - `test:performance`：运行 1280×1280、23 层项目，预热后采样 329 帧；要求平均帧率至少 57 FPS，95 分位帧时不超过 25 ms，并确认 WebGL2 可用。
 
 鼠标跟随单元测试覆盖屏幕四个方向、安全范围、角色脸部原点、视线先行、头部阻尼、头与上半身同步起动、横轴俯仰的表面深度差、颈部两端分别连接头部与运动中的衣领，以及关闭跟随后平滑回到自主运动。眼部测试明确要求转头时近侧眼变宽、远侧眼收窄；俯仰测试要求鼻部变化大于脸缘，防止再次把上下观察误写成整头升降。性能测试保持鼠标目标读取开启，确保穿透模式所需的系统级光标 IPC 不会把 60 FPS 渲染链拖慢。
@@ -39,12 +47,18 @@ npm run test:performance
 
 真实项目还可执行 `node scripts/report-secondary-motion.mjs <project-dir> 26`。它以 60 Hz 采样呆毛、前后发、头饰、耳朵、衣摆、尾巴和饰品，分别报告状态峰值、横纵轴像素位移、固定区与自由端位移；前发还单独报告呆毛根与刘海根之间的头皮保护区最大位移，尾巴额外报告旋转过程中各点到根部的最大半径漂移，用来区分真实转轴摆动和伸缩。最后再用当前变形代码重新检查 13 个安全姿态。
 
-所有运行产物写入 `test/artifacts`，该目录默认不提交。测试不会删除用户文件或清空目录；每轮使用新的带时间戳子目录。
+所有正式测试运行先由 `scripts/lib/managed-run.mjs` 在 `test/artifacts/runs/` 创建托管目录。预检会在第一份大文件前核对调用方声明的峰值、2 GiB 默认总预算和 2 GiB 最低磁盘余量；未知峰值或预算不足直接阻止。`run.json` 先以 pending 写入，并要求生产者说明本轮产物是否可复用：固定 PSD 输入直接读取仓库中唯一的 `test/fixtures` 真源；截图、视频、运行日志和可修改项目副本属于一次具体验收，不能拿旧结果冒充新运行。结束时统一写入 succeeded 或 failed、分类字节数、峰值口径、完整文件清单和 SHA-256；所有者异常退出后，下一轮把记录标成 interrupted，补齐残留清单并保留文件。`npm run artifacts:report` 会列出历史非托管目录和终态运行，清理始终是 report-only，不自动删除。`.project-steward/storage-contract.json` 和 Windows CI 固化了同一约定。
+
+## Cubism 真实格式复验
+
+自动测试使用隔离目录验证 `cubism plan/prepare/finalize/verify`，并用模拟 RPC 检查 External API 1.1.0 请求、成功提交和失败回滚。真实格式复验另从 Live2D 官方 `CubismWebSamples` 稀疏检出 Mao 资源到 D 盘非仓库目录，直接验证原始 `Mao.model3.json`、`Mao.moc3`、纹理、pose、physics、8 个 expression 和 9 个 motion 引用。官方样例和合并结果都不提交仓库。
+
+该复验证明 PuppetLoom 能读取、复制、合并并结构校验真实官方运行时目录；它不证明 PuppetLoom 程序化网格已写入 moc3。后者必须以 `plan.strictReady`、Editor 同步结果和 Viewer 视觉检查共同判断，详见 [Cubism 官方格式桥接](CUBISM_BRIDGE.md)。
 
 ## 当前机器验收基线
 
 Windows、RTX 2080 Super、1280×1280/23 层性能样本的通过线是稳定 60 FPS。具体测量值由 `test:performance` 每次输出，不把一次历史数值硬编码进文档。
 
-## 真实角色等待点
+## 真实角色验收
 
-程序化测试全部通过后才使用真实角色素材。真实验收需要一张新的中立原图及由它直接生成的 See-through 分层 PSD；原图和 PSD 必须一一对应。真实素材不提交仓库，先在本机项目目录完成重组一致性、动作范围和透明窗口检查。
+程序化测试全部通过后再使用真实角色素材。原图和 See-through PSD 必须一一对应，真实素材不提交仓库。`test:real-project` 始终复制源项目后操作；若要验收其它角色，可把项目目录作为脚本参数传入。自动结果只能证明数据链和窗口链成立，最终仍需查看真实截图中的轮廓、五官、遮挡和部件连接。

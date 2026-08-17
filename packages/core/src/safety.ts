@@ -172,7 +172,10 @@ function relationshipIssues(project: PuppetLoomProject, state: MotionState): Val
 }
 
 export function validatePose(project: PuppetLoomProject, id: string, state: MotionState): PoseValidation {
-  const issues = [...project.layers.flatMap((layer) => layerMeshIssues(project, layer, state)), ...relationshipIssues(project, state)];
+  const activeClipIds = new Set(project.layers.filter((layer) => layer.visible !== false && layer.clipLayerId).map((layer) => layer.clipLayerId!));
+  const activeLayers = project.layers.filter((layer) => layer.visible !== false || activeClipIds.has(layer.id));
+  const activeProject = activeLayers.length === project.layers.length ? project : { ...project, layers: activeLayers };
+  const issues = [...activeLayers.flatMap((layer) => layerMeshIssues(activeProject, layer, state)), ...relationshipIssues(activeProject, state)];
   const deduplicated = [...new Map(issues.map((issue) => [`${issue.code}:${issue.layerId ?? "project"}`, issue])).values()];
   const penalty = deduplicated.reduce((sum, issue) => sum + (issue.severity === "error" ? 0.28 : 0.08), 0);
   return {
@@ -249,14 +252,15 @@ function qualityFrom(project: PuppetLoomProject, poses: PoseValidation[], scale:
 export function applySafetyLimits(input: PuppetLoomProject): PuppetLoomProject {
   const scales = [1, 0.85, 0.7, 0.55, 0.4, 0.25];
   const originalEnvelope = input.runtime.envelope;
+  const existingScale = clamp(input.quality.safetyScale, 0, 1);
   for (const scale of scales) {
     const project = { ...input, runtime: { ...input.runtime, envelope: scaleEnvelope(originalEnvelope, scale) } };
     const poses = validateProjectPoses(project);
-    if (poses.every((pose) => pose.passed)) return { ...project, quality: qualityFrom(project, poses, scale) };
+    if (poses.every((pose) => pose.passed)) return { ...project, quality: qualityFrom(project, poses, existingScale * scale) };
   }
 
   if (input.rigLevel === "semantic") return applySafetyLimits(downgrade(input, "grouped"));
   if (input.rigLevel === "grouped") return applySafetyLimits(downgrade(input, "minimal"));
   const poses = validateProjectPoses(input);
-  return { ...input, quality: qualityFrom(input, poses, 0.25) };
+  return { ...input, quality: qualityFrom(input, poses, existingScale * 0.25) };
 }

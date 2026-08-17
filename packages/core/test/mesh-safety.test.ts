@@ -74,8 +74,11 @@ describe("mesh and safety", () => {
       quality: { poseValidations: [], safetyScale: 1, issues: [] }, disabledReasons: []
     } as PuppetLoomProject;
     const safe = applySafetyLimits(project);
+    const safeAgain = applySafetyLimits(safe);
     expect(safe.quality.poseValidations).toHaveLength(13);
     expect(safe.quality.poseValidations.every((pose) => pose.passed)).toBe(true);
     expect(safe.quality.safetyScale < 1 || safe.rigLevel !== "semantic").toBe(true);
+    expect(safeAgain.runtime.envelope).toEqual(safe.runtime.envelope);
+    expect(safeAgain.quality.safetyScale).toBe(safe.quality.safetyScale);
   });
 });

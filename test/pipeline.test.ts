@@ -2,6 +2,7 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 import { beforeAll, describe, expect, it } from "vitest";
+import { artifactPath } from "./support/artifacts.js";
 import {
   PuppetLoomError,
   createProject,
@@ -13,7 +14,7 @@ import {
 } from "@puppetloom/core";
 
 const fixtures = resolve("test/fixtures");
-const runRoot = resolve("test/artifacts", `vitest-${process.pid}-${Date.now()}`);
+const runRoot = artifactPath(`pipeline-${process.pid}-${Date.now()}`);
 const semanticOutput = resolve(runRoot, "semantic-a");
 
 beforeAll(async () => {

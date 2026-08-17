@@ -1,0 +1,67 @@
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { executeManagedRun, startManagedRun } from "../scripts/lib/managed-run.mjs";
+import { artifactPath } from "./support/artifacts.js";
+
+describe("managed runtime artifacts", () => {
+  const reuse = { applicable: false, reason: "测试样本用于验证每次运行的独立所有权。" };
+
+  it("writes a pending manifest before payloads and finalizes a complete owned inventory", async () => {
+    const root = artifactPath("managed-run-contract");
+    const run = await startManagedRun({ category: "contract", producer: "managed-run.test", root, estimatedBytes: 1024 ** 2, maximumManagedBytes: 32 * 1024 ** 2, minimumFreeBytes: 1, reuse });
+    expect(JSON.parse(await readFile(run.manifestPath, "utf8"))).toMatchObject({ status: "pending", producer: "managed-run.test" });
+    await writeFile(run.path("payload.bin"), Buffer.alloc(1024, 7));
+    await run.finish("succeeded");
+    const manifest = JSON.parse(await readFile(run.manifestPath, "utf8")) as { status: string; totalBytes: number; categoryBytes: Record<string, number>; inventory: Array<{ path: string; class: string; sha256: string }> };
+    expect(manifest.status).toBe("succeeded");
+    expect(manifest.totalBytes).toBeGreaterThan(1024);
+    expect(manifest.categoryBytes.evidence).toBe(1024);
+    expect(manifest.inventory).toEqual(expect.arrayContaining([{ path: "payload.bin", class: "evidence", bytes: 1024, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]));
+  });
+
+  it("blocks an insufficient deterministic budget before creating a run directory", async () => {
+    const root = artifactPath("managed-run-insufficient-budget");
+    await expect(startManagedRun({ category: "blocked", producer: "managed-run.test", root, estimatedBytes: 1024, maximumManagedBytes: 512, minimumFreeBytes: 1, reuse })).rejects.toThrow(/尚未写入运行目录/);
+    await expect(access(root)).rejects.toThrow();
+  });
+
+  it("serializes concurrent preflights and reserves active peak budgets", async () => {
+    const root = artifactPath("managed-run-concurrent-budget");
+    const options = { category: "concurrent", producer: "managed-run.test", root, estimatedBytes: 8 * 1024 ** 2, maximumManagedBytes: 12 * 1024 ** 2, minimumFreeBytes: 1, reuse };
+    const results = await Promise.allSettled([startManagedRun(options), startManagedRun(options)]);
+    const fulfilled = results.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof startManagedRun>>> => result.status === "fulfilled");
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0]!.reason)).toContain("活动预留");
+    await fulfilled[0]!.value.finish("succeeded");
+  });
+
+  it("marks abandoned manifests interrupted without deleting their payloads", async () => {
+    const root = artifactPath("managed-run-recovery");
+    const abandoned = join(root, "runs", "fixture", "abandoned");
+    await mkdir(abandoned, { recursive: true });
+    await writeFile(join(abandoned, "run.json"), JSON.stringify({ version: 1, id: "abandoned", category: "fixture", producer: "test", status: "pending", processId: 2_147_483_000 }));
+    await writeFile(join(abandoned, "payload.bin"), Buffer.from("preserve"));
+    const run = await startManagedRun({ category: "recovery", producer: "managed-run.test", root, estimatedBytes: 1024, maximumManagedBytes: 32 * 1024 **2, minimumFreeBytes: 1, reuse });
+    expect(JSON.parse(await readFile(join(abandoned, "run.json"), "utf8"))).toMatchObject({ status: "interrupted", totalBytes: 8, cleanupCandidates: ["payload.bin"] });
+    expect(await readFile(join(abandoned, "payload.bin"), "utf8")).toBe("preserve");
+    await run.finish("succeeded");
+  });
+
+  it("records a failed public operation with owned cleanup candidates", async () => {
+    const root = artifactPath("managed-run-failure");
+    let manifestPath = "";
+    await expect(executeManagedRun({ category: "failure", producer: "managed-run.test", root, estimatedBytes: 1024, maximumManagedBytes: 32 * 1024 ** 2, minimumFreeBytes: 1, reuse }, async (run) => {
+      manifestPath = run.manifestPath;
+      await writeFile(run.path("partial.bin"), Buffer.alloc(16, 3));
+      throw new Error("controlled failure");
+    })).rejects.toThrow("controlled failure");
+    expect(JSON.parse(await readFile(manifestPath, "utf8"))).toMatchObject({
+      status: "failed",
+      error: "controlled failure",
+      cleanupCandidates: ["partial.bin"]
+    });
+  });
+});

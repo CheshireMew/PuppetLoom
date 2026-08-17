@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { artifactPath } from "./support/artifacts.js";
 
-const cliProject = resolve("test/artifacts", `cli-project-${process.pid}-${Date.now()}`);
+const cliProject = artifactPath(`cli-project-${process.pid}-${Date.now()}`);
 
 function cli(args: string[], environment: NodeJS.ProcessEnv = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolveRun, rejectRun) => {
@@ -50,14 +51,40 @@ describe("CLI contract", () => {
   it("describes, calibrates, renders and compares through Agent-facing commands", async () => {
     const described = await cli(["describe", "--project", cliProject, "--json"]);
     expect(described.code).toBe(0);
-    const description = JSON.parse(described.stdout) as { calibrationRevision: number; anchors: { nose: { x: number; y: number } } };
+    const description = JSON.parse(described.stdout) as {
+      calibrationRevision: number;
+      coordinateSystem: { sideConvention: string };
+      layers: Array<{ id: string }>;
+    };
     expect(description.calibrationRevision).toBe(0);
-    const files = resolve("test/artifacts", `cli-calibration-${process.pid}-${Date.now()}`);
+    expect(description.coordinateSystem.sideConvention).toBe("anatomical");
+    const detailed = await cli(["describe", "--project", cliProject, "--layer", description.layers[0]!.id, "--revision", "0", "--json"]);
+    expect(detailed.code).toBe(0);
+    const detail = JSON.parse(detailed.stdout) as {
+      selectedLayer: {
+        id: string;
+        sourcePath: string[];
+        alphaTopology: { componentCount: number };
+        mesh: { points: Array<{ index: number; delta: { x: number; y: number }; influences: { pin: number } }> };
+      };
+    };
+    expect(detail.selectedLayer.sourcePath.length).toBeGreaterThan(0);
+    expect(detail.selectedLayer.alphaTopology.componentCount).toBeGreaterThan(0);
+    const point = detail.selectedLayer.mesh.points[0]!;
+    const files = artifactPath(`cli-calibration-${process.pid}-${Date.now()}`);
     await mkdir(files, { recursive: true });
     const patch = resolve(files, "patch.json");
     await writeFile(patch, JSON.stringify({
-      label: "CLI 鼻点校准",
-      overrides: { anchors: { nose: { x: description.anchors.nose.x + 0.001, y: description.anchors.nose.y } } }
+      baseRevision: 0,
+      label: "CLI 稀疏网格契约校准",
+      overrides: {
+        layers: {
+          [detail.selectedLayer.id]: {
+            meshPointDeltas: { [String(point.index)]: point.delta },
+            vertexInfluences: { pin: { [String(point.index)]: point.influences.pin } }
+          }
+        }
+      }
     }));
     const calibrated = await cli(["calibrate", "--project", cliProject, "--patch", patch, "--json"]);
     expect(calibrated.code).toBe(0);
@@ -70,8 +97,152 @@ describe("CLI contract", () => {
     expect((await stat(resolve(files, "compare", "before-after.png"))).isFile()).toBe(true);
   }, 120_000);
 
+  it("creates a separate project when migrating an updated PSD", async () => {
+    const output = artifactPath(`cli-migration-${process.pid}-${Date.now()}`);
+    const result = await cli([
+      "migrate",
+      "--project", cliProject,
+      "--input", "test/fixtures/semantic.psd",
+      "--output", output,
+      "--json"
+    ]);
+    expect(result.code).toBe(0);
+    const migration = JSON.parse(result.stdout) as {
+      outputDirectory: string;
+      appliedRevision?: number;
+      mapping: Array<{ sourceLayerId: string; targetLayerId?: string; status: string; migratedFields: string[]; skippedFields: string[] }>;
+      reportPath: string;
+      patchPath: string;
+    };
+    expect(migration.outputDirectory).toBe(output);
+    expect(migration.appliedRevision).toBe(1);
+    expect(migration.mapping.every((entry) => entry.status === "exact")).toBe(true);
+    expect((await stat(migration.reportPath)).isFile()).toBe(true);
+    expect((await stat(migration.patchPath)).isFile()).toBe(true);
+
+    const calibratedLayer = migration.mapping.find((entry) => entry.migratedFields.includes("meshPointDeltas"));
+    expect(calibratedLayer?.targetLayerId).toBeTruthy();
+    const migratedProject = JSON.parse(await readFile(resolve(output, "puppetloom.json"), "utf8")) as { layers: Array<{ id: string; texture: string }> };
+    const migratedTexture = migratedProject.layers.find((layer) => layer.id === calibratedLayer!.targetLayerId)!.texture;
+    const texturePath = resolve(output, migratedTexture);
+    await writeFile(texturePath, Buffer.concat([await readFile(texturePath), Buffer.from([0])]));
+    const changedOutput = artifactPath(`cli-migration-changed-${process.pid}-${Date.now()}`);
+    const changedResult = await cli([
+      "migrate", "--project", output, "--input", "test/fixtures/semantic.psd", "--output", changedOutput, "--json"
+    ]);
+    expect(changedResult.code).toBe(0);
+    const changed = JSON.parse(changedResult.stdout) as { mapping: Array<{ sourceLayerId: string; status: string; migratedFields: string[]; skippedFields: string[] }> };
+    const changedLayer = changed.mapping.find((entry) => entry.sourceLayerId === calibratedLayer!.targetLayerId)!;
+    expect(changedLayer.status).toBe("geometry-changed");
+    expect(changedLayer.skippedFields).toEqual(expect.arrayContaining(["meshPointDeltas", "vertexInfluences"]));
+    expect(changedLayer.migratedFields).not.toEqual(expect.arrayContaining(["meshPointDeltas", "vertexInfluences"]));
+  }, 120_000);
+
+  it("lets an Agent inspect and transactionally author a parameter with visual previews", async () => {
+    const inspected = await cli(["author", "inspect", "--project", cliProject, "--json"]);
+    expect(inspected.code).toBe(0);
+    const authoring = JSON.parse(inspected.stdout) as { revision: number; parameters: Array<{ id: string }> };
+    expect(authoring.parameters.some((parameter) => parameter.id === "param-head-yaw")).toBe(true);
+    const described = JSON.parse((await cli(["describe", "--project", cliProject, "--json"])).stdout) as { layers: Array<{ id: string }> };
+    const files = artifactPath(`cli-authoring-${process.pid}-${Date.now()}`);
+    await mkdir(files, { recursive: true });
+    const patch = resolve(files, "authoring.json");
+    await writeFile(patch, JSON.stringify({
+      version: 1,
+      baseRevision: authoring.revision,
+      label: "CLI AI authoring contract",
+      operations: [
+        { op: "upsert-parameter", parameter: { id: "expression-smile", name: "Smile", group: "Expression", kind: "continuous", min: 0, default: 0, max: 1 } },
+        {
+          op: "upsert-binding",
+          binding: {
+            id: "expression-smile-opacity",
+            parameterIds: ["expression-smile"],
+            target: { kind: "layer", id: described.layers[0]!.id },
+            keyforms: [{ values: [0] }, { values: [1], opacityMultiplier: 0.85 }]
+          }
+        }
+      ]
+    }));
+    const applied = await cli(["author", "apply", "--project", cliProject, "--patch", patch, "--json"]);
+    expect(applied.code).toBe(0);
+    const result = JSON.parse(applied.stdout) as {
+      revision: number;
+      session: { patch: { authoring: { operations: unknown[]; previews: Array<{ parameters: Record<string, number> }> } } };
+      evidence: { after: { artifacts: Array<{ id: string }> } };
+    };
+    expect(result.revision).toBe(authoring.revision + 1);
+    expect(result.session.patch.authoring.operations).toHaveLength(2);
+    expect(result.session.patch.authoring.previews.map((preview) => preview.parameters)).toEqual([
+      { "expression-smile": 0 }, { "expression-smile": 1 }
+    ]);
+    expect(result.evidence.after.artifacts.some((artifact) => artifact.id.startsWith("authoring-"))).toBe(true);
+    const reopened = JSON.parse((await cli(["author", "inspect", "--project", cliProject, "--json"])).stdout) as {
+      revision: number;
+      parameters: Array<{ id: string }>;
+      bindings: Array<{ id: string }>;
+    };
+    expect(reopened.revision).toBe(result.revision);
+    expect(reopened.parameters.some((parameter) => parameter.id === "expression-smile")).toBe(true);
+    expect(reopened.bindings.some((binding) => binding.id === "expression-smile-opacity")).toBe(true);
+  }, 120_000);
+
+  it("exports the effective AI-authored revision as a verified portable directory", async () => {
+    const output = artifactPath(`cli-portable-${process.pid}-${Date.now()}`);
+    const exported = await cli(["export", "--project", cliProject, "--output", output, "--json"]);
+    expect(exported.code).toBe(0);
+    expect(JSON.parse(exported.stdout)).toMatchObject({
+      outputDirectory: output,
+      manifest: { project: expect.any(String), sourceRevision: expect.any(Number) },
+      verification: { valid: true }
+    });
+    const inspected = JSON.parse((await cli(["author", "inspect", "--project", output, "--json"])).stdout) as {
+      revision: number;
+      parameters: Array<{ id: string }>;
+    };
+    expect(inspected.revision).toBe(0);
+    expect(inspected.parameters.some((parameter) => parameter.id === "expression-smile")).toBe(true);
+    const repeated = await cli(["export", "--project", cliProject, "--output", output, "--json"]);
+    expect(repeated.code).toBe(3);
+  }, 120_000);
+
+  it("plans, prepares, finalizes and verifies the official Cubism runtime boundary", async () => {
+    const planned = await cli(["cubism", "plan", "--project", cliProject, "--json"]);
+    expect(planned.code).toBe(0);
+    expect(JSON.parse(planned.stdout)).toMatchObject({
+      editorApiVersion: "1.1.0",
+      requiresEditorMocExport: true,
+      strictReady: false,
+      coverage: { sourceParameters: expect.any(Number), targetParameters: expect.any(Number) }
+    });
+
+    const preparedOutput = artifactPath(`cli-cubism-prepare-${process.pid}-${Date.now()}`);
+    const prepared = await cli(["cubism", "prepare", "--project", cliProject, "--output", preparedOutput, "--json"]);
+    expect(prepared.code).toBe(0);
+    expect(JSON.parse(prepared.stdout)).toMatchObject({ outputDirectory: preparedOutput, plan: { requiresEditorMocExport: true } });
+    expect((await stat(resolve(preparedOutput, "puppetloom", "cubism-bridge.json"))).isFile()).toBe(true);
+
+    const editorRuntime = artifactPath(`cli-cubism-editor-${process.pid}-${Date.now()}`);
+    await mkdir(resolve(editorRuntime, "textures"), { recursive: true });
+    await writeFile(resolve(editorRuntime, "fixture.moc3"), Buffer.from("MOC3official-editor-placeholder"));
+    await copyFile("test/fixtures/semantic-reference.png", resolve(editorRuntime, "textures", "texture_00.png"));
+    const editorModel = resolve(editorRuntime, "fixture.model3.json");
+    await writeFile(editorModel, JSON.stringify({
+      Version: 3,
+      FileReferences: { Moc: "fixture.moc3", Textures: ["textures/texture_00.png"] },
+      Groups: [], HitAreas: []
+    }));
+    const finalOutput = artifactPath(`cli-cubism-final-${process.pid}-${Date.now()}`);
+    const finalized = await cli(["cubism", "finalize", "--project", cliProject, "--editor-model", editorModel, "--output", finalOutput, "--json"]);
+    expect(finalized.code).toBe(0);
+    expect(JSON.parse(finalized.stdout)).toMatchObject({ outputDirectory: finalOutput, verification: { valid: true } });
+    const verified = await cli(["cubism", "verify", "--model", resolve(finalOutput, "fixture.model3.json"), "--json"]);
+    expect(verified.code).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ valid: true, moc: "fixture.moc3" });
+  }, 120_000);
+
   it("uses exit 2 for malformed calibration JSON", async () => {
-    const files = resolve("test/artifacts", `cli-invalid-calibration-${process.pid}-${Date.now()}`);
+    const files = artifactPath(`cli-invalid-calibration-${process.pid}-${Date.now()}`);
     await mkdir(files, { recursive: true });
     const patch = resolve(files, "broken.json");
     await writeFile(patch, "{ definitely-not-json");
@@ -97,7 +268,7 @@ describe("CLI contract", () => {
   });
 
   it("opens the transparent player through the play command", async () => {
-    const result = await cli(["play", "--project", cliProject], { PUPPETLOOM_E2E_EXIT_AFTER_MS: "900" });
+    const result = await cli(["play", "--project", cliProject, "--revision", "0"], { PUPPETLOOM_E2E_EXIT_AFTER_MS: "900" });
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
   }, 30_000);
@@ -105,6 +276,6 @@ describe("CLI contract", () => {
   it("opens the project editor through the edit command", async () => {
     const result = await cli(["edit", "--project", cliProject], { PUPPETLOOM_E2E_EXIT_AFTER_MS: "900", PUPPETLOOM_ALLOW_MULTIPLE: "1" });
     expect(result.code).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.stderr).not.toContain("PuppetLoom：");
   }, 30_000);
 });

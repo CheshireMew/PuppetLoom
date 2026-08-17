@@ -27,6 +27,13 @@ AutoLive2d is not vendored as an application. PuppetLoom does not include its Cu
 
 The MIT license text is reproduced in `docs/licenses/ag-psd-MIT.txt`.
 
+## Live2D Cubism
+
+- Project and documentation: Live2D Cubism Editor, Cubism SDK manuals, External Application Integration API, and `Live2D/CubismWebSamples`
+- Use: public model3/exp3/motion3/physics3/cdi3 structure, Editor WebSocket protocol, and local compatibility validation
+
+PuppetLoom does not distribute Cubism Editor, Cubism Core, the Cubism SDK, `.moc3` compilers, or Live2D sample assets. A sparse checkout of the official Mao sample is used only for local D-drive validation and is excluded from this repository. Live2D and Cubism remain trademarks and copyrighted products of Live2D Inc.; using their editor, SDK, Core, or exported data remains subject to Live2D's terms and licenses.
+
 ## Third demonstration project
 
 The unpublished project shown in the Bilibili video “即刻出道！零基础半小时也能做出可直播的皮套！” informed the independently implemented coherent-pose design: one semantic head pose drives affected face layers, while grouped hair, body, and accessories follow through filtered response and separate inertia. It also informed conservative anti-separation limits. No source code, model weights, or assets from that project are available or included.

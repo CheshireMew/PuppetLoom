@@ -1,25 +1,33 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, join, parse, resolve } from "node:path";
+import { access, copyFile, mkdir, open, readFile, readdir, rename, writeFile, type FileHandle } from "node:fs/promises";
+import { basename, dirname, join, parse, relative, resolve } from "node:path";
 import sharp from "sharp";
 import { makeAssetRequests } from "./assets.js";
+import { applyAuthoringOperations, authoringLayerOverrides, authoringSummary, buildAuthoringAudit } from "./authoring.js";
 import { applyCalibrationOverrides, clearCalibrationOverrides, mergeCalibrationOverrides } from "./calibration.js";
 import { PuppetLoomError } from "./errors.js";
 import { renderProjectPosePng } from "./offline-render.js";
 import { importPsd, inspectionFromImported, type ImportedPsd, type PixelBuffer } from "./psd.js";
 import { buildRig } from "./rig.js";
-import { applySafetyLimits, safetyPoses, safetyPoseState, validateProjectPoses } from "./safety.js";
-import { calibrationDocumentSchema, calibrationPatchSchema, calibrationSessionSchema, puppetLoomProjectSchema } from "./schema.js";
+import { parsePuppetLoomProject } from "./project-format.js";
+import { applySafetyLimits, safetyPoses, safetyPoseState } from "./safety.js";
+import { authoringPatchSchema, calibrationDocumentSchema, calibrationDraftSchema, calibrationOperationSchema, calibrationOverridesSchema, calibrationPatchSchema, calibrationSessionSchema } from "./schema.js";
+import { inspectLayerAlphaTopology } from "./topology.js";
 import type {
   BuildReport,
   BuildResult,
+  AuthoringPatch,
   CalibrationDocument,
+  CalibrationDraftDocument,
+  CalibrationOperationDocument,
+  CalibrationOverrides,
   CalibrationPatch,
   CalibrationSaveResult,
   CalibrationSessionDocument,
   CreateOptions,
   ProjectDescription,
   PuppetLoomProject,
+  RigLevel,
   SourceDescriptor
 } from "./types.js";
 
@@ -39,16 +47,17 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   await rename(temporary, path);
 }
 
-async function ensureWritableOutput(output: string): Promise<void> {
+async function ensureWritableOutput(output: string): Promise<boolean> {
   try {
     const entries = await readdir(output);
     if (entries.length > 0) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `输出目录不是空目录：${output}`);
+    return true;
   } catch (error) {
     if (error instanceof PuppetLoomError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw new PuppetLoomError("IO_ERROR", `无法检查输出目录：${output}`, { cause: error });
+    return false;
   }
-  await mkdir(output, { recursive: true });
 }
 
 async function encodeRawPng(pixels: PixelBuffer): Promise<Buffer> {
@@ -239,11 +248,12 @@ function buildReport(project: PuppetLoomProject, recognized: number, warnings: s
 
 export async function createProject(options: CreateOptions): Promise<BuildResult> {
   const input = resolve(options.input);
-  const output = resolve(options.output);
-  await ensureWritableOutput(output);
+  const finalOutput = resolve(options.output);
+  const outputExisted = await ensureWritableOutput(finalOutput);
   const imported = await importPsd(input);
   const inspection = inspectionFromImported(imported);
   const name = options.name?.trim() || parse(input).name;
+  const referencePng = options.reference ? await sharp(resolve(options.reference)).png().toBuffer() : undefined;
   const source: SourceDescriptor = {
     originalFileName: basename(input),
     psdSha256: await sha256(input),
@@ -251,7 +261,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   };
   if (options.reference) {
     source.referencePath = "source/reference.png";
-    source.referenceSha256 = await sha256(resolve(options.reference));
+    source.referenceSha256 = createHash("sha256").update(referencePng!).digest("hex");
   }
   let project = buildRig({ imported, name, seed: options.seed ?? 42, source });
   if (options.reference && imported.composite) {
@@ -262,35 +272,85 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   project = applySafetyLimits(project);
   const requests = makeAssetRequests(project);
   const report = buildReport(project, inspection.recognizedLayerCount, imported.warnings, requests.requests.length);
+  const operationId = randomUUID();
+  const stagingOutput = join(dirname(finalOutput), `.${basename(finalOutput)}.puppetloom-pending-${operationId}`);
+  const reservation = join(dirname(finalOutput), `.${basename(finalOutput)}.puppetloom-reserved-${operationId}`);
+  const operationRelative = join("reports", "operations", `create-${operationId}`, "operation.json");
+  const startedAt = new Date().toISOString();
+  let operationRoot = stagingOutput;
+  let published = false;
+  await mkdir(dirname(finalOutput), { recursive: true });
+  await mkdir(dirname(join(stagingOutput, operationRelative)), { recursive: true });
+  await atomicJson(join(stagingOutput, operationRelative), {
+    version: 1, id: operationId, kind: "project-create", status: "pending", createdAt: startedAt, updatedAt: startedAt,
+    target: finalOutput, staging: stagingOutput, processId: process.pid
+  });
+  try {
+    const output = stagingOutput;
+    for (const directory of ["source", "textures", "reports", "requests", "supplements", "calibration", "calibration/sessions", "reports/calibration"]) await mkdir(join(output, directory), { recursive: true });
+    await copyFile(input, join(output, "source", "source.psd"));
+    if (referencePng) await writeFile(join(output, "source", "reference.png"), referencePng);
+    await Promise.all(
+      imported.layers.map(async (layer) => {
+        await sharp(Buffer.from(layer.pixels.data), { raw: { width: layer.pixels.width, height: layer.pixels.height, channels: 4 } }).png({ compressionLevel: 9 }).toFile(join(output, "textures", `${layer.id}.png`));
+      })
+    );
+    const neutral = await neutralPng(imported);
+    await writeFile(join(output, "reports", "neutral.png"), neutral);
+    await writeSemanticCageArtifacts(output, neutral, project);
+    await Promise.all(requests.requests.map(async (request) => {
+      if (!request.reference) return;
+      const target = join(output, request.reference.path);
+      await mkdir(dirname(target), { recursive: true });
+      await sharp(neutral).extract({
+        left: Math.round(request.crop.x), top: Math.round(request.crop.y),
+        width: Math.round(request.crop.width), height: Math.round(request.crop.height)
+      }).png().toFile(target);
+    }));
+    await writePoseSheet(join(output, "reports", "pose-sheet.png"), imported, project);
+    await writeFile(join(output, "puppetloom.json"), `${JSON.stringify(project, null, 2)}\n`, "utf8");
+    await writeFreshCalibration(output);
+    await writeFile(join(output, "reports", "build-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    await writeFile(join(output, "requests", "asset-requests.json"), `${JSON.stringify(requests, null, 2)}\n`, "utf8");
+    const verification = await (await import("./verify.js")).verifyProject(output);
+    if (!verification.valid) throw new PuppetLoomError("INVALID_PROJECT", `生成项目未通过发布前验证：${verification.warnings.join("；")}`);
 
-  for (const directory of ["source", "textures", "reports", "requests", "supplements", "calibration", "calibration/sessions", "reports/calibration"]) await mkdir(join(output, directory), { recursive: true });
-  await copyFile(input, join(output, "source", "source.psd"));
-  if (options.reference) await sharp(resolve(options.reference)).png().toFile(join(output, "source", "reference.png"));
-  await Promise.all(
-    imported.layers.map(async (layer) => {
-      await sharp(Buffer.from(layer.pixels.data), { raw: { width: layer.pixels.width, height: layer.pixels.height, channels: 4 } }).png({ compressionLevel: 9 }).toFile(join(output, "textures", `${layer.id}.png`));
-    })
-  );
-  const neutral = await neutralPng(imported);
-  await writeFile(join(output, "reports", "neutral.png"), neutral);
-  await writeSemanticCageArtifacts(output, neutral, project);
-  await Promise.all(requests.requests.map(async (request) => {
-    if (!request.reference) return;
-    const target = join(output, request.reference.path);
-    await mkdir(dirname(target), { recursive: true });
-    await sharp(neutral).extract({
-      left: Math.round(request.crop.x),
-      top: Math.round(request.crop.y),
-      width: Math.round(request.crop.width),
-      height: Math.round(request.crop.height)
-    }).png().toFile(target);
-  }));
-  await writePoseSheet(join(output, "reports", "pose-sheet.png"), imported, project);
-  await writeFile(join(output, "puppetloom.json"), `${JSON.stringify(project, null, 2)}\n`, "utf8");
-  await writeFreshCalibration(output);
-  await writeFile(join(output, "reports", "build-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await writeFile(join(output, "requests", "asset-requests.json"), `${JSON.stringify(requests, null, 2)}\n`, "utf8");
-  return { project, report, assetRequests: requests, outputDirectory: output };
+    if (outputExisted) await rename(finalOutput, reservation);
+    try {
+      await rename(stagingOutput, finalOutput);
+      operationRoot = finalOutput;
+      published = true;
+    } catch (error) {
+      if (outputExisted) await rename(reservation, finalOutput).catch(() => undefined);
+      throw error;
+    }
+    let reservedOutput: string | undefined;
+    if (outputExisted) {
+      reservedOutput = join(finalOutput, "reports", "operations", `create-${operationId}`, "reserved-output");
+      try { await rename(reservation, reservedOutput); }
+      catch { reservedOutput = reservation; }
+    }
+    const completedAt = new Date().toISOString();
+    try {
+      await atomicJson(join(operationRoot, operationRelative), {
+        version: 1, id: operationId, kind: "project-create", status: "succeeded", createdAt: startedAt, updatedAt: completedAt,
+        completedAt, target: finalOutput, processId: process.pid, ...(reservedOutput ? { reservedOutput } : {})
+      });
+    } catch { /* The published project remains the unique final state. */ }
+    return { project, report, assetRequests: requests, outputDirectory: finalOutput };
+  } catch (error) {
+    if (!published) {
+      const failedAt = new Date().toISOString();
+      try {
+        await atomicJson(join(operationRoot, operationRelative), {
+          version: 1, id: operationId, kind: "project-create", status: "failed", createdAt: startedAt, updatedAt: failedAt,
+          completedAt: failedAt, target: finalOutput, staging: stagingOutput, processId: process.pid,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch { /* Preserve the original error and the staging directory. */ }
+    }
+    throw new PuppetLoomError("IO_ERROR", `项目生成失败；未发布的操作记录保留在 ${stagingOutput}`, { cause: error });
+  }
 }
 
 async function readBaseProject(projectDirectory: string): Promise<{ project: PuppetLoomProject; hash: string }> {
@@ -298,8 +358,8 @@ async function readBaseProject(projectDirectory: string): Promise<{ project: Pup
   try {
     await access(path);
     const text = await readFile(path, "utf8");
-    const parsed = puppetLoomProjectSchema.parse(JSON.parse(text)) as unknown as PuppetLoomProject & { version: 1 | 2 };
-    return { project: { ...parsed, version: 2 }, hash: createHash("sha256").update(text).digest("hex") };
+    const parsed = parsePuppetLoomProject(JSON.parse(text));
+    return { project: parsed, hash: createHash("sha256").update(text).digest("hex") };
   } catch (error) {
     throw new PuppetLoomError("INVALID_PROJECT", `无法读取 PuppetLoom 项目：${projectDirectory}`, { cause: error });
   }
@@ -307,9 +367,19 @@ async function readBaseProject(projectDirectory: string): Promise<{ project: Pup
 
 function emptyCalibration(baseProjectSha256: string): CalibrationDocument {
   return {
-    version: 1,
+    version: 2,
     baseProjectSha256,
     revision: 0,
+    updatedAt: new Date().toISOString(),
+    overrides: {}
+  };
+}
+
+function emptyCalibrationDraft(baseProjectSha256: string, baseRevision: number): CalibrationDraftDocument {
+  return {
+    version: 1,
+    baseProjectSha256,
+    baseRevision,
     updatedAt: new Date().toISOString(),
     overrides: {}
   };
@@ -345,105 +415,497 @@ export async function loadCalibration(projectDirectory: string): Promise<Calibra
   }
 }
 
+export async function loadCalibrationDraft(projectDirectory: string): Promise<CalibrationDraftDocument | undefined> {
+  const root = resolve(projectDirectory);
+  const [{ hash }, calibration] = await Promise.all([readBaseProject(root), loadCalibration(root)]);
+  try {
+    const draft = calibrationDraftSchema.parse(JSON.parse(await readFile(join(root, "calibration", "draft.json"), "utf8"))) as CalibrationDraftDocument;
+    if (draft.baseProjectSha256 !== hash || draft.baseRevision !== calibration.revision) return undefined;
+    if (Object.keys(draft.overrides).length === 0 && !draft.label) return undefined;
+    return draft;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new PuppetLoomError("INVALID_PROJECT", `无法读取项目校准草稿：${projectDirectory}`, { cause: error });
+  }
+}
+
+export async function saveCalibrationDraft(
+  projectDirectory: string,
+  baseRevision: number,
+  rawOverrides: CalibrationOverrides,
+  label?: string
+): Promise<CalibrationDraftDocument> {
+  const root = resolve(projectDirectory);
+  const [{ hash }, calibration] = await Promise.all([readBaseProject(root), loadCalibration(root)]);
+  if (baseRevision !== calibration.revision) throw new PuppetLoomError("INVALID_PROJECT", "项目校准已更新，请重新打开编辑器后再继续。" );
+  let overrides: CalibrationOverrides;
+  try {
+    overrides = calibrationOverridesSchema.parse(rawOverrides) as CalibrationOverrides;
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_INPUT", "校准草稿格式无效。", { cause: error });
+  }
+  const draft: CalibrationDraftDocument = {
+    version: 1,
+    baseProjectSha256: hash,
+    baseRevision,
+    updatedAt: new Date().toISOString(),
+    ...(label?.trim() ? { label: label.trim() } : {}),
+    overrides
+  };
+  await mkdir(join(root, "calibration"), { recursive: true });
+  await atomicJson(join(root, "calibration", "draft.json"), draft);
+  return draft;
+}
+
+export async function clearCalibrationDraft(projectDirectory: string): Promise<void> {
+  const root = resolve(projectDirectory);
+  const [{ hash }, calibration] = await Promise.all([readBaseProject(root), loadCalibration(root)]);
+  await mkdir(join(root, "calibration"), { recursive: true });
+  await atomicJson(join(root, "calibration", "draft.json"), emptyCalibrationDraft(hash, calibration.revision));
+}
+
 export async function loadProject(projectDirectory: string): Promise<PuppetLoomProject> {
   const base = await loadBaseProject(projectDirectory);
   const calibration = await loadCalibration(projectDirectory);
   try {
-    return applyCalibrationOverrides(base, calibration.overrides);
+    return applySafetyLimits(applyCalibrationOverrides(base, calibration.overrides));
   } catch (error) {
     throw new PuppetLoomError("INVALID_PROJECT", `无法应用项目校准：${projectDirectory}`, { cause: error });
   }
 }
 
-export async function describeProject(projectDirectory: string): Promise<ProjectDescription> {
+export async function describeProject(projectDirectory: string, layerId?: string, revision?: number): Promise<ProjectDescription> {
   const directory = resolve(projectDirectory);
-  const project = await loadProject(directory);
-  const calibration = await loadCalibration(directory);
+  const [{ project: baseProject, hash }, calibration] = await Promise.all([readBaseProject(directory), loadCalibration(directory)]);
+  const selectedRevision = revision ?? calibration.revision;
+  const project = revision === undefined ? await loadProject(directory) : await loadProjectRevision(directory, selectedRevision);
+  const selected = layerId ? project.layers.find((layer) => layer.id === layerId) : undefined;
+  const selectedBase = selected ? baseProject.layers.find((layer) => layer.id === selected.id) : undefined;
+  if (layerId && !selected) throw new PuppetLoomError("INVALID_INPUT", `找不到图层：${layerId}`);
+  const selectedLayer = selected ? {
+    id: selected.id,
+    sourceName: selected.sourceName,
+    sourcePath: selected.sourcePath,
+    role: selected.role,
+    side: selected.side,
+    opacity: selected.opacity,
+    blendMode: selected.blendMode,
+    texture: selected.texture,
+    parentGroup: selected.parentGroup,
+    ...(selected.parentLayerId ? { parentLayerId: selected.parentLayerId } : {}),
+    order: selected.order,
+    visible: selected.visible !== false,
+    locked: selected.locked === true,
+    bounds: selected.bounds,
+    pivot: selected.pivot,
+    ...(selected.secondaryAnchors ? { secondaryAnchors: selected.secondaryAnchors } : {}),
+    weights: selected.weights,
+    ...(selected.clipLayerId ? { clipLayerId: selected.clipLayerId } : {}),
+    ...(selected.mouthVariant ? { mouthVariant: selected.mouthVariant } : {}),
+    alphaTopology: await inspectLayerAlphaTopology(join(directory, selected.texture), selected),
+    mesh: {
+      rows: selected.mesh.rows,
+      cols: selected.mesh.cols,
+      points: selected.mesh.points.map((position, index) => {
+        const uv = selected.mesh.uvs[index] ?? {
+          x: index % selected.mesh.cols / Math.max(1, selected.mesh.cols - 1),
+          y: Math.floor(index / selected.mesh.cols) / Math.max(1, selected.mesh.rows - 1)
+        };
+        const basePosition = selectedBase?.mesh.rows === selected.mesh.rows && selectedBase.mesh.cols === selected.mesh.cols
+          ? selectedBase.mesh.points[index] ?? position
+          : {
+              x: selected.bounds.x + selected.bounds.width * uv.x,
+              y: selected.bounds.y + selected.bounds.height * uv.y
+            };
+        return {
+          index,
+          row: Math.floor(index / selected.mesh.cols),
+          col: index % selected.mesh.cols,
+          basePosition,
+          position,
+          delta: { x: position.x - basePosition.x, y: position.y - basePosition.y },
+          uv,
+          influences: Object.fromEntries((["face", "skull", "head", "body", "gaze", "physics", "pin"] as const).map((channel) => [
+            channel,
+            selected.mesh.influences?.[channel]?.[index] ?? (channel === "pin" ? 0 : 1)
+          ])) as Record<import("./types.js").MeshInfluenceChannel, number>
+        };
+      }),
+      triangles: selected.mesh.triangles
+    }
+  } : undefined;
   return {
     project: project.name,
     directory,
     version: project.version,
-    calibrationRevision: calibration.revision,
+    calibrationRevision: selectedRevision,
+    baseProjectSha256: hash,
+    coordinateSystem: {
+      unit: "normalized-canvas",
+      origin: "top-left",
+      xAxis: "right",
+      yAxis: "down",
+      sideConvention: "anatomical",
+      note: "side 表示角色自身左右；正面角色的 left 通常显示在画面右侧。"
+    },
     canvas: project.canvas,
     rigLevel: project.rigLevel,
     anchors: project.anchors,
     semanticPoints: project.runtime.semanticCage?.points ?? {},
     runtime: project.runtime,
+    model: project.model,
     layers: project.layers.map((layer) => ({
       id: layer.id,
       sourceName: layer.sourceName,
+      sourcePath: layer.sourcePath,
       role: layer.role,
       side: layer.side,
+      opacity: layer.opacity,
+      blendMode: layer.blendMode,
+      texture: layer.texture,
       parentGroup: layer.parentGroup,
+      ...(layer.parentLayerId ? { parentLayerId: layer.parentLayerId } : {}),
+      ...(layer.deformerId ? { deformerId: layer.deformerId } : {}),
+      order: layer.order,
+      visible: layer.visible !== false,
+      locked: layer.locked === true,
       bounds: layer.bounds,
       pivot: layer.pivot,
       ...(layer.secondaryAnchors ? { secondaryAnchors: layer.secondaryAnchors } : {}),
       mesh: { rows: layer.mesh.rows, cols: layer.mesh.cols, pointCount: layer.mesh.points.length },
       weights: layer.weights
-    }))
+    })),
+    ...(selectedLayer ? { selectedLayer } : {})
   };
 }
 
-export async function saveCalibrationPatch(projectDirectory: string, rawPatch: CalibrationPatch): Promise<CalibrationSaveResult> {
+export async function describeAuthoringProject(projectDirectory: string): Promise<ReturnType<typeof authoringSummary>> {
   const root = resolve(projectDirectory);
+  const [project, calibration] = await Promise.all([loadProject(root), loadCalibration(root)]);
+  return authoringSummary(project, calibration.revision);
+}
+
+interface CalibrationLock {
+  operationId: string;
+  processId: number;
+  createdAt: string;
+  state: "held" | "released";
+}
+
+interface HeldCalibrationLock extends CalibrationLock {
+  path: string;
+  handle: FileHandle;
+}
+
+const activeCalibrationLocks = new Set<string>();
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+function processIsAlive(processId: number): boolean {
+  if (!Number.isInteger(processId) || processId <= 0) return false;
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function archiveCalibrationLock(root: string, path: string, suffix: "released" | "stale"): Promise<void> {
+  const archive = join(root, "calibration", "locks");
+  await mkdir(archive, { recursive: true });
+  await rename(path, join(archive, `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID()}.${suffix}.json`));
+}
+
+async function acquireCalibrationLock(root: string, operationId: string): Promise<HeldCalibrationLock> {
+  const path = join(root, "calibration", "write.lock");
+  await mkdir(dirname(path), { recursive: true });
+  const deadline = Date.now() + 60_000;
+  let malformedSince: number | undefined;
+  while (Date.now() < deadline) {
+    try {
+      const handle = await open(path, "wx");
+      const lock: CalibrationLock = { operationId, processId: process.pid, createdAt: new Date().toISOString(), state: "held" };
+      activeCalibrationLocks.add(operationId);
+      try {
+        await handle.writeFile(`${JSON.stringify(lock, null, 2)}\n`, "utf8");
+        await handle.sync();
+      } catch (error) {
+        activeCalibrationLocks.delete(operationId);
+        await handle.close().catch(() => undefined);
+        throw error;
+      }
+      return { ...lock, path, handle };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw new PuppetLoomError("IO_ERROR", "无法取得校准写入锁。", { cause: error });
+      }
+      try {
+        const existing = JSON.parse(await readFile(path, "utf8")) as Partial<CalibrationLock>;
+        malformedSince = undefined;
+        const ownedHere = existing.processId === process.pid && typeof existing.operationId === "string" && activeCalibrationLocks.has(existing.operationId);
+        const staleOwner = existing.processId === process.pid ? !ownedHere : !processIsAlive(existing.processId ?? -1);
+        if (existing.state !== "held" || staleOwner) {
+          await archiveCalibrationLock(root, path, "stale");
+          continue;
+        }
+      } catch (readError) {
+        if ((readError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        malformedSince ??= Date.now();
+        if (Date.now() - malformedSince > 1_000) {
+          try {
+            await archiveCalibrationLock(root, path, "stale");
+            malformedSince = undefined;
+            continue;
+          } catch {
+            // Another process may still be finishing the lock file; retry until the bounded deadline.
+          }
+        }
+      }
+      await delay(25);
+    }
+  }
+  throw new PuppetLoomError("OPERATION_BUSY", "另一个进程仍在写入校准，请稍后重试。" );
+}
+
+async function releaseCalibrationLock(root: string, lock: HeldCalibrationLock): Promise<void> {
+  activeCalibrationLocks.delete(lock.operationId);
+  await lock.handle.close();
+  try {
+    await archiveCalibrationLock(root, lock.path, "released");
+  } catch (error) {
+    try {
+      await atomicJson(lock.path, { ...lock, path: undefined, handle: undefined, state: "released" });
+    } catch {
+      throw new PuppetLoomError("IO_ERROR", "校准已处理，但写入锁无法归档。", { cause: error });
+    }
+  }
+}
+
+function operationPath(root: string, operationId: string): string {
+  return join(root, "reports", "calibration", operationId, "operation.json");
+}
+
+async function recoverCalibrationOperationsUnlocked(root: string, current: CalibrationDocument): Promise<CalibrationOperationDocument[]> {
+  const reports = join(root, "reports", "calibration");
+  let directories: string[];
+  try {
+    directories = await readdir(reports);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const recovered: CalibrationOperationDocument[] = [];
+  for (const directory of directories.sort()) {
+    const path = join(reports, directory, "operation.json");
+    try {
+      const operation = calibrationOperationSchema.parse(JSON.parse(await readFile(path, "utf8"))) as CalibrationOperationDocument;
+      if (operation.status !== "pending") continue;
+      const now = new Date().toISOString();
+      const next: CalibrationOperationDocument = current.headSessionId === operation.sessionId
+        ? { ...operation, status: "succeeded", updatedAt: now, completedAt: now }
+        : { ...operation, status: "interrupted", updatedAt: now, completedAt: now, error: "进程在切换当前校准版本前中断；未自动重放。" };
+      await atomicJson(path, next);
+      recovered.push(next);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new PuppetLoomError("INVALID_PROJECT", `无法恢复校准操作记录：${path}`, { cause: error });
+      }
+    }
+  }
+  return recovered;
+}
+
+export async function recoverCalibrationOperations(projectDirectory: string): Promise<CalibrationOperationDocument[]> {
+  const root = resolve(projectDirectory);
+  const lock = await acquireCalibrationLock(root, `recovery-${randomUUID()}`);
+  try {
+    return await recoverCalibrationOperationsUnlocked(root, await loadCalibration(root));
+  } finally {
+    await releaseCalibrationLock(root, lock);
+  }
+}
+
+async function commitCalibrationPatch(root: string, patch: CalibrationPatch, replacementOverrides?: CalibrationOverrides): Promise<CalibrationSaveResult> {
+  const operationId = randomUUID();
+  const lock = await acquireCalibrationLock(root, operationId);
+  let operation: CalibrationOperationDocument | undefined;
+  let operationFile: string | undefined;
+  let committed = false;
+  try {
+    const { project: base, hash } = await readBaseProject(root);
+    const current = await loadCalibration(root);
+    await recoverCalibrationOperationsUnlocked(root, current);
+    if (current.baseProjectSha256 !== hash && current.revision > 0) throw new PuppetLoomError("INVALID_PROJECT", "基础项目已改变，不能继续追加校准。" );
+    if (patch.baseRevision !== current.revision) {
+      throw new PuppetLoomError("REVISION_CONFLICT", `校准基线已从 ${patch.baseRevision} 更新到 ${current.revision}，本次修改没有写入。`);
+    }
+    const before = applySafetyLimits(applyCalibrationOverrides(base, current.overrides));
+    const overrides = replacementOverrides ?? mergeCalibrationOverrides(clearCalibrationOverrides(current.overrides, patch.clear), patch.overrides);
+    const after = applySafetyLimits(applyCalibrationOverrides(base, overrides));
+    const rigRank: Record<RigLevel, number> = { minimal: 0, grouped: 1, semantic: 2 };
+    if (rigRank[after.rigLevel] < rigRank[before.rigLevel] || after.quality.safetyScale + 1e-9 < before.quality.safetyScale) {
+      throw new PuppetLoomError(
+        "INVALID_INPUT",
+        `校准超过当前安全余量：动作安全系数将从 ${before.quality.safetyScale.toFixed(2)} 降至 ${after.quality.safetyScale.toFixed(2)}。`
+      );
+    }
+    const now = new Date().toISOString();
+    const revision = current.revision + 1;
+    const id = `${String(revision).padStart(4, "0")}-${randomUUID()}`;
+    const label = patch.label?.trim() || `校准 ${revision}`;
+    const operationDirectory = join(root, "reports", "calibration", operationId);
+    const evidenceDirectory = join(operationDirectory, "evidence");
+    operationFile = operationPath(root, operationId);
+    operation = {
+      version: 1,
+      id: operationId,
+      kind: "calibration-commit",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      baseRevision: current.revision,
+      targetRevision: revision,
+      sessionId: id,
+      processId: process.pid,
+      evidenceDirectory: relative(root, evidenceDirectory)
+    };
+    await mkdir(operationDirectory, { recursive: true });
+    await atomicJson(operationFile, operation);
+
+    const evidence = await (await import("./render-suite.js")).compareProjectStates(
+      root, before, after, current.revision, revision, evidenceDirectory, patch.authoring?.previews ?? []
+    );
+    const calibration: CalibrationDocument = {
+      version: 2,
+      baseProjectSha256: hash,
+      revision,
+      updatedAt: now,
+      label,
+      overrides,
+      headSessionId: id
+    };
+    const session: CalibrationSessionDocument = {
+      version: 1,
+      id,
+      createdAt: now,
+      label,
+      fromRevision: current.revision,
+      toRevision: revision,
+      beforeFingerprint: projectFingerprint(before),
+      afterFingerprint: projectFingerprint(after),
+      patch,
+      beforeOverrides: current.overrides,
+      afterOverrides: overrides,
+      evidenceStatus: "unreviewed",
+      ...(current.headSessionId ? { parentSessionId: current.headSessionId } : {}),
+      operationId,
+      evidenceDirectory: relative(root, evidenceDirectory)
+    };
+    const sessions = join(root, "calibration", "sessions");
+    await mkdir(sessions, { recursive: true });
+    const sessionPath = join(sessions, `${id}.json`);
+    await atomicJson(sessionPath, session);
+    await atomicJson(join(root, "calibration", "current.json"), calibration);
+    committed = true;
+    const completedAt = new Date().toISOString();
+    const succeeded: CalibrationOperationDocument = {
+      ...operation,
+      status: "succeeded",
+      updatedAt: completedAt,
+      completedAt,
+      sessionPath: relative(root, sessionPath)
+    };
+    try {
+      await atomicJson(operationFile, succeeded);
+    } catch {
+      // Recovery derives success from current.headSessionId; the committed result remains unambiguous.
+    }
+    return { project: after, calibration, session, sessionPath, evidence, operation: succeeded };
+  } catch (error) {
+    if (!committed && operation && operationFile) {
+      const failedAt = new Date().toISOString();
+      const failed: CalibrationOperationDocument = {
+        ...operation,
+        status: "failed",
+        updatedAt: failedAt,
+        completedAt: failedAt,
+        error: error instanceof Error ? error.message : String(error)
+      };
+      try { await atomicJson(operationFile, failed); } catch { /* Preserve the original failure. */ }
+    }
+    throw error;
+  } finally {
+    await releaseCalibrationLock(root, lock);
+  }
+}
+
+export async function saveCalibrationPatch(projectDirectory: string, rawPatch: CalibrationPatch): Promise<CalibrationSaveResult> {
   let patch: CalibrationPatch;
   try {
     patch = calibrationPatchSchema.parse(rawPatch) as CalibrationPatch;
   } catch (error) {
     throw new PuppetLoomError("INVALID_INPUT", "校准补丁格式无效。", { cause: error });
   }
-  const { project: base, hash } = await readBaseProject(root);
-  const current = await loadCalibration(root);
-  if (current.baseProjectSha256 !== hash && current.revision > 0) throw new PuppetLoomError("INVALID_PROJECT", "基础项目已改变，不能继续追加校准。" );
-  const before = applyCalibrationOverrides(base, current.overrides);
-  const overrides = mergeCalibrationOverrides(clearCalibrationOverrides(current.overrides, patch.clear), patch.overrides);
-  const after = applyCalibrationOverrides(base, overrides);
-  const poses = validateProjectPoses(after);
-  const failed = poses.filter((pose) => !pose.passed);
-  if (failed.length > 0) {
-    const summary = [...new Set(failed.flatMap((pose) => pose.issues.map((issue) => issue.message)))].slice(0, 4).join("；");
-    throw new PuppetLoomError("INVALID_INPUT", `校准导致 ${failed.length} 个姿态不安全：${summary}`);
+  return commitCalibrationPatch(resolve(projectDirectory), patch);
+}
+
+export async function saveAuthoringPatch(projectDirectory: string, rawPatch: AuthoringPatch): Promise<CalibrationSaveResult> {
+  let patch: AuthoringPatch;
+  try {
+    patch = authoringPatchSchema.parse(rawPatch) as AuthoringPatch;
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_INPUT", "Authoring 补丁格式无效。", { cause: error });
   }
-  after.quality = { ...after.quality, poseValidations: poses, issues: [], safetyScale: 1 };
-  const now = new Date().toISOString();
-  const revision = current.revision + 1;
-  const id = `${String(revision).padStart(4, "0")}-${randomUUID()}`;
-  const label = patch.label?.trim() || `校准 ${revision}`;
-  const calibration: CalibrationDocument = {
-    version: 1,
-    baseProjectSha256: hash,
-    revision,
-    updatedAt: now,
-    label,
-    overrides
-  };
-  const session: CalibrationSessionDocument = {
-    version: 1,
-    id,
-    createdAt: now,
-    label,
-    fromRevision: current.revision,
-    toRevision: revision,
-    beforeFingerprint: projectFingerprint(before),
-    afterFingerprint: projectFingerprint(after),
-    patch,
-    beforeOverrides: current.overrides,
-    afterOverrides: overrides,
-    evidenceStatus: "unreviewed"
-  };
-  const sessions = join(root, "calibration", "sessions");
-  await mkdir(sessions, { recursive: true });
-  const sessionPath = join(sessions, `${id}.json`);
-  await atomicJson(sessionPath, session);
-  await atomicJson(join(root, "calibration", "current.json"), calibration);
-  return { project: after, calibration, session, sessionPath };
+  const root = resolve(projectDirectory);
+  const [before, calibration] = await Promise.all([loadProject(root), loadCalibration(root)]);
+  if (patch.baseRevision !== calibration.revision) {
+    throw new PuppetLoomError("REVISION_CONFLICT", `Authoring 基线已从 ${patch.baseRevision} 更新到 ${calibration.revision}，本次修改没有写入。`);
+  }
+  let after: PuppetLoomProject;
+  try {
+    after = applyAuthoringOperations(before, patch.operations);
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_INPUT", "Authoring 操作无法形成有效模型。", { cause: error });
+  }
+  const layerOverrides = authoringLayerOverrides(before, after);
+  const audit = buildAuthoringAudit(patch, before, after);
+  return saveCalibrationPatch(root, {
+    baseRevision: patch.baseRevision,
+    ...(patch.label ? { label: patch.label } : {}),
+    overrides: {
+      model: after.model,
+      ...(Object.keys(layerOverrides).length > 0 ? { layers: layerOverrides } : {})
+    },
+    authoring: audit
+  });
 }
 
 export async function listCalibrationSessions(projectDirectory: string): Promise<CalibrationSessionDocument[]> {
-  const directory = join(resolve(projectDirectory), "calibration", "sessions");
+  const root = resolve(projectDirectory);
+  const directory = join(root, "calibration", "sessions");
   try {
     const files = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
-    return await Promise.all(files.map(async (name) => calibrationSessionSchema.parse(JSON.parse(await readFile(join(directory, name), "utf8"))) as CalibrationSessionDocument));
+    const all = await Promise.all(files.map(async (name) => calibrationSessionSchema.parse(JSON.parse(await readFile(join(directory, name), "utf8"))) as CalibrationSessionDocument));
+    const current = await loadCalibration(root);
+    if (!current.headSessionId) return all.filter((session) => session.toRevision <= current.revision).sort((a, b) => a.toRevision - b.toRevision);
+    const byId = new Map(all.map((session) => [session.id, session]));
+    const chain: CalibrationSessionDocument[] = [];
+    const seen = new Set<string>();
+    let id: string | undefined = current.headSessionId;
+    while (id) {
+      if (seen.has(id)) throw new Error(`校准历史形成循环：${id}`);
+      seen.add(id);
+      const session = byId.get(id);
+      if (!session) throw new Error(`当前校准引用了不存在的会话：${id}`);
+      chain.push(session);
+      id = session.parentSessionId;
+    }
+    const oldestRevision = chain.at(-1)?.fromRevision ?? current.revision;
+    const legacy = all.filter((session) => !session.operationId && session.toRevision <= oldestRevision).sort((a, b) => a.toRevision - b.toRevision);
+    return [...legacy, ...chain.reverse()];
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw new PuppetLoomError("IO_ERROR", `无法读取校准历史：${projectDirectory}`, { cause: error });
@@ -453,12 +915,12 @@ export async function listCalibrationSessions(projectDirectory: string): Promise
 export async function loadProjectRevision(projectDirectory: string, revision: number): Promise<PuppetLoomProject> {
   if (!Number.isInteger(revision) || revision < 0) throw new PuppetLoomError("INVALID_INPUT", "校准修订号必须是非负整数。" );
   const base = await loadBaseProject(projectDirectory);
-  if (revision === 0) return base;
+  if (revision === 0) return applySafetyLimits(base);
   const current = await loadCalibration(projectDirectory);
-  if (revision === current.revision) return applyCalibrationOverrides(base, current.overrides);
+  if (revision === current.revision) return applySafetyLimits(applyCalibrationOverrides(base, current.overrides));
   const session = (await listCalibrationSessions(projectDirectory)).find((candidate) => candidate.toRevision === revision);
   if (!session) throw new PuppetLoomError("INVALID_INPUT", `找不到校准修订 ${revision}。`);
-  return applyCalibrationOverrides(base, session.afterOverrides);
+  return applySafetyLimits(applyCalibrationOverrides(base, session.afterOverrides));
 }
 
 export async function setCalibrationEvidenceStatus(
@@ -478,38 +940,11 @@ export async function setCalibrationEvidenceStatus(
   }
 }
 
-export async function restoreCalibrationRevision(projectDirectory: string, revision: number, label?: string): Promise<CalibrationSaveResult> {
+export async function restoreCalibrationRevision(projectDirectory: string, revision: number, baseRevision: number, label?: string): Promise<CalibrationSaveResult> {
   if (!Number.isInteger(revision) || revision < 0) throw new PuppetLoomError("INVALID_INPUT", "校准修订号必须是非负整数。" );
   const sessions = await listCalibrationSessions(projectDirectory);
   const overrides = revision === 0 ? {} : sessions.find((session) => session.toRevision === revision)?.afterOverrides;
   if (!overrides) throw new PuppetLoomError("INVALID_INPUT", `找不到校准修订 ${revision}。`);
-  const current = await loadCalibration(projectDirectory);
-  const resetPatch: CalibrationPatch = { label: label ?? `恢复到校准 ${revision}`, overrides };
-  const root = resolve(projectDirectory);
-  const { project: base, hash } = await readBaseProject(root);
-  const before = applyCalibrationOverrides(base, current.overrides);
-  const after = applyCalibrationOverrides(base, overrides);
-  const poses = validateProjectPoses(after);
-  if (poses.some((pose) => !pose.passed)) throw new PuppetLoomError("INVALID_INPUT", `校准修订 ${revision} 未通过当前安全检查。`);
-  const now = new Date().toISOString();
-  const nextRevision = current.revision + 1;
-  const id = `${String(nextRevision).padStart(4, "0")}-${randomUUID()}`;
-  const calibration: CalibrationDocument = {
-    version: 1,
-    baseProjectSha256: hash,
-    revision: nextRevision,
-    updatedAt: now,
-    ...(resetPatch.label ? { label: resetPatch.label } : {}),
-    overrides
-  };
-  const session: CalibrationSessionDocument = {
-    version: 1, id, createdAt: now, label: resetPatch.label!, fromRevision: current.revision, toRevision: nextRevision,
-    beforeFingerprint: projectFingerprint(before), afterFingerprint: projectFingerprint(after), patch: resetPatch,
-    beforeOverrides: current.overrides, afterOverrides: overrides, evidenceStatus: "unreviewed"
-  };
-  const sessionPath = join(root, "calibration", "sessions", `${id}.json`);
-  await mkdir(dirname(sessionPath), { recursive: true });
-  await atomicJson(sessionPath, session);
-  await atomicJson(join(root, "calibration", "current.json"), calibration);
-  return { project: after, calibration, session, sessionPath };
+  const resetPatch: CalibrationPatch = { baseRevision, label: label ?? `恢复到校准 ${revision}`, overrides };
+  return commitCalibrationPatch(resolve(projectDirectory), resetPatch, overrides);
 }

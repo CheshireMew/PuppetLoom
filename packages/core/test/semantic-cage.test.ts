@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ImportedLayer, ImportedPsd } from "../src/psd.js";
 import { applyCoherentPoseField } from "../src/pose-field.js";
 import { buildRig } from "../src/rig.js";
+import { safetyPoseState, validatePose } from "../src/safety.js";
 import { buildSemanticControlCage } from "../src/semantic-cage.js";
 import type { SemanticRole, Side } from "../src/types.js";
 
@@ -102,6 +103,22 @@ describe("automatic semantic control cage", () => {
     expect(project.runtime.semanticCage?.validation.confidence).toBeGreaterThan(0.8);
   });
 
+  it("lets calibration attenuate face and skull cage influence independently", () => {
+    const project = rigFixture();
+    const field = project.runtime.poseField!;
+    const cage = project.runtime.semanticCage!;
+    const face = project.layers.find((entry) => entry.role === "face")!;
+    const skull = project.layers.find((entry) => entry.role === "backHair")!;
+    const facePoint = { x: face.bounds.x + face.bounds.width * 0.23, y: face.bounds.y + face.bounds.height * 0.61 };
+    const skullPoint = { x: skull.bounds.x + skull.bounds.width * 0.19, y: skull.bounds.y + skull.bounds.height * 0.42 };
+    const faceFull = applyCoherentPoseField(field, face, facePoint, 0.82, 0.3, cage);
+    const faceSurfaceOnly = applyCoherentPoseField(field, face, facePoint, 0.82, 0.3, cage, { face: 0 });
+    const skullFull = applyCoherentPoseField(field, skull, skullPoint, 0.82, 0.3, cage);
+    const skullSurfaceOnly = applyCoherentPoseField(field, skull, skullPoint, 0.82, 0.3, cage, { skull: 0 });
+    expect(Math.hypot(faceFull.x - faceSurfaceOnly.x, faceFull.y - faceSurfaceOnly.y)).toBeGreaterThan(1e-5);
+    expect(Math.hypot(skullFull.x - skullSurfaceOnly.x, skullFull.y - skullSurfaceOnly.y)).toBeGreaterThan(1e-5);
+  });
+
   it("pins only the roots of face-framing hair and releases its tips", () => {
     const project = rigFixture();
     const field = project.runtime.poseField!;
@@ -191,5 +208,59 @@ describe("automatic semantic control cage", () => {
         }
       }
     }
+  });
+
+  it("keeps a narrow face-framing hair mesh usable at the full yaw envelope", () => {
+    const imported = fixture();
+    const hair = imported.layers.find((entry) => entry.role === "frontHair")!;
+    hair.bounds = { x: 432, y: 28, width: 126, height: 203 };
+    hair.pixels = {
+      width: hair.bounds.width,
+      height: hair.bounds.height,
+      data: new Uint8ClampedArray(hair.bounds.width * hair.bounds.height * 4).fill(255)
+    };
+    hair.opaquePixels = hair.bounds.width * hair.bounds.height;
+    const project = buildRig({
+      imported,
+      name: "narrow-front-hair",
+      seed: 42,
+      source: { originalFileName: imported.fileName, psdSha256: "fixture", psdPath: "source/source.psd" }
+    });
+    project.runtime.poseField = {
+      kind: "head-surfaces-v2",
+      center: { x: 0.49375, y: 0.161766 },
+      radiusX: 0.048047,
+      radiusY: 0.061719,
+      skullCenter: { x: 0.49375, y: 0.119016 },
+      skullRadiusX: 0.120117,
+      skullRadiusY: 0.09089,
+      maxYawRadians: 0.3,
+      maxPitchRadians: 0.32,
+      perspective: 0.1
+    };
+    const positions = {
+      headTop: [0.494922, 0.075], forehead: [0.494922, 0.112391], skullLeft: [0.433594, 0.133992], skullRight: [0.557031, 0.133992],
+      faceLeft: [0.448437, 0.155594], faceRight: [0.539844, 0.155594], eyeLeftOuter: [0.457813, 0.166797], eyeLeft: [0.469531, 0.166797],
+      eyeLeftInner: [0.48125, 0.166797], eyeRightInner: [0.507031, 0.166797], eyeRight: [0.519141, 0.166797], eyeRightOuter: [0.53125, 0.166797],
+      nose: [0.49375, 0.177812], cheekLeft: [0.45625, 0.18363], cheekRight: [0.532031, 0.18363], mouthLeft: [0.488281, 0.194922],
+      mouth: [0.494531, 0.194922], mouthRight: [0.500781, 0.194922], jawLeft: [0.469531, 0.20557], jawRight: [0.517969, 0.20557],
+      chin: [0.494922, 0.213281], neckLeft: [0.478125, 0.213281], neckRight: [0.513281, 0.213281]
+    } as const;
+    for (const [id, [x, y]] of Object.entries(positions)) {
+      project.runtime.semanticCage!.points[id as keyof typeof project.runtime.semanticCage.points].position = { x, y };
+    }
+    const projectHair = project.layers.find((entry) => entry.role === "frontHair")!;
+    projectHair.pivot = { x: 0.494922, y: 0.134375 };
+    projectHair.secondaryAnchors = {
+      frontHairRoot: { x: 0.494922, y: 0.134375 },
+      frontHairRootLeft: { x: 0.450781, y: 0.135938 },
+      frontHairRootRight: { x: 0.539063, y: 0.135938 },
+      frontHairTipLeft: { x: 0.450781, y: 0.230469 },
+      frontHairTipRight: { x: 0.539063, y: 0.230469 },
+      ahogeRoot: { x: 0.494922, y: 0.076563 }
+    };
+
+    const validation = validatePose(project, "yaw-right", safetyPoseState(1, 0, 0));
+    expect(validation.issues.filter((issue) => issue.layerId === hair.id && issue.code === "mesh-inversion")).toEqual([]);
   });
 });

@@ -308,7 +308,10 @@ function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, 
   const strandMask = Math.max(sideLock, strandProximity * sideGate);
   const faceFollow = entersAtRoot * strandMask * (1 - smoothstep01((progress - 0.06) / 0.64)) * 0.82;
   const rootLock = entersAtRoot * strandMask * (1 - smoothstep01((progress - 0.01) / 0.34));
-  const strandRelease = strandMask * smoothstep01((progress - 0.08) / 0.82);
+  // Keep the side-strand transition below a full replacement. A narrow hair
+  // layer can place adjacent grid columns on opposite sides of this mask; a
+  // 100% replacement then collapses the transition column at full yaw.
+  const strandRelease = strandMask * smoothstep01((progress - 0.08) / 0.82) * 0.82;
   return { faceFollow, rootLock, strandRelease, root: strandRoot };
 }
 
@@ -551,7 +554,8 @@ export function applyCoherentPoseField(
   base: Point,
   yaw: number,
   pitch: number,
-  semanticCage?: SemanticControlCage
+  semanticCage?: SemanticControlCage,
+  cageInfluence: { face?: number; skull?: number } = {}
 ): Point {
   const yawAngle = clamp(yaw, -1, 1) * field.maxYawRadians;
   const pitchAngle = clamp(pitch, -1, 1) * field.maxPitchRadians;
@@ -563,7 +567,8 @@ export function applyCoherentPoseField(
     : semanticCage?.roleGroups.face.includes(layer.role)
       ? "face"
       : undefined;
-  const cageBlend = semanticCage && region ? cageBlendFor(layer.role) : 0;
+  const regionInfluence = region === "face" ? cageInfluence.face ?? 1 : region === "skull" ? cageInfluence.skull ?? 1 : 1;
+  const cageBlend = semanticCage && region ? cageBlendFor(layer.role) * clamp(regionInfluence, 0, 1) : 0;
   const cagePosed = semanticCage && region
     ? mappedBySemanticCage(field, semanticCage, base, region, yawAngle, pitchAngle, yaw, pitch)
     : surfacePosed;
@@ -640,7 +645,7 @@ export function applyCoherentPoseField(
       posed,
       desired,
       yaw,
-      Math.max(strand.rootLock, strand.strandRelease * 0.92)
+      strand.rootLock
     );
   }
   const posedPivot = {

@@ -1,0 +1,100 @@
+{
+  "protocol": "project-steward-production-storage-contract",
+  "version": 1,
+  "project_id": "puppetloom",
+  "policy": {
+    "unknown_peak": "block",
+    "outside_owned_roots": "block",
+    "over_budget": "block",
+    "cleanup_without_authorization": "report-only"
+  },
+  "producers": [
+    {
+      "id": "test-evidence-runs",
+      "root_source": {
+        "kind": "project-relative",
+        "value": "test/artifacts/runs"
+      },
+      "artifact_classes": ["evidence", "temporary"],
+      "peak_estimate": {
+        "unknown_behavior": "block",
+        "source": "Every public producer declares estimatedBytes before startManagedRun creates its run directory."
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "PUPPETLOOM_ARTIFACT_MAX_BYTES or the 2 GiB project default",
+        "minimum_free_bytes_source": "PUPPETLOOM_ARTIFACT_MIN_FREE_BYTES or the 2 GiB project default"
+      },
+      "reuse": {
+        "required": false,
+        "reason": "Each run is a distinct observable evidence result; repeatable PSD inputs are read from the single tracked test/fixtures source instead of being downloaded or regenerated per run."
+      },
+      "lifecycle": {
+        "preflight": "Measure managed bytes and filesystem free space before creating the run directory or any payload.",
+        "finalization": "Rewrite run.json with succeeded or failed status, reuse decision, class byte totals, the conservative peak bound, complete file inventory, byte counts, and SHA-256 hashes.",
+        "interruption": "A later run marks ownerless pending manifests interrupted, inventories every payload, and preserves report-only cleanup candidates."
+      },
+      "implementation_files": [
+        "scripts/lib/managed-run.mjs",
+        "scripts/lib/vitest-artifacts.mjs",
+        "scripts/report-artifacts.mjs"
+      ],
+      "test_files": [
+        "test/managed-run.test.ts"
+      ],
+      "enforcement": {
+        "file": "scripts/lib/managed-run.mjs",
+        "tokens": [
+          "estimatedBytes",
+          "maximumManagedBytes",
+          "minimumFreeBytes",
+          "status: \"pending\"",
+          "inventory",
+          "categoryBytes",
+          "executeManagedRun",
+          "reuse",
+          "policy: \"report-only\""
+        ]
+      }
+    },
+    {
+      "id": "desktop-runtime-logs",
+      "root_source": {
+        "kind": "runtime-config",
+        "value": "runtimeLogPath project reports or Electron userData"
+      },
+      "artifact_classes": ["evidence"],
+      "peak_estimate": {
+        "unknown_behavior": "block",
+        "source": "5 MiB active segments with a 64 MiB aggregate default cap"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "PUPPETLOOM_RUNTIME_LOG_MAX_BYTES or the 64 MiB desktop default",
+        "minimum_free_bytes_source": "Incremental JSONL records remain below the active segment cap"
+      },
+      "reuse": {
+        "required": false,
+        "reason": "Runtime log records describe one concrete process and event sequence and cannot be reused as evidence for another run."
+      },
+      "lifecycle": {
+        "preflight": "Write runtime-log-policy.json and measure aggregate owned logs before each append.",
+        "finalization": "Rotate the active log by move when it reaches 5 MiB; never overwrite an archived segment.",
+        "interruption": "JSONL records are append-complete per event; existing segments remain inspectable after process exit."
+      },
+      "implementation_files": [
+        "apps/desktop/electron/main.ts"
+      ],
+      "test_files": [
+        "scripts/run-launcher-smoke.mjs"
+      ],
+      "enforcement": {
+        "file": "apps/desktop/electron/main.ts",
+        "tokens": [
+          "RUNTIME_LOG_ROTATE_BYTES",
+          "RUNTIME_LOG_MAX_TOTAL_BYTES",
+          "runtime-log-policy.json",
+          "cleanup: \"report-only\""
+        ]
+      }
+    }
+  ]
+}

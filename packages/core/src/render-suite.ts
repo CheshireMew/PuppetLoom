@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import sharp from "sharp";
 import { neutralMotionState } from "./deform.js";
+import { ModelPhysicsController } from "./model.js";
 import { loadProjectTextureSources, renderProjectPoseWithSources } from "./offline-render.js";
 import { loadCalibration, loadProjectRevision } from "./project.js";
 import { safetyPoseState } from "./safety.js";
 import type {
   MotionState,
+  AuthoringPreview,
   RenderArtifact,
   RenderSuiteKind,
   RenderSuiteResult,
@@ -18,6 +21,10 @@ interface Sample {
   label: string;
   kind: "pose" | "motion";
   state: MotionState;
+}
+
+async function fileSha256(path: string): Promise<string> {
+  return createHash("sha256").update(await readFile(path)).digest("hex");
 }
 
 function state(overrides: Partial<MotionState>): MotionState {
@@ -48,10 +55,34 @@ const motionSamples: Sample[] = [
   { id: "skirt-right-tail-down", label: "裙摆右 / 尾巴下", kind: "motion", state: state({ clothX: 0.02, tailY: 0.055 }) }
 ];
 
-function samplesFor(suite: RenderSuiteKind): Sample[] {
+function previewState(project: import("./types.js").PuppetLoomProject, preview: AuthoringPreview): MotionState {
+  const initial = state({
+    ...(preview.parameters ? { parameters: preview.parameters } : {}),
+    ...(preview.expressions ? { expressions: preview.expressions } : {}),
+    ...(preview.behavior ? { behavior: preview.behavior, timeSeconds: preview.behavior.timeSeconds } : {})
+  });
+  if (!preview.settleSeconds || preview.settleSeconds <= 0) return initial;
+  const controller = new ModelPhysicsController(project);
+  let current = initial;
+  const frames = Math.max(1, Math.ceil(preview.settleSeconds * 60));
+  for (let frame = 0; frame <= frames; frame += 1) current = controller.sample({ ...initial, timeSeconds: frame / 60 }, frame / 60);
+  return current;
+}
+
+function samplesFor(project: import("./types.js").PuppetLoomProject, suite: RenderSuiteKind, previews: AuthoringPreview[] = []): Sample[] {
+  const authoringSamples: Sample[] = previews.map((preview) => ({
+    id: `authoring-${preview.id}`,
+    label: preview.label,
+    kind: "pose",
+    state: previewState(project, preview)
+  }));
   if (suite === "poses") return poseSamples;
   if (suite === "motion") return motionSamples;
-  return [...poseSamples, ...motionSamples];
+  return [...poseSamples, ...authoringSamples, ...motionSamples];
+}
+
+function escapeXml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 async function renderSheet(samples: Sample[], imagePaths: string[], output: string, title: string): Promise<void> {
@@ -66,7 +97,7 @@ async function renderSheet(samples: Sample[], imagePaths: string[], output: stri
     const left = column * cellWidth;
     const top = row * cellHeight + 44;
     overlays.push({ input: await readFile(imagePaths[index]!), left, top });
-    const label = Buffer.from(`<svg width="${cellWidth}" height="30" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#141b27"/><text x="12" y="20" fill="#edf2fa" font-family="Segoe UI, Microsoft YaHei" font-size="14">${samples[index]!.label}</text></svg>`);
+    const label = Buffer.from(`<svg width="${cellWidth}" height="30" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#141b27"/><text x="12" y="20" fill="#edf2fa" font-family="Segoe UI, Microsoft YaHei" font-size="14">${escapeXml(samples[index]!.label)}</text></svg>`);
     overlays.push({ input: label, left, top: top + 300 });
   }
   const heading = Buffer.from(`<svg width="${cellWidth * columns}" height="44" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#0d121b"/><text x="16" y="29" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei" font-size="20" font-weight="700">${title}</text></svg>`);
@@ -87,8 +118,21 @@ export async function renderProjectSuite(
   const output = resolve(outputDirectory);
   const revision = requestedRevision ?? (await loadCalibration(root)).revision;
   const project = await loadProjectRevision(root, revision);
+  return renderProjectSuiteFromProject(root, project, output, suite, revision);
+}
+
+export async function renderProjectSuiteFromProject(
+  projectDirectory: string,
+  project: import("./types.js").PuppetLoomProject,
+  outputDirectory: string,
+  suite: RenderSuiteKind,
+  revision: number,
+  previews: AuthoringPreview[] = []
+): Promise<RenderSuiteResult> {
+  const root = resolve(projectDirectory);
+  const output = resolve(outputDirectory);
   const sources = await loadProjectTextureSources(root, project);
-  const samples = samplesFor(suite);
+  const samples = samplesFor(project, suite, previews);
   const artifacts: RenderArtifact[] = [];
   await mkdir(output, { recursive: true });
   const byKind = new Map<"pose" | "motion", Sample[]>();
@@ -102,11 +146,11 @@ export async function renderProjectSuite(
       const path = join(directory, `${sample.id}.png`);
       await sharp(Buffer.from(pixels.data), { raw: { width: 300, height: 300, channels: 4 } }).png().toFile(path);
       paths.push(path);
-      artifacts.push({ id: sample.id, kind, path, state: sample.state });
+      artifacts.push({ id: sample.id, kind, path, state: sample.state, sha256: await fileSha256(path) });
     }
     const sheet = join(output, `${kind}-sheet.png`);
     await renderSheet(kindSamples, paths, sheet, kind === "pose" ? `姿态校准 · revision ${revision}` : `次级运动校准 · revision ${revision}`);
-    artifacts.push({ id: `${kind}-sheet`, kind: "sheet", path: sheet });
+    artifacts.push({ id: `${kind}-sheet`, kind: "sheet", path: sheet, sha256: await fileSha256(sheet) });
   }
   const result: RenderSuiteResult = { project: project.name, revision, suite, outputDirectory: output, artifacts };
   await writeFile(join(output, "manifest.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
@@ -126,12 +170,31 @@ export async function compareProjectRevisions(
   projectDirectory: string,
   fromRevision: number,
   toRevision: number,
-  outputDirectory: string
+  outputDirectory: string,
+  previews: AuthoringPreview[] = []
 ): Promise<RevisionComparisonResult> {
   const output = resolve(outputDirectory);
   await mkdir(output, { recursive: true });
-  const before = await renderProjectSuite(projectDirectory, join(output, "before"), "calibration", fromRevision);
-  const after = await renderProjectSuite(projectDirectory, join(output, "after"), "calibration", toRevision);
+  const [beforeProject, afterProject] = await Promise.all([
+    loadProjectRevision(projectDirectory, fromRevision),
+    loadProjectRevision(projectDirectory, toRevision)
+  ]);
+  return compareProjectStates(projectDirectory, beforeProject, afterProject, fromRevision, toRevision, output, previews);
+}
+
+export async function compareProjectStates(
+  projectDirectory: string,
+  beforeProject: import("./types.js").PuppetLoomProject,
+  afterProject: import("./types.js").PuppetLoomProject,
+  fromRevision: number,
+  toRevision: number,
+  outputDirectory: string,
+  previews: AuthoringPreview[] = []
+): Promise<RevisionComparisonResult> {
+  const output = resolve(outputDirectory);
+  await mkdir(output, { recursive: true });
+  const before = await renderProjectSuiteFromProject(projectDirectory, beforeProject, join(output, "before"), "calibration", fromRevision, previews);
+  const after = await renderProjectSuiteFromProject(projectDirectory, afterProject, join(output, "after"), "calibration", toRevision, previews);
   const beforeSheet = before.artifacts.find((artifact) => artifact.id === "pose-sheet")!.path;
   const afterSheet = after.artifacts.find((artifact) => artifact.id === "pose-sheet")!.path;
   const beforeMotionSheet = before.artifacts.find((artifact) => artifact.id === "motion-sheet")!.path;
@@ -163,6 +226,9 @@ export async function compareProjectRevisions(
     .toFile(comparisonSheet);
   const differenceImage = join(output, "difference.png");
   await absoluteDifference(beforeEvidence, afterEvidence, differenceImage);
+  const [beforeEvidenceSha256, afterEvidenceSha256, comparisonSheetSha256, differenceImageSha256] = await Promise.all([
+    fileSha256(beforeEvidence), fileSha256(afterEvidence), fileSha256(comparisonSheet), fileSha256(differenceImage)
+  ]);
   const result: RevisionComparisonResult = {
     project: before.project,
     fromRevision,
@@ -171,7 +237,13 @@ export async function compareProjectRevisions(
     before,
     after,
     comparisonSheet,
-    differenceImage
+    differenceImage,
+    artifactSha256: {
+      beforeEvidence: beforeEvidenceSha256,
+      afterEvidence: afterEvidenceSha256,
+      comparisonSheet: comparisonSheetSha256,
+      differenceImage: differenceImageSha256
+    }
   };
   await writeFile(join(output, "comparison.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return result;

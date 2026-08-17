@@ -1,54 +1,53 @@
 import sharp from "sharp";
 import { join, resolve } from "node:path";
 import { deformedPoints } from "./deform.js";
+import { authoredLayersInRenderOrder, authoredOpacityFor, normalizedBlendMode, type SupportedBlendMode } from "./render-contract.js";
 import type { ImportedPsd, PixelBuffer } from "./psd.js";
-import type { MotionState, Point, PuppetLoomProject, Rect } from "./types.js";
+import type { MotionState, Point, PuppetLoomProject } from "./types.js";
 
 interface RasterPoint extends Point {
   u: number;
   v: number;
 }
 
-function deformedBounds(project: PuppetLoomProject, layerId: string, state: MotionState): Rect | undefined {
-  const layer = project.layers.find((candidate) => candidate.id === layerId);
-  if (!layer) return undefined;
-  const points = deformedPoints(project, layer, state);
-  const x = Math.min(...points.map((point) => point.x));
-  const y = Math.min(...points.map((point) => point.y));
-  const right = Math.max(...points.map((point) => point.x));
-  const bottom = Math.max(...points.map((point) => point.y));
-  return { x, y, width: right - x, height: bottom - y };
-}
-
-function smoothstep(value: number): number {
-  const t = Math.max(0, Math.min(1, value));
-  return t * t * (3 - 2 * t);
-}
-
-function renderedOpacity(layer: PuppetLoomProject["layers"][number], state: MotionState): number {
-  if (layer.role === "eyeClosed") return layer.opacity === 0 ? state.blink : layer.opacity * state.blink;
-  if (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") return layer.opacity * (1 - state.blink);
-  if (layer.role !== "mouth") return layer.opacity;
-  const openness = Math.max(0, Math.min(1, state.mouthOpen));
-  const variant = layer.mouthVariant ?? "closed";
-  if (variant === "closed") return layer.opacity * (1 - smoothstep(openness / 0.42));
-  if (variant === "slight") return layer.opacity * smoothstep(openness / 0.42) * (1 - smoothstep((openness - 0.5) / 0.38));
-  return layer.opacity * smoothstep((openness - 0.42) / 0.58);
-}
-
 function edge(a: Point, b: Point, point: Point): number {
   return (point.x - a.x) * (b.y - a.y) - (point.y - a.y) * (b.x - a.x);
 }
 
-function over(target: Uint8ClampedArray, index: number, red: number, green: number, blue: number, alphaByte: number): void {
+function blend(target: Uint8ClampedArray, index: number, red: number, green: number, blue: number, alphaByte: number, mode: SupportedBlendMode): void {
   const sourceAlpha = alphaByte / 255;
   const targetAlpha = (target[index + 3] ?? 0) / 255;
   const outputAlpha = sourceAlpha + targetAlpha * (1 - sourceAlpha);
   if (outputAlpha <= 0) return;
-  target[index] = Math.round((red * sourceAlpha + (target[index] ?? 0) * targetAlpha * (1 - sourceAlpha)) / outputAlpha);
-  target[index + 1] = Math.round((green * sourceAlpha + (target[index + 1] ?? 0) * targetAlpha * (1 - sourceAlpha)) / outputAlpha);
-  target[index + 2] = Math.round((blue * sourceAlpha + (target[index + 2] ?? 0) * targetAlpha * (1 - sourceAlpha)) / outputAlpha);
+  for (let channel = 0; channel < 3; channel += 1) {
+    const source = ([red, green, blue][channel] ?? 0) / 255 * sourceAlpha;
+    const destination = (target[index + channel] ?? 0) / 255 * targetAlpha;
+    let output: number;
+    if (mode === "multiply") output = source * destination + destination * (1 - sourceAlpha);
+    else if (mode === "screen") output = source + destination * (1 - source);
+    else if (mode === "add") output = Math.min(1, source + destination);
+    else if (mode === "darken") output = Math.min(source, destination);
+    else if (mode === "lighten") output = Math.max(source, destination);
+    else output = source + destination * (1 - sourceAlpha);
+    target[index + channel] = Math.round(Math.max(0, Math.min(1, output / outputAlpha)) * 255);
+  }
   target[index + 3] = Math.round(outputAlpha * 255);
+}
+
+function sample(source: PixelBuffer, u: number, v: number): [number, number, number, number] {
+  const sourceX = Math.max(0, Math.min(source.width - 1, u * (source.width - 1)));
+  const sourceY = Math.max(0, Math.min(source.height - 1, v * (source.height - 1)));
+  const left = Math.floor(sourceX); const right = Math.min(source.width - 1, left + 1);
+  const top = Math.floor(sourceY); const bottom = Math.min(source.height - 1, top + 1);
+  const fractionX = sourceX - left; const fractionY = sourceY - top;
+  const channel = (offset: number): number => {
+    const topValue = (source.data[(top * source.width + left) * 4 + offset] ?? 0) * (1 - fractionX)
+      + (source.data[(top * source.width + right) * 4 + offset] ?? 0) * fractionX;
+    const bottomValue = (source.data[(bottom * source.width + left) * 4 + offset] ?? 0) * (1 - fractionX)
+      + (source.data[(bottom * source.width + right) * 4 + offset] ?? 0) * fractionX;
+    return topValue * (1 - fractionY) + bottomValue * fractionY;
+  };
+  return [channel(0), channel(1), channel(2), channel(3)];
 }
 
 function rasterTriangle(
@@ -56,8 +55,10 @@ function rasterTriangle(
   source: PixelBuffer,
   triangle: [RasterPoint, RasterPoint, RasterPoint],
   opacity: number,
-  clip: Rect | undefined,
-  pixelToNormalized: (x: number, y: number) => Point
+  clipMask: Uint8Array | undefined,
+  blendMode: SupportedBlendMode,
+  maskOutput?: Uint8Array,
+  coverage?: Uint8Array
 ): void {
   const [a, b, c] = triangle;
   const area = edge(a, b, c);
@@ -68,23 +69,25 @@ function rasterTriangle(
   const maxY = Math.min(output.height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
   for (let y = minY; y <= maxY; y += 1) {
     for (let x = minX; x <= maxX; x += 1) {
-      if (clip) {
-        const normalized = pixelToNormalized(x + 0.5, y + 0.5);
-        if (normalized.x < clip.x || normalized.y < clip.y || normalized.x > clip.x + clip.width || normalized.y > clip.y + clip.height) continue;
-      }
+      const pixelIndex = y * output.width + x;
+      if (clipMask && clipMask[pixelIndex] !== 1) continue;
       const point = { x: x + 0.5, y: y + 0.5 };
       const wa = edge(b, c, point) / area;
       const wb = edge(c, a, point) / area;
       const wc = 1 - wa - wb;
       if (wa < -1e-5 || wb < -1e-5 || wc < -1e-5) continue;
+      if (coverage?.[pixelIndex] === 1) continue;
+      if (coverage) coverage[pixelIndex] = 1;
       const u = Math.max(0, Math.min(1, a.u * wa + b.u * wb + c.u * wc));
       const v = Math.max(0, Math.min(1, a.v * wa + b.v * wb + c.v * wc));
-      const sx = Math.min(source.width - 1, Math.round(u * (source.width - 1)));
-      const sy = Math.min(source.height - 1, Math.round(v * (source.height - 1)));
-      const sourceIndex = (sy * source.width + sx) * 4;
-      const alpha = Math.round((source.data[sourceIndex + 3] ?? 0) * opacity);
+      const [red, green, blue, sampledAlpha] = sample(source, u, v);
+      if (maskOutput) {
+        if (sampledAlpha / 255 > 0.01) maskOutput[pixelIndex] = 1;
+        continue;
+      }
+      const alpha = Math.round(sampledAlpha * opacity);
       if (alpha <= 0) continue;
-      over(output.data, (y * output.width + x) * 4, source.data[sourceIndex] ?? 0, source.data[sourceIndex + 1] ?? 0, source.data[sourceIndex + 2] ?? 0, alpha);
+      blend(output.data, pixelIndex * 4, red, green, blue, alpha, blendMode);
     }
   }
 }
@@ -97,13 +100,31 @@ export function renderProjectPoseWithSources(project: PuppetLoomProject, sources
   const offsetX = (width - drawnWidth) * 0.5;
   const offsetY = (height - drawnHeight) * 0.5;
   const toPixel = (point: Point): Point => ({ x: offsetX + point.x * project.canvas.width * scale, y: offsetY + point.y * project.canvas.height * scale });
-  const pixelToNormalized = (x: number, y: number): Point => ({ x: (x - offsetX) / Math.max(1, drawnWidth), y: (y - offsetY) / Math.max(1, drawnHeight) });
-  for (const layer of [...project.layers].sort((left, right) => left.order - right.order)) {
+  const clipMasks = new Map<string, Uint8Array>();
+  const maskFor = (layerId: string): Uint8Array | undefined => {
+    const existing = clipMasks.get(layerId);
+    if (existing) return existing;
+    const layer = project.layers.find((candidate) => candidate.id === layerId);
+    const source = sources.get(layerId);
+    if (!layer || !source) return undefined;
+    const mask = new Uint8Array(width * height);
+    const points = deformedPoints(project, layer, state);
+    for (let index = 0; index < layer.mesh.triangles.length; index += 3) {
+      const indices = layer.mesh.triangles.slice(index, index + 3);
+      if (indices.length !== 3) continue;
+      const raster = indices.map((pointIndex) => ({ ...toPixel(points[pointIndex]!), u: layer.mesh.uvs[pointIndex]!.x, v: layer.mesh.uvs[pointIndex]!.y })) as [RasterPoint, RasterPoint, RasterPoint];
+      rasterTriangle(output, source, raster, 1, undefined, "normal", mask);
+    }
+    clipMasks.set(layerId, mask);
+    return mask;
+  };
+  for (const layer of authoredLayersInRenderOrder(project, state)) {
     const source = sources.get(layer.id);
-    const opacity = renderedOpacity(layer, state);
+    const opacity = authoredOpacityFor(project, layer, state);
     if (!source || opacity <= 0) continue;
     const points = deformedPoints(project, layer, state);
-    const clip = layer.clipLayerId ? deformedBounds(project, layer.clipLayerId, state) : undefined;
+    const clip = layer.clipLayerId ? maskFor(layer.clipLayerId) : undefined;
+    const coverage = new Uint8Array(width * height);
     for (let index = 0; index < layer.mesh.triangles.length; index += 3) {
       const ia = layer.mesh.triangles[index];
       const ib = layer.mesh.triangles[index + 1];
@@ -115,7 +136,7 @@ export function renderProjectPoseWithSources(project: PuppetLoomProject, sources
       const a = { ...toPixel(pa), u: ua.x, v: ua.y };
       const b = { ...toPixel(pb), u: ub.x, v: ub.y };
       const c = { ...toPixel(pc), u: uc.x, v: uc.y };
-      rasterTriangle(output, source, [a, b, c], opacity, clip, pixelToNormalized);
+      rasterTriangle(output, source, [a, b, c], opacity, clip, normalizedBlendMode(layer.blendMode), undefined, coverage);
     }
   }
   return output;

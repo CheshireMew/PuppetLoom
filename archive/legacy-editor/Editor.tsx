@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+
+// Legacy editor retained for repository history and no-delete workspaces. App.tsx uses EditorWorkspace.
 import type {
   AnchorGraph,
   CalibrationOverrides,

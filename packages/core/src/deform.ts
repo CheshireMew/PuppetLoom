@@ -1,4 +1,5 @@
 import { clamp } from "./math.js";
+import { evaluateLayerAuthoring, resolveMotionState } from "./model.js";
 import { applyCoherentPoseField } from "./pose-field.js";
 import type { LayerBinding, MotionChainState, MotionState, Point, PuppetLoomProject } from "./types.js";
 
@@ -194,12 +195,13 @@ function hasSidePerspective(layer: LayerBinding): boolean {
   return layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash" || layer.role === "eyeClosed" || layer.role === "eyebrow" || layer.role === "ear";
 }
 
-function vertexInfluence(layer: LayerBinding, channel: "head" | "body" | "gaze" | "physics" | "pin", index: number | undefined, fallback: number): number {
+function vertexInfluence(layer: LayerBinding, channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin", index: number | undefined, fallback: number): number {
   if (index === undefined) return fallback;
   return clamp(layer.mesh.influences?.[channel]?.[index] ?? fallback, 0, 1);
 }
 
 export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
+  state = resolveMotionState(project, state);
   const envelope = project.runtime.envelope;
   const faceWidth = Math.max(0.08, Math.abs((project.anchors.cheekLeft?.x ?? 0.6) - (project.anchors.cheekRight?.x ?? 0.4)) / 0.64);
   const faceHeight = Math.max(0.1, Math.abs((project.anchors.chin?.y ?? 0.5) - (project.anchors.forehead?.y ?? 0.25)) / 0.78);
@@ -258,7 +260,10 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
     const neckV = layer.role === "neck" ? clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1) : 0;
     const headWeight = headLayerWeight * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
     if (project.runtime.poseField) {
-      const posed = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch, project.runtime.semanticCage);
+      const posed = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch, project.runtime.semanticCage, {
+        face: vertexInfluence(layer, "face", vertexIndex, 1),
+        skull: vertexInfluence(layer, "skull", vertexIndex, 1)
+      });
       point = { x: point.x + (posed.x - point.x) * headWeight, y: point.y + (posed.y - point.y) * headWeight };
     }
     else {
@@ -372,7 +377,9 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
 }
 
 export function deformedPoints(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): Point[] {
-  return layer.mesh.points.map((point, index) => deformPoint(project, layer, point, state, index));
+  const resolvedState = resolveMotionState(project, state);
+  const authored = evaluateLayerAuthoring(project, layer, resolvedState);
+  return authored.points.map((point, index) => deformPoint(project, layer, point, resolvedState, index));
 }
 
 export const neutralMotionState: MotionState = {

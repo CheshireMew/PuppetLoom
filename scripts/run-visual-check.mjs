@@ -1,14 +1,14 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createProject } from "@puppetloom/core";
 import { _electron as electron } from "playwright";
 import sharp from "sharp";
+import { executeManagedRun } from "./lib/managed-run.mjs";
 
-const stamp = `${process.pid}-${Date.now()}`;
-const output = resolve("test/artifacts", `visual-project-${stamp}`);
-const firstPath = resolve("test/artifacts", `viewer-${stamp}-a.png`);
-const secondPath = resolve("test/artifacts", `viewer-${stamp}-b.png`);
-await mkdir(resolve("test/artifacts"), { recursive: true });
+await executeManagedRun({ category: "visual", producer: "scripts/run-visual-check.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "截图和 GPU 上下文属性用于证明本轮实际渲染，不跨运行复用。" } }, async (artifactRun) => {
+const output = artifactRun.path("project");
+const firstPath = artifactRun.path("viewer-a.png");
+const secondPath = artifactRun.path("viewer-b.png");
 await createProject({ input: resolve("test/fixtures/semantic.psd"), output, seed: 42 });
 
 const electronApp = await electron.launch({
@@ -20,21 +20,24 @@ const electronApp = await electron.launch({
 try {
   const viewer = await electronApp.firstWindow();
   await viewer.getByTestId("viewer").waitFor();
-  await viewer.waitForFunction(() => {
+  await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
+  const firstVisible = await viewer.evaluate(() => {
+    window.puppetloomRenderTestPose?.({ headYaw: -0.65, headPitch: 0.25, breath: 0.02 });
     const canvas = document.querySelector("canvas");
     if (!canvas) return false;
     const gl = canvas.getContext("webgl2");
     if (!gl) return false;
-    const pixels = new Uint8Array(4);
-    gl.readPixels(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    return pixels[3] > 0;
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
+    return false;
   });
-  await viewer.waitForTimeout(1200);
+  if (!firstVisible) throw new Error("视觉检查失败：第一个姿态没有渲染出可见像素。" );
   const contextAttributes = await viewer.locator("canvas").evaluate((canvas) => canvas.getContext("webgl2")?.getContextAttributes());
   if (!contextAttributes?.stencil) throw new Error("视觉检查失败：WebGL2 没有启用眼部动态蒙版所需的模板缓冲。" );
   const firstDataUrl = await viewer.locator("canvas").evaluate((canvas) => canvas.toDataURL("image/png"));
   await writeFile(firstPath, Buffer.from(firstDataUrl.split(",")[1], "base64"));
-  await viewer.waitForTimeout(1800);
+  await viewer.evaluate(() => window.puppetloomRenderTestPose?.({ headYaw: 0.65, headPitch: -0.25, breath: -0.02, blink: 0.8 }));
   const secondDataUrl = await viewer.locator("canvas").evaluate((canvas) => canvas.toDataURL("image/png"));
   await writeFile(secondPath, Buffer.from(secondDataUrl.split(",")[1], "base64"));
 
@@ -57,3 +60,4 @@ try {
 } finally {
   await electronApp.close();
 }
+});

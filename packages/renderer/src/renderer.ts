@@ -1,4 +1,4 @@
-import { deformedPoints, type LayerBinding, type MotionState, type PuppetLoomProject } from "@puppetloom/core/browser";
+import { authoredLayersInRenderOrder, authoredOpacityFor, deformedPoints, normalizedBlendMode, type LayerBinding, type MotionState, type PuppetLoomProject } from "@puppetloom/core/browser";
 import { CalmMotionController } from "./motion.js";
 import type { PointerLookTarget } from "./pointer.js";
 
@@ -39,25 +39,7 @@ void main() {
   outColor = color;
 }`;
 
-const eyeSurfaceRoles = new Set(["eyeWhite", "iris", "eyelash"]);
-
-function eyeSurfaceRank(layer: LayerBinding): number {
-  if (layer.role === "eyeWhite") return 0;
-  if (layer.role === "iris") return 1;
-  return 2;
-}
-
-export function layersInRenderOrder(layers: LayerBinding[]): LayerBinding[] {
-  const ordered = [...layers].sort((left, right) => left.order - right.order);
-  const slots = ordered
-    .map((layer, index) => eyeSurfaceRoles.has(layer.role) ? index : -1)
-    .filter((index) => index >= 0);
-  const eyeLayers = ordered
-    .filter((layer) => eyeSurfaceRoles.has(layer.role))
-    .sort((left, right) => eyeSurfaceRank(left) - eyeSurfaceRank(right) || left.side.localeCompare(right.side) || left.order - right.order);
-  slots.forEach((slot, index) => { ordered[slot] = eyeLayers[index]!; });
-  return ordered;
-}
+export { layersInRenderOrder, opacityFor } from "@puppetloom/core/browser";
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
@@ -91,14 +73,14 @@ async function toImageBitmap(source: Blob | ImageBitmapSource): Promise<ImageBit
   return createImageBitmap(source, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
 }
 
-function smoothstep(value: number): number {
-  const t = Math.max(0, Math.min(1, value));
-  return t * t * (3 - 2 * t);
-}
-
 export interface AspectFitScale {
   x: number;
   y: number;
+}
+
+export function activeElapsedSeconds(startedAt: number, now: number, pausedDuration: number, pausedAt?: number): number {
+  const inactive = pausedDuration + (pausedAt === undefined ? 0 : Math.max(0, now - pausedAt));
+  return Math.max(0, now - startedAt - inactive) / 1000;
 }
 
 /**
@@ -121,25 +103,8 @@ export function aspectFitScale(
   return { x: 1, y: 1 };
 }
 
-export function opacityFor(layer: LayerBinding, state: MotionState): number {
-  if (layer.role === "eyeClosed") return layer.opacity === 0 ? state.blink : layer.opacity * state.blink;
-  if (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") return layer.opacity * (1 - state.blink);
-  if (layer.role === "mouth") {
-    const openness = Math.max(0, Math.min(1, state.mouthOpen));
-    const variant = layer.mouthVariant ?? "closed";
-    if (variant === "closed") return layer.opacity * (1 - smoothstep(openness / 0.42));
-    if (variant === "slight") {
-      const entering = smoothstep(openness / 0.42);
-      const leaving = 1 - smoothstep((openness - 0.5) / 0.38);
-      return layer.opacity * entering * leaving;
-    }
-    return layer.opacity * smoothstep((openness - 0.42) / 0.58);
-  }
-  return layer.opacity;
-}
-
 function applyBlendMode(gl: WebGL2RenderingContext, mode: string): void {
-  const normalized = mode.toLowerCase().replace(/[-_]/g, " ").trim();
+  const normalized = normalizedBlendMode(mode);
   gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
   if (normalized === "multiply") {
     gl.blendFuncSeparate(gl.DST_COLOR, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -149,7 +114,7 @@ function applyBlendMode(gl: WebGL2RenderingContext, mode: string): void {
     gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_COLOR, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     return;
   }
-  if (normalized === "linear dodge" || normalized === "add" || normalized === "lighter color") {
+  if (normalized === "add") {
     gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     return;
   }
@@ -177,6 +142,9 @@ export class PuppetRenderer {
   private animationFrame = 0;
   private startedAt = 0;
   private paused = false;
+  private pausedAt: number | undefined;
+  private pausedDuration = 0;
+  private lastState: MotionState | undefined;
   private lookTarget: PointerLookTarget = { x: 0, y: 0, strength: 0 };
 
   private constructor(canvas: HTMLCanvasElement, project: PuppetLoomProject) {
@@ -235,6 +203,7 @@ export class PuppetRenderer {
   }
 
   render(state: MotionState): void {
+    this.lastState = state;
     const gl = this.gl;
     this.resize();
     gl.clearColor(0, 0, 0, 0);
@@ -282,7 +251,7 @@ export class PuppetRenderer {
       gl.drawElements(gl.TRIANGLES, resource.indexCount, gl.UNSIGNED_SHORT, 0);
     };
 
-    for (const layer of layersInRenderOrder(this.project.layers)) {
+    for (const layer of authoredLayersInRenderOrder(this.project, state)) {
       const points = deformedPoints(this.project, layer, state);
       const clipLayer = layer.clipLayerId ? this.project.layers.find((candidate) => candidate.id === layer.clipLayerId) : undefined;
       if (clipLayer) {
@@ -303,7 +272,7 @@ export class PuppetRenderer {
 
       gl.enable(gl.BLEND);
       applyBlendMode(gl, layer.blendMode);
-      drawLayer(layer, points, opacityFor(layer, state));
+      drawLayer(layer, points, authoredOpacityFor(this.project, layer, state));
 
       if (clipLayer) {
         gl.disable(gl.STENCIL_TEST);
@@ -315,14 +284,31 @@ export class PuppetRenderer {
   start(): void {
     if (this.animationFrame) return;
     this.startedAt = performance.now();
+    this.pausedDuration = 0;
+    this.pausedAt = undefined;
     const loop = (now: number) => {
-      if (!this.paused) this.render(this.controller.sample((now - this.startedAt) / 1000, { lookTarget: this.lookTarget }));
+      if (!this.paused) {
+        this.render(this.controller.sample(activeElapsedSeconds(this.startedAt, now, this.pausedDuration, this.pausedAt), { lookTarget: this.lookTarget }));
+      } else {
+        const width = Math.max(1, Math.round(this.canvas.clientWidth * window.devicePixelRatio));
+        const height = Math.max(1, Math.round(this.canvas.clientHeight * window.devicePixelRatio));
+        if (this.canvas.width !== width || this.canvas.height !== height) {
+          this.render(this.lastState ?? this.controller.sample(0, { lookTarget: this.lookTarget }));
+        }
+      }
       this.animationFrame = requestAnimationFrame(loop);
     };
     this.animationFrame = requestAnimationFrame(loop);
   }
 
   setPaused(paused: boolean): void {
+    if (paused === this.paused) return;
+    const now = performance.now();
+    if (paused) this.pausedAt = now;
+    else if (this.pausedAt !== undefined) {
+      this.pausedDuration += Math.max(0, now - this.pausedAt);
+      this.pausedAt = undefined;
+    }
     this.paused = paused;
   }
 

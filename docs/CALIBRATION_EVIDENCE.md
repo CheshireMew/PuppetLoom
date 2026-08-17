@@ -2,9 +2,13 @@
 
 每次桌面或 CLI 校准都同时产生三类证据：补丁中的精确数值、九个主姿态与九个次级运动渲染、用户对这次会话的接受或拒绝。三者缺一不可：只有数值看不出视觉结果，只有截图不知道改了什么，只有一句“好多了”无法稳定复现。
 
-会话文件位于 `calibration/sessions/`，视觉证据位于 `reports/calibration/<session-id>/`。`before-after.png` 适合直接比较，`difference.png` 用于定位变化范围；差异越小不代表效果越好，最终仍要观察轮廓、遮挡、透视和部件连接。
+会话文件位于 `calibration/sessions/`，视觉证据位于 `reports/calibration/<operation-id>/evidence/`，会话中的 `evidenceDirectory` 把两者明确关联。编辑器把同一证据显示为修改前、修改后、可调分割、透明叠加和差异五种模式；`comparison.json` 保存关键文件 SHA-256，项目验证会重新计算。`before-after.png` 适合外部直接比较，`difference.png` 用于定位变化范围。差异越小不代表效果越好，最终仍要观察轮廓、遮挡、透视和部件连接。
+
+未提交工作保存在 `calibration/draft.json`，只用于崩溃或重启恢复，不进入证据历史。正式保存会先等待在途草稿写入，再在同一持久操作中完成证据和 revision；证据失败时当前版本不前进。关窗会先落盘草稿，恢复或重置在草稿存在时拒绝执行，用户可明确选择放弃草稿。
 
 Agent 读取 `history` 后，使用 `compare` 重建任意两个 revision 的证据。用户在界面中完成校准后，不需要把操作口述一遍；Agent 能看到具体移动过的点、权重和前后画面，再决定继续项目校准，还是把重复缺陷修进软件。
+
+静态姿态不能证明连续运动的节奏和部件延迟。`record --revision <n> --mode autonomous` 会生成透明全画面 WebM、头部 WebM、接触表和报告；`--mode secondary` 冻结头、身体、视线、呼吸、眨眼和嘴部，只保留次级链并生成上半身证据。报告必须同时匹配项目绝对路径、基础 SHA-256 和 revision；其中 `viewportAspectRatio` 还要与 `projectAspectRatio` 一致。录制器使用隔离进程，不复用用户当前打开的窗口；非方形角色会在方形证据画布中透明留边，不会被拉伸。
 
 校准数据分三层处理：
 

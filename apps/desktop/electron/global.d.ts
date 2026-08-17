@@ -1,6 +1,7 @@
 import type {
   BuildReport,
   CalibrationDocument,
+  CalibrationDraftDocument,
   CalibrationPatch,
   CalibrationSaveResult,
   CalibrationSessionDocument,
@@ -41,6 +42,7 @@ export interface EditorWorkspace {
   project: PuppetLoomProject;
   calibration: CalibrationDocument;
   sessions: CalibrationSessionDocument[];
+  draft?: CalibrationDraftDocument;
 }
 
 export interface DesktopCalibrationResponse extends CalibrationSaveResult {
@@ -62,12 +64,17 @@ export interface PuppetLoomDesktopApi {
   inspect(input: string): Promise<InspectionReport>;
   create(request: DesktopCreateRequest): Promise<DesktopCreateResponse>;
   recentProjects(): Promise<RecentProject[]>;
-  readProject(projectDirectory: string): Promise<PuppetLoomProject>;
+  readProject(projectDirectory: string, revision?: number): Promise<PuppetLoomProject>;
   readEditorWorkspace(projectDirectory: string): Promise<EditorWorkspace>;
+  saveCalibrationDraft(projectDirectory: string, baseRevision: number, overrides: CalibrationPatch["overrides"], label?: string): Promise<CalibrationDraftDocument>;
+  discardCalibrationDraft(projectDirectory: string): Promise<boolean>;
   saveCalibration(projectDirectory: string, patch: CalibrationPatch): Promise<DesktopCalibrationResponse>;
-  restoreCalibration(projectDirectory: string, revision: number, label?: string): Promise<DesktopCalibrationResponse>;
+  restoreCalibration(projectDirectory: string, revision: number, baseRevision: number, label?: string): Promise<DesktopCalibrationResponse>;
   setEvidenceStatus(projectDirectory: string, sessionId: string, status: "accepted" | "rejected" | "unreviewed"): Promise<CalibrationSessionDocument>;
-  setEditorMode(enabled: boolean): Promise<boolean>;
+  calibrationEvidence(projectDirectory: string, sessionId: string): Promise<RevisionComparisonResult>;
+  setEditorMode(enabled: boolean, projectDirectory?: string): Promise<boolean>;
+  confirmEditorClose(): Promise<boolean>;
+  onPrepareEditorClose(listener: () => void | Promise<void>): () => void;
   readAsset(projectDirectory: string, layer: LayerBinding): Promise<Blob>;
   readProjectFile(projectDirectory: string, relative: string): Promise<Blob>;
   launchViewer(projectDirectory: string): Promise<{ id: number; state: ViewerState }>;

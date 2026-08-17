@@ -1,10 +1,10 @@
-import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createProject } from "@puppetloom/core";
 import { _electron as electron } from "playwright";
+import { executeManagedRun } from "./lib/managed-run.mjs";
 
-const output = resolve("test/artifacts", `performance-project-${process.pid}-${Date.now()}`);
-await mkdir(resolve("test/artifacts"), { recursive: true });
+await executeManagedRun({ category: "performance", producer: "scripts/run-performance-check.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "帧时间与运行环境绑定，每次测量都是独立性能证据。" } }, async (artifactRun) => {
+const output = artifactRun.path("project");
 await createProject({ input: resolve("test/fixtures/performance-23.psd"), output, seed: 42 });
 
 const electronApp = await electron.launch({
@@ -41,3 +41,4 @@ try {
 } finally {
   await electronApp.close();
 }
+});

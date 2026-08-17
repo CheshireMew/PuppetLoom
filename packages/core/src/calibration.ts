@@ -1,13 +1,16 @@
 import { calibrationOverridesSchema } from "./schema.js";
+import { parsePuppetLoomProject } from "./project-format.js";
 import type {
   CalibrationOverrides,
   CalibrationPatch,
   LayerBinding,
   LayerCalibrationOverride,
   MeshInfluenceChannel,
+  MeshBinding,
   Point,
   PuppetLoomProject
 } from "./types.js";
+import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -19,23 +22,28 @@ function mergeIndexed<T>(base: Record<string, T> | undefined, patch: Record<stri
 }
 
 function mergeLayerOverride(base: LayerCalibrationOverride | undefined, patch: LayerCalibrationOverride): LayerCalibrationOverride {
+  const densityChanged = patch.meshDensity !== undefined
+    && (patch.meshDensity.rows !== base?.meshDensity?.rows || patch.meshDensity.cols !== base?.meshDensity?.cols);
+  const mergeBase = densityChanged && base
+    ? Object.fromEntries(Object.entries(base).filter(([key]) => key !== "meshPointDeltas" && key !== "vertexInfluences")) as LayerCalibrationOverride
+    : base;
   const vertexChannels = new Set<MeshInfluenceChannel>([
-    ...Object.keys(base?.vertexInfluences ?? {}) as MeshInfluenceChannel[],
+    ...Object.keys(mergeBase?.vertexInfluences ?? {}) as MeshInfluenceChannel[],
     ...Object.keys(patch.vertexInfluences ?? {}) as MeshInfluenceChannel[]
   ]);
   const vertexInfluences = Object.fromEntries([...vertexChannels].map((channel) => [
     channel,
-    mergeIndexed(base?.vertexInfluences?.[channel], patch.vertexInfluences?.[channel])
+    mergeIndexed(mergeBase?.vertexInfluences?.[channel], patch.vertexInfluences?.[channel])
   ]).filter(([, value]) => value !== undefined)) as LayerCalibrationOverride["vertexInfluences"];
   return {
-    ...(base ?? {}),
+    ...(mergeBase ?? {}),
     ...patch,
-    ...(base?.secondaryAnchors || patch.secondaryAnchors ? {
-      secondaryAnchors: { ...(base?.secondaryAnchors ?? {}), ...(patch.secondaryAnchors ?? {}) }
+    ...(mergeBase?.secondaryAnchors || patch.secondaryAnchors ? {
+      secondaryAnchors: { ...(mergeBase?.secondaryAnchors ?? {}), ...(patch.secondaryAnchors ?? {}) }
     } : {}),
-    ...(base?.weights || patch.weights ? { weights: { ...(base?.weights ?? {}), ...(patch.weights ?? {}) } } : {}),
-    ...(base?.meshPointDeltas || patch.meshPointDeltas ? {
-      meshPointDeltas: mergeIndexed(base?.meshPointDeltas, patch.meshPointDeltas)!
+    ...(mergeBase?.weights || patch.weights ? { weights: { ...(mergeBase?.weights ?? {}), ...(patch.weights ?? {}) } } : {}),
+    ...(mergeBase?.meshPointDeltas || patch.meshPointDeltas ? {
+      meshPointDeltas: mergeIndexed(mergeBase?.meshPointDeltas, patch.meshPointDeltas)!
     } : {}),
     ...(Object.keys(vertexInfluences ?? {}).length > 0 ? { vertexInfluences } : {})
   } as LayerCalibrationOverride;
@@ -48,6 +56,7 @@ export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: Cal
     return [id, next ? mergeLayerOverride(base.layers?.[id], next) : base.layers![id]!];
   }));
   return calibrationOverridesSchema.parse({
+    ...(patch.model ? { model: clone(patch.model) } : base.model ? { model: clone(base.model) } : {}),
     ...(base.anchors || patch.anchors ? { anchors: { ...(base.anchors ?? {}), ...(patch.anchors ?? {}) } } : {}),
     ...(base.semanticPoints || patch.semanticPoints ? {
       semanticPoints: { ...(base.semanticPoints ?? {}), ...(patch.semanticPoints ?? {}) }
@@ -62,6 +71,15 @@ export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: Cal
         } : {}),
         ...(base.runtime?.motionTuning || patch.runtime?.motionTuning ? {
           motionTuning: { ...(base.runtime?.motionTuning ?? {}), ...(patch.runtime?.motionTuning ?? {}) }
+        } : {}),
+        ...(base.runtime?.secondaryMotionTuning || patch.runtime?.secondaryMotionTuning ? {
+          secondaryMotionTuning: Object.fromEntries([...new Set([
+            ...Object.keys(base.runtime?.secondaryMotionTuning ?? {}),
+            ...Object.keys(patch.runtime?.secondaryMotionTuning ?? {})
+          ])].map((part) => [part, {
+            ...(base.runtime?.secondaryMotionTuning?.[part as keyof NonNullable<typeof base.runtime.secondaryMotionTuning>] ?? {}),
+            ...(patch.runtime?.secondaryMotionTuning?.[part as keyof NonNullable<typeof patch.runtime.secondaryMotionTuning>] ?? {})
+          }]))
         } : {})
       }
     } : {})
@@ -71,6 +89,7 @@ export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: Cal
 export function clearCalibrationOverrides(base: CalibrationOverrides, clear: CalibrationPatch["clear"]): CalibrationOverrides {
   if (!clear) return clone(base);
   const next = clone(base);
+  if (clear.model) delete next.model;
   for (const key of clear.anchors ?? []) if (next.anchors) delete next.anchors[key];
   for (const key of clear.semanticPoints ?? []) if (next.semanticPoints) delete next.semanticPoints[key];
   for (const id of clear.layers ?? []) if (next.layers) delete next.layers[id];
@@ -86,11 +105,60 @@ function assertNormalized(point: Point, label: string): void {
   if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) throw new Error(`${label} 必须位于项目画布的 0..1 范围内。`);
 }
 
+function bilinear(values: number[] | undefined, rows: number, cols: number, u: number, v: number, fallback: number): number {
+  if (!values || values.length !== rows * cols) return fallback;
+  const x = u * (cols - 1);
+  const y = v * (rows - 1);
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(cols - 1, x0 + 1);
+  const y1 = Math.min(rows - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  const at = (row: number, col: number) => values[row * cols + col] ?? fallback;
+  const top = at(y0, x0) * (1 - tx) + at(y0, x1) * tx;
+  const bottom = at(y1, x0) * (1 - tx) + at(y1, x1) * tx;
+  return top * (1 - ty) + bottom * ty;
+}
+
+function meshAtDensity(layer: LayerBinding, rows: number, cols: number): MeshBinding {
+  const points: Point[] = [];
+  const uvs: Point[] = [];
+  const triangles: number[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    const v = row / (rows - 1);
+    for (let col = 0; col < cols; col += 1) {
+      const u = col / (cols - 1);
+      points.push({ x: layer.bounds.x + layer.bounds.width * u, y: layer.bounds.y + layer.bounds.height * v });
+      uvs.push({ x: u, y: v });
+    }
+  }
+  for (let row = 0; row < rows - 1; row += 1) {
+    for (let col = 0; col < cols - 1; col += 1) {
+      const topLeft = row * cols + col;
+      const bottomLeft = (row + 1) * cols + col;
+      triangles.push(topLeft, bottomLeft, topLeft + 1, topLeft + 1, bottomLeft, bottomLeft + 1);
+    }
+  }
+  const influences = Object.fromEntries((["face", "skull", "head", "body", "gaze", "physics", "pin"] as const).map((channel) => {
+    const fallback = channel === "pin" ? 0 : 1;
+    return [channel, uvs.map(({ x, y }) => bilinear(layer.mesh.influences?.[channel], layer.mesh.rows, layer.mesh.cols, x, y, fallback))];
+  }));
+  return { rows, cols, points, uvs, triangles, influences };
+}
+
 function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverride): LayerBinding {
   const next = clone(layer);
   if (override.role) next.role = override.role;
   if (override.side) next.side = override.side;
   if (override.parentGroup) next.parentGroup = override.parentGroup;
+  if (override.parentLayerId === null) delete next.parentLayerId;
+  else if (override.parentLayerId !== undefined) next.parentLayerId = override.parentLayerId;
+  if (override.deformerId === null) delete next.deformerId;
+  else if (override.deformerId !== undefined) next.deformerId = override.deformerId;
+  if (override.order !== undefined) next.order = override.order;
+  if (override.visible !== undefined) next.visible = override.visible;
+  if (override.locked !== undefined) next.locked = override.locked;
   if (override.pivot) {
     assertNormalized(override.pivot, `${layer.sourceName} 的轴心`);
     next.pivot = { ...override.pivot };
@@ -100,6 +168,7 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
     next.secondaryAnchors = { ...(next.secondaryAnchors ?? {}), ...clone(override.secondaryAnchors) };
   }
   if (override.weights) next.weights = { ...next.weights, ...override.weights };
+  if (override.meshDensity) next.mesh = meshAtDensity(next, override.meshDensity.rows, override.meshDensity.cols);
   for (const [rawIndex, delta] of Object.entries(override.meshPointDeltas ?? {})) {
     const index = Number(rawIndex);
     const base = next.mesh.points[index];
@@ -124,8 +193,9 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
 
 export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrides: CalibrationOverrides): PuppetLoomProject {
   const overrides = calibrationOverridesSchema.parse(rawOverrides) as CalibrationOverrides;
-  const next = clone(project);
-  next.version = 2;
+  const next = clone(parsePuppetLoomProject(project));
+  next.version = PUPPETLOOM_PROJECT_VERSION;
+  if (overrides.model) next.model = clone(overrides.model);
   if (overrides.anchors) {
     for (const [name, point] of Object.entries(overrides.anchors)) if (point) assertNormalized(point, `锚点 ${name}`);
     next.anchors = { ...next.anchors, ...clone(overrides.anchors) };
@@ -148,6 +218,18 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
     const known = new Set(next.layers.map((layer) => layer.id));
     for (const id of Object.keys(overrides.layers)) if (!known.has(id)) throw new Error(`未知图层：${id}`);
     next.layers = next.layers.map((layer) => overrides.layers?.[layer.id] ? applyLayerOverride(layer, overrides.layers[layer.id]!) : layer);
+    const ids = new Set(next.layers.map((layer) => layer.id));
+    for (const layer of next.layers) {
+      if (layer.parentLayerId === layer.id) throw new Error(`${layer.sourceName} 不能把自己设为父图层。`);
+      if (layer.parentLayerId && !ids.has(layer.parentLayerId)) throw new Error(`${layer.sourceName} 的父图层不存在。`);
+      const visited = new Set([layer.id]);
+      let current = layer;
+      while (current.parentLayerId) {
+        if (visited.has(current.parentLayerId)) throw new Error(`${layer.sourceName} 的父图层关系形成循环。`);
+        visited.add(current.parentLayerId);
+        current = next.layers.find((candidate) => candidate.id === current.parentLayerId)!;
+      }
+    }
   }
   if (overrides.runtime?.envelope) next.runtime.envelope = { ...next.runtime.envelope, ...overrides.runtime.envelope };
   if (overrides.runtime?.motionTuning) {
@@ -159,5 +241,17 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
       ...overrides.runtime.motionTuning
     };
   }
-  return next;
+  if (overrides.runtime?.secondaryMotionTuning) {
+    const defaults = { amplitude: 1, response: 0.5, stability: 0.5 };
+    const parts = new Set([
+      ...Object.keys(next.runtime.secondaryMotionTuning ?? {}),
+      ...Object.keys(overrides.runtime.secondaryMotionTuning)
+    ]);
+    next.runtime.secondaryMotionTuning = Object.fromEntries([...parts].map((part) => [part, {
+      ...defaults,
+      ...(next.runtime.secondaryMotionTuning?.[part as keyof typeof next.runtime.secondaryMotionTuning] ?? {}),
+      ...(overrides.runtime?.secondaryMotionTuning?.[part as keyof typeof overrides.runtime.secondaryMotionTuning] ?? {})
+    }]));
+  }
+  return parsePuppetLoomProject(next);
 }

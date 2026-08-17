@@ -1,7 +1,7 @@
 import type { PuppetLoomProject } from "@puppetloom/core/browser";
 import { describe, expect, it } from "vitest";
 import { CalmMotionController } from "../src/motion.js";
-import { layersInRenderOrder, opacityFor } from "../src/renderer.js";
+import { activeElapsedSeconds, layersInRenderOrder, opacityFor } from "../src/renderer.js";
 
 function fixtureProject(seed = 42, mouthMotion = false): PuppetLoomProject {
   return {
@@ -77,6 +77,18 @@ describe("calm autonomous timeline", () => {
     expect(states.some((state) => Math.abs(state.tailY) > 0.001)).toBe(true);
     expect(states.filter((state) => state.hairX * state.backHairX < 0)).toHaveLength(states.length);
     expect(Math.max(...states.map((state) => Math.abs(state.tailY)))).toBeLessThan(0.08);
+  });
+
+  it("uses independent amplitude, response and stability controls for each secondary part", () => {
+    const tuned = fixtureProject();
+    tuned.runtime.secondaryMotionTuning = {
+      frontHair: { amplitude: 0, response: 1, stability: 1 },
+      tail: { amplitude: 1.4, response: 0.2, stability: 0.8 }
+    };
+    const controller = new CalmMotionController(tuned);
+    const states = Array.from({ length: 360 }, (_, index) => controller.sample(index / 60, { primaryMotion: false }));
+    expect(states.every((state) => Math.abs(state.hairX) < 1e-12 && Math.abs(state.hairY) < 1e-12)).toBe(true);
+    expect(Math.max(...states.map((state) => Math.abs(state.tailY)))).toBeGreaterThan(0.04);
   });
 
   it("does not drive every attached part with the same phase and direction", () => {
@@ -189,6 +201,20 @@ describe("eye rendering order", () => {
       "iris:left", "iris:right",
       "eyelash:left", "eyelash:right"
     ]);
+  });
+
+  it("does not submit hidden layers to the renderer", () => {
+    const visible = { id: "visible", role: "accessory", side: "center", order: 1 } as PuppetLoomProject["layers"][number];
+    const hidden = { id: "hidden", role: "accessory", side: "center", order: 0, visible: false } as PuppetLoomProject["layers"][number];
+    expect(layersInRenderOrder([hidden, visible]).map((layer) => layer.id)).toEqual(["visible"]);
+  });
+});
+
+describe("playback clock", () => {
+  it("excludes time spent paused so motion resumes without a phase jump", () => {
+    expect(activeElapsedSeconds(1_000, 4_000, 500)).toBe(2.5);
+    expect(activeElapsedSeconds(1_000, 9_000, 500, 4_000)).toBe(2.5);
+    expect(activeElapsedSeconds(1_000, 9_500, 5_500)).toBe(3);
   });
 });
 

@@ -42,8 +42,10 @@ export class SegmentedSpringChain {
     }
   }
 
-  advance(targetX: number, targetY: number, delta: number): void {
+  advance(targetX: number, targetY: number, delta: number, tuning: { response: number; stability: number } = { response: 0.5, stability: 0.5 }): void {
     const safeDelta = clamp(delta, 1 / 240, 1 / 20);
+    const stiffnessMultiplier = 0.65 + clamp(tuning.response, 0, 1) * 0.7;
+    const dampingMultiplier = 0.7 + clamp(tuning.stability, 0, 1) * 0.6;
     for (let index = 0; index < this.particles.length; index += 1) {
       const particle = this.particles[index]!;
       const parent = index === 0 ? undefined : this.particles[index - 1]!;
@@ -56,8 +58,8 @@ export class SegmentedSpringChain {
       const desiredY = parent
         ? parent.y * this.profile.propagation * (1 - feedForward) + targetY * driverGain * feedForward
         : targetY;
-      const stiffness = this.profile.stiffness * (1 - depth * 0.32);
-      const damping = this.profile.damping * (1 - depth * 0.18);
+      const stiffness = this.profile.stiffness * stiffnessMultiplier * (1 - depth * 0.32);
+      const damping = this.profile.damping * dampingMultiplier * (1 - depth * 0.18);
       particle.velocityX += ((desiredX - particle.x) * stiffness - particle.velocityX * damping) * safeDelta;
       particle.velocityY += ((desiredY - particle.y) * stiffness - particle.velocityY * damping) * safeDelta;
       particle.x = clamp(particle.x + particle.velocityX * safeDelta, -this.profile.maxDisplacement, this.profile.maxDisplacement);

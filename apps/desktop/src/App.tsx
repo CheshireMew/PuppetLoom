@@ -3,7 +3,7 @@ import type { BuildReport, InspectionReport, PuppetLoomProject } from "@puppetlo
 import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import type { RecentProject, ViewerState } from "../electron/global.js";
-import { Editor } from "./Editor.js";
+import { EditorWorkspace } from "./EditorWorkspace.js";
 
 type ViewerAction = "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close";
 
@@ -11,7 +11,19 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.Element {
+function recentProjectTime(openedAt: string): string {
+  const date = new Date(openedAt);
+  if (Number.isNaN(date.getTime())) return "最近打开";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
+function Viewer({ projectDirectory, revision }: { projectDirectory: string; revision?: number }): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const [project, setProject] = useState<PuppetLoomProject>();
@@ -29,7 +41,7 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
     let pointerRequestActive = false;
     void (async () => {
       try {
-        const loaded = await window.puppetloom.readProject(projectDirectory);
+        const loaded = await window.puppetloom.readProject(projectDirectory, revision);
         if (disposed || !canvas.current) return;
         setProject(loaded);
         renderer.current = await PuppetRenderer.create(canvas.current, loaded, (layer) => window.puppetloom.readAsset(projectDirectory, layer));
@@ -63,7 +75,7 @@ function Viewer({ projectDirectory }: { projectDirectory: string }): React.JSX.E
       delete window.puppetloomRenderTestPose;
       renderer.current?.dispose();
     };
-  }, [projectDirectory]);
+  }, [projectDirectory, revision]);
 
   async function act(action: ViewerAction): Promise<void> {
     const next = await window.puppetloom.viewerAction(action);
@@ -174,6 +186,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
       const result = await window.puppetloom.create({ input, output, ...(reference ? { reference } : {}), seed: 42 });
       setReport(result.report);
       setProjectDirectory(result.outputDirectory);
+      void window.puppetloom.recentProjects().then(setRecent).catch(() => undefined);
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
@@ -191,6 +204,16 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
     } catch (cause) { setError(messageOf(cause)); }
   }
 
+  async function openRecent(directory: string): Promise<void> {
+    setError("");
+    try {
+      await window.puppetloom.readProject(directory);
+      onEdit(directory);
+    } catch (cause) {
+      setError(`无法打开最近项目：${messageOf(cause)}`);
+    }
+  }
+
   async function launch(): Promise<void> {
     if (!projectDirectory) return;
     const launched = await window.puppetloom.launchViewer(projectDirectory);
@@ -202,7 +225,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
       <header>
         <div className="mark">PL</div>
         <div><h1>PuppetLoom</h1><p>分层 PSD 进去，一个克制、稳定、会自己动的角色出来。</p></div>
-        <button className="secondary open-project" onClick={() => void openExisting()}>打开已有项目</button>
+        <button className="secondary open-project" onClick={() => void openExisting()}>打开 PuppetLoom 项目目录</button>
       </header>
       <div className="workflow">
         <section className="inputs">
@@ -216,35 +239,52 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
           <button className="primary" disabled={!ready} onClick={() => void create()}>{busy ? "正在创建并验证…" : "创建角色项目"}</button>
           <p className="policy">缺少三态嘴形时嘴部保持不动；接入后只偶发一次缓慢开合，不连续无声说话。缺少闭眼素材不会阻塞创建。</p>
         </section>
-        <aside className="status-panel">
-          <h2>自动检查</h2>
-          {!inspection && !report && <div className="empty-state">放入 PSD 后，这里会显示识别结果、绑定等级和禁用功能。</div>}
-          {inspection && !report && <section className="inspection">
-            <div><span>画布</span><strong>{inspection.canvas.width} × {inspection.canvas.height}</strong></div>
-            <div><span>可见图层</span><strong>{inspection.visibleLayerCount}</strong></div>
-            <div><span>识别图层</span><strong>{inspection.recognizedLayerCount}</strong></div>
-            <div><span>建议绑定</span><strong>{inspection.suggestedRigLevel}</strong></div>
-            {inspection.warnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
-          </section>}
-          {report && <Report report={report} />}
-          {projectDirectory && <section className="result-actions">
-            <p>项目已写入：<br/><code>{projectDirectory}</code></p>
-            <button className="primary" onClick={() => onEdit(projectDirectory)}>打开绑定与校准编辑器</button>
-            <button className="primary" onClick={() => void launch()}>打开透明角色窗口</button>
-            {viewerId !== undefined && <div className="remote-controls">
-              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}>暂停 / 继续</button>
-              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "click-through")}>鼠标穿透</button>
-              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pointer-tracking")}>鼠标跟随 / 自主观察</button>
-              <button onClick={() => void window.puppetloom.controlViewer(viewerId, "top")}>切换置顶</button>
+        <div className="launch-sidebar">
+          <aside className="status-panel">
+            <h2>自动检查</h2>
+            {!inspection && !report && <div className="empty-state">放入 PSD 后，这里会显示识别结果、绑定等级和禁用功能。</div>}
+            {inspection && !report && <section className="inspection">
+              <div><span>画布</span><strong>{inspection.canvas.width} × {inspection.canvas.height}</strong></div>
+              <div><span>可见图层</span><strong>{inspection.visibleLayerCount}</strong></div>
+              <div><span>识别图层</span><strong>{inspection.recognizedLayerCount}</strong></div>
+              <div><span>建议绑定</span><strong>{inspection.suggestedRigLevel}</strong></div>
+              {inspection.warnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
+            </section>}
+            {report && <Report report={report} />}
+            {projectDirectory && <section className="result-actions">
+              <p>项目已写入：<br/><code>{projectDirectory}</code></p>
+              <button className="primary" onClick={() => onEdit(projectDirectory)}>打开绑定与校准编辑器</button>
+              <button className="primary" onClick={() => void launch()}>打开透明角色窗口</button>
+              {viewerId !== undefined && <div className="remote-controls">
+                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}>暂停 / 继续</button>
+                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "click-through")}>鼠标穿透</button>
+                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pointer-tracking")}>鼠标跟随 / 自主观察</button>
+                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "top")}>切换置顶</button>
+              </div>}
+            </section>}
+            {error && <div className="error" role="alert">{error}</div>}
+          </aside>
+          <section className="recent-projects" data-testid="recent-projects">
+            <div className="recent-projects-heading">
+              <h2>最近项目</h2>
+              <span>{recent.length > 0 ? `${recent.length} 个` : "尚无记录"}</span>
+            </div>
+            {recent.length > 0 ? <div className="recent-project-list">
+              {recent.map((entry) => <button key={entry.directory} title={entry.directory} onClick={() => void openRecent(entry.directory)}>
+                <span className="recent-project-icon" aria-hidden="true">PL</span>
+                <span className="recent-project-copy">
+                  <strong>{entry.name}</strong>
+                  <span>{entry.directory}</span>
+                </span>
+                <time dateTime={entry.openedAt}>{recentProjectTime(entry.openedAt)}</time>
+              </button>)}
+            </div> : <div className="recent-projects-empty">
+              <strong>还没有最近项目</strong>
+              <span>创建或打开项目后，会在这里快速进入。</span>
             </div>}
-          </section>}
-          {error && <div className="error" role="alert">{error}</div>}
-        </aside>
+          </section>
+        </div>
       </div>
-      {recent.length > 0 && <section className="recent-projects">
-        <h2>最近项目</h2>
-        <div>{recent.map((entry) => <button key={entry.directory} onClick={() => onEdit(entry.directory)}><strong>{entry.name}</strong><span>{entry.directory}</span></button>)}</div>
-      </section>}
     </main>
   );
 }
@@ -252,8 +292,10 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
 export function App(): React.JSX.Element {
   const params = new URLSearchParams(window.location.search);
   const project = params.get("project");
+  const revisionValue = params.get("revision");
+  const revision = revisionValue !== null && Number.isInteger(Number(revisionValue)) && Number(revisionValue) >= 0 ? Number(revisionValue) : undefined;
   const [editorProject, setEditorProject] = useState(params.get("editor") === "1" && project ? project : "");
-  if (params.get("viewer") === "1" && project) return <Viewer projectDirectory={project} />;
-  if (editorProject) return <Editor projectDirectory={editorProject} onBack={() => setEditorProject("")} />;
+  if (params.get("viewer") === "1" && project) return <Viewer projectDirectory={project} {...(revision !== undefined ? { revision } : {})} />;
+  if (editorProject) return <EditorWorkspace projectDirectory={editorProject} onBack={() => setEditorProject("")} />;
   return <Creator onEdit={setEditorProject} />;
 }

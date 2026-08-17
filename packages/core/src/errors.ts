@@ -1,4 +1,12 @@
-export type PuppetLoomErrorCode = "INVALID_INPUT" | "OUTPUT_NOT_EMPTY" | "IO_ERROR" | "INVALID_PROJECT";
+export type PuppetLoomErrorCode =
+  | "INVALID_INPUT"
+  | "OUTPUT_NOT_EMPTY"
+  | "IO_ERROR"
+  | "INVALID_PROJECT"
+  | "REVISION_CONFLICT"
+  | "OPERATION_BUSY"
+  | "CUBISM_CONNECTION"
+  | "CUBISM_BLOCKED";
 
 export class PuppetLoomError extends Error {
   readonly code: PuppetLoomErrorCode;

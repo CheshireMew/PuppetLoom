@@ -2,6 +2,7 @@ import { rectCenter, rectUnion, roundPoint, roundRect } from "./math.js";
 import { suggestedRigLevel, type ImportedLayer, type ImportedPsd } from "./psd.js";
 import { buildSemanticControlCage } from "./semantic-cage.js";
 import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
+import { createDefaultAuthoringModel } from "./model.js";
 import type {
   AnchorGraph,
   LayerBinding,
@@ -82,6 +83,8 @@ export function makeGridMesh(bounds: Rect, rows: number, cols: number): MeshBind
     uvs,
     triangles,
     influences: {
+      face: Array(points.length).fill(1),
+      skull: Array(points.length).fill(1),
       head: Array(points.length).fill(1),
       body: Array(points.length).fill(1),
       gaze: Array(points.length).fill(1),
@@ -414,6 +417,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     source: input.source,
     rigLevel: level,
     layers,
+    model: createDefaultAuthoringModel(),
     anchors,
     runtime: {
       seed: input.seed,

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "managed_by": "project-steward",
+  "catalog_version": "2.3.0",
+  "project_name": "PuppetLoom",
+  "templates": [
+    {
+      "id": "base",
+      "version": "1.1.0",
+      "sha256": "a42635dee95b576c75a1eb2b0429cd2d794449edf615f26c8afd0f4d15a03cab"
+    },
+    {
+      "id": "managed-runtime-artifacts",
+      "version": "1.0.0",
+      "sha256": "fce30aa53ac2138066bccdd14d6f444d0b720b5b2978a04940609db81e57589d"
+    }
+  ],
+  "decisions": {
+    "source_of_truth": "project-files",
+    "change_strategy": "root-cause-full-migration",
+    "verification_chain": "producer-boundary-consumer-observable",
+    "git_role": "optional-history-and-publication",
+    "runtime_artifact_roots": "project-or-environment-owned",
+    "runtime_artifact_preflight": "required-and-blocking",
+    "runtime_artifact_reuse": "content-addressed-where-repeatable",
+    "runtime_artifact_finalization": "owned-inventory-required",
+    "runtime_artifact_cleanup": "report-until-authorized"
+  },
+  "overrides": {},
+  "deviations": [],
+  "adopted_at_utc": "2026-08-17T03:12:43.219179+00:00",
+  "updated_at_utc": "2026-08-17T03:12:43.219179+00:00"
+}

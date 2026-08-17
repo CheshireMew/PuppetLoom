@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import sharp from "sharp";
-import { assetRequestDocumentSchema, calibrationDocumentSchema, puppetLoomProjectSchema } from "./schema.js";
+import { assetRequestDocumentSchema, calibrationDocumentSchema } from "./schema.js";
+import { parsePuppetLoomProject } from "./project-format.js";
+import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 import { makeGridMesh } from "./rig.js";
 import type { AssetRequest, AssetRequestDocument, EnhanceOptions, EnhanceResult, LayerBinding, PuppetLoomProject, Rect } from "./types.js";
 
@@ -94,7 +96,7 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
 }
 
 async function loadProjectAndRequests(projectDirectory: string): Promise<{ project: PuppetLoomProject; requests: AssetRequestDocument }> {
-  const project = puppetLoomProjectSchema.parse(JSON.parse(await readFile(join(projectDirectory, "puppetloom.json"), "utf8"))) as PuppetLoomProject;
+  const project = parsePuppetLoomProject(JSON.parse(await readFile(join(projectDirectory, "puppetloom.json"), "utf8")));
   const requestsPath = join(projectDirectory, "requests", "asset-requests.json");
   const requests = assetRequestDocumentSchema.parse(JSON.parse(await readFile(requestsPath, "utf8"))) as AssetRequestDocument;
   return { project, requests };
@@ -179,7 +181,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
   const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant && layer.opacity > 0));
   const nextProject: PuppetLoomProject = {
     ...project,
-    version: 2,
+    version: PUPPETLOOM_PROJECT_VERSION,
     layers: layers.sort((a, b) => a.order - b.order),
     runtime: {
       ...project.runtime,
