@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deformPoint, neutralMotionState } from "../src/deform.js";
+import { deformPoint, invertDeformedPoint, neutralMotionState } from "../src/deform.js";
 import { makeGridMesh } from "../src/rig.js";
 import type { LayerBinding, PuppetLoomProject, SemanticRole } from "../src/types.js";
 
@@ -65,6 +65,21 @@ function secondaryLayer(role: SemanticRole, bounds = { x: 0.35, y: 0.15, width: 
 function movement(from: { x: number; y: number }, to: { x: number; y: number }): number {
   return Math.hypot(to.x - from.x, to.y - from.y);
 }
+
+describe("posed mesh editing", () => {
+  it("maps a dragged on-canvas point back to authoring space without a visible jump", () => {
+    const layer = secondaryLayer("frontHair");
+    const vertexIndex = 4;
+    const authored = { x: layer.bounds.x + layer.bounds.width * 0.47, y: layer.bounds.y + layer.bounds.height * 0.91 };
+    const state = { ...neutralMotionState, hairX: 0.045, hairY: 0.018, ahogeX: -0.02 };
+    const displayed = deformPoint(project, layer, authored, state, vertexIndex);
+    const target = { x: displayed.x + 0.013, y: displayed.y - 0.009 };
+    const recovered = invertDeformedPoint(project, layer, target, state, vertexIndex, authored);
+    const renderedAgain = deformPoint(project, layer, recovered, state, vertexIndex);
+    expect(renderedAgain.x).toBeCloseTo(target.x, 7);
+    expect(renderedAgain.y).toBeCloseTo(target.y, 7);
+  });
+});
 
 describe("blink deformation", () => {
   it("briefly closes the height of open eye artwork around its own center", () => {

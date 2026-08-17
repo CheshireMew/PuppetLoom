@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject, loadProjectRevision } from "@puppetloom/core";
@@ -17,6 +17,7 @@ const viewerRevisions = new Map<number, number | undefined>();
 const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 const viewerAspectRatios = new Map<number, number>();
 let runtimeLogPath: string | undefined;
+let viewerMouseTrackingPreference: boolean | undefined;
 const editorWindows = new Map<number, string>();
 const editorCloseReady = new Set<number>();
 const RUNTIME_LOG_ROTATE_BYTES = 5 * 1024 ** 2;
@@ -134,13 +135,37 @@ function registerControlWindowShell(window: BrowserWindow): void {
   window.on("move", publish);
 }
 
+function preferredMouseTracking(): boolean {
+  if (viewerMouseTrackingPreference !== undefined) return viewerMouseTrackingPreference;
+  try {
+    const value = JSON.parse(readFileSync(join(applicationProfile, "viewer-preferences.json"), "utf8")) as Record<string, unknown>;
+    viewerMouseTrackingPreference = typeof value.mouseTracking === "boolean" ? value.mouseTracking : true;
+  } catch {
+    viewerMouseTrackingPreference = true;
+  }
+  return viewerMouseTrackingPreference;
+}
+
+function rememberMouseTracking(mouseTracking: boolean): void {
+  viewerMouseTrackingPreference = mouseTracking;
+  try {
+    mkdirSync(applicationProfile, { recursive: true });
+    writeFileSync(join(applicationProfile, "viewer-preferences.json"), `${JSON.stringify({
+      version: 1,
+      mouseTracking,
+      updatedAt: new Date().toISOString()
+    }, null, 2)}\n`, "utf8");
+  } catch (cause) {
+    runtimeLog("viewer-preference-write-failed", { preference: "mouseTracking", value: mouseTracking, error: errorMessage(cause) });
+  }
+}
+
 function stateFor(window: BrowserWindow): ViewerState {
   const existing = viewerStates.get(window.id);
   if (existing) return existing;
-  // A newly opened character should perform on its own. Pointer tracking is
-  // opt-in because a stationary pointer used to suppress almost all head
-  // motion and made a healthy rig look frozen.
-  const state = { paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: false, scale: 1 };
+  // First launch follows the pointer. Later windows reuse the user's last
+  // choice; the motion controller keeps an autonomous performance underneath.
+  const state = { paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: preferredMouseTracking(), scale: 1 };
   viewerStates.set(window.id, state);
   return state;
 }
@@ -177,7 +202,10 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
     window.setIgnoreMouseEvents(!current.clickThrough, { forward: true });
     next = { ...current, clickThrough: !current.clickThrough };
   }
-  if (action === "pointer-tracking") next = { ...current, mouseTracking: !current.mouseTracking };
+  if (action === "pointer-tracking") {
+    next = { ...current, mouseTracking: !current.mouseTracking };
+    rememberMouseTracking(next.mouseTracking);
+  }
   if (action === "larger" || action === "smaller") {
     const factor = action === "larger" ? 1.1 : 1 / 1.1;
     const size = window.getSize();
@@ -245,7 +273,10 @@ async function createViewer(projectDirectory: string, revision?: number, capture
   });
   runtimeLog("viewer-window-created", { id: window.id, width, height });
   window.once("ready-to-show", () => runtimeLog("viewer-ready-to-show", { id: window.id }));
-  window.webContents.on("did-finish-load", () => runtimeLog("viewer-page-loaded", { id: window.id }));
+  window.webContents.on("did-finish-load", () => {
+    runtimeLog("viewer-page-loaded", { id: window.id });
+    publishState(window, stateFor(window));
+  });
   window.webContents.on("render-process-gone", (_event, details) => runtimeLog("renderer-gone", { id: window.id, reason: details.reason, exitCode: details.exitCode }));
   window.on("unresponsive", () => runtimeLog("viewer-unresponsive", { id: window.id }));
   window.once("closed", () => {

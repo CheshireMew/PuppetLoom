@@ -5,6 +5,7 @@ export * from "./math.js";
 export * from "./mesh.js";
 export * from "./model.js";
 export * from "./pose-field.js";
+export * from "./pose-corrections.js";
 export * from "./render-contract.js";
 export * from "./safety.js";
 export type * from "./types.js";

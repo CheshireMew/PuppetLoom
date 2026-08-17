@@ -123,6 +123,31 @@ export function reprojectMeshInfluences(source: MeshBinding, target: MeshBinding
   })) as MeshInfluences;
 }
 
+/**
+ * Reprojects sparse authored point offsets by UV. This keeps hand-tuned neutral
+ * or pose corrections attached to the artwork when an AI remesh changes vertex
+ * count and topology.
+ */
+export function reprojectSparsePointDeltas(
+  source: MeshBinding,
+  target: MeshBinding,
+  deltas: Record<string, Point> | undefined
+): Record<string, Point> | undefined {
+  if (!deltas || Object.keys(deltas).length === 0) return undefined;
+  const samples = target.uvs.map((uv) => sampleLocation(source, uv));
+  const projected: Record<string, Point> = {};
+  samples.forEach(({ indices, weights }, index) => {
+    const point = { x: 0, y: 0 };
+    for (let corner = 0; corner < 3; corner += 1) {
+      const delta = deltas[String(indices[corner])] ?? { x: 0, y: 0 };
+      point.x += delta.x * weights[corner]!;
+      point.y += delta.y * weights[corner]!;
+    }
+    if (Math.hypot(point.x, point.y) > 1e-9) projected[String(index)] = roundPoint(point);
+  });
+  return Object.keys(projected).length > 0 ? projected : undefined;
+}
+
 /** Shortest surface distance along mesh edges; disconnected components remain unreachable. */
 export function meshGeodesicDistances(points: Point[], triangles: number[], selected: number): number[] {
   const neighbors: Array<Map<number, number>> = Array.from({ length: points.length }, () => new Map());

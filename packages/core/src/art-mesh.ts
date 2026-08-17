@@ -248,6 +248,28 @@ function toUv(points: Point[], width: number, height: number): Point[] {
   return points.map((point) => roundPoint({ x: point.x / width, y: point.y / height }));
 }
 
+function isMeaningfulComponent(component: PixelComponent, pixels: PixelBuffer, detail: number, alphaThreshold: number): boolean {
+  let minX = pixels.width;
+  let maxX = 0;
+  let minY = pixels.height;
+  let maxY = 0;
+  let peakAlpha = 0;
+  for (const pixel of component.pixels) {
+    const x = pixel % pixels.width;
+    const y = Math.floor(pixel / pixels.width);
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    peakAlpha = Math.max(peakAlpha, pixels.data[pixel * 4 + 3] ?? 0);
+  }
+  const span = Math.max(maxX - minX + 1, maxY - minY + 1);
+  const clearlyVisible = peakAlpha >= Math.max(32, alphaThreshold * 4);
+  const structurallyLarge = span >= Math.max(8, detail * 1.5)
+    || component.pixels.length >= Math.max(16, detail * detail * 0.5);
+  return clearlyVisible || structurallyLarge;
+}
+
 export function traceArtMeshSource(pixels: PixelBuffer, alphaThreshold = 8, detail = 32): ArtMeshSource {
   const mask = new Uint8Array(pixels.width * pixels.height);
   let opaquePixels = 0;
@@ -261,7 +283,8 @@ export function traceArtMeshSource(pixels: PixelBuffer, alphaThreshold = 8, deta
   for (const component of components) for (const pixel of component.pixels) labels[pixel] = component.label;
   const minimumPixels = Math.max(4, Math.floor(opaquePixels * 0.0001));
   const regions: ArtMeshRegion[] = [];
-  for (const component of components.filter((candidate) => candidate.pixels.length >= minimumPixels)) {
+  for (const component of components.filter((candidate) => candidate.pixels.length >= minimumPixels
+    && isMeaningfulComponent(candidate, pixels, detail, alphaThreshold))) {
     for (const region of groupLoops(traceComponentLoops(component, pixels.width, pixels.height, labels))) {
       const outer = simplifyClosedLoop(region.outer, 0.65);
       const holes = region.holes.map((hole) => simplifyClosedLoop(hole, 0.65)).filter((hole) => hole.length >= 3);
@@ -278,11 +301,25 @@ export function traceArtMeshSource(pixels: PixelBuffer, alphaThreshold = 8, deta
 
 function pixelLoop(loop: Point[], source: ArtMeshSource, tolerance: number): Point[] {
   const points = loop.map((point) => ({ x: point.x * source.textureSize.width, y: point.y * source.textureSize.height }));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  if (points.length > 4 && Math.max(maxX - minX, maxY - minY) <= tolerance * 2) {
+    const box = [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }];
+    return signedArea(points) < 0 ? box.reverse() : box;
+  }
   return simplifyClosedLoop(points, tolerance);
 }
 
 function triangulateRegion(region: ArtMeshRegion, source: ArtMeshSource, detail: number): { points: Point[]; triangles: number[] } {
-  const tolerance = Math.max(0.65, detail * 0.1);
+  // `detail` is the target deformation scale in texture pixels. Keeping the
+  // contour within one tenth of that value preserved pixel stair-steps as
+  // one-pixel edges, while the interior was tens of pixels apart. Besides
+  // producing a noisy editor overlay, that imbalance creates long sliver
+  // triangles which fold easily during deformation. A third of the target
+  // scale still follows visible silhouettes while discarding raster noise.
+  const tolerance = Math.max(1, detail * 0.45);
   const outer = pixelLoop(region.outer, source, tolerance);
   const holes = region.holes.map((hole) => pixelLoop(hole, source, tolerance)).filter((hole) => hole.length >= 3);
   if (outer.length < 3) throw new Error("ArtMesh 外轮廓不足三个点。" );
@@ -299,16 +336,16 @@ function triangulateRegion(region: ArtMeshRegion, source: ArtMeshSource, detail:
   if (holePoints.length > 0) context.addHoles(holePoints);
 
   const area = Math.abs(signedArea(outer)) - holes.reduce((sum, hole) => sum + Math.abs(signedArea(hole)), 0);
-  // Alpha contours need more fidelity than the deformation surface inside
-  // them. Treat `detail` as the contour/detail scale and spread interior
-  // Steiner points farther apart; coupling the two produced thousands of
-  // visually redundant vertices on large, solid hair layers.
-  const desiredInteriorSpacing = detail * 2.5;
+  // Keep boundary and interior scales close enough that constrained
+  // triangulation cannot fan many tiny contour edges into one distant point.
+  // The interior may be a little coarser than the silhouette, but not several
+  // times coarser as it was before.
+  const desiredInteriorSpacing = detail * 1.65;
   const interiorSpacing = Math.max(
     desiredInteriorSpacing,
     Math.sqrt(Math.max(0, area) / Math.max(1, MAX_ART_MESH_VERTICES_PER_REGION - input.length))
   );
-  const boundaryDistance = Math.max(0.35, detail * 0.08);
+  const boundaryDistance = Math.max(1, detail * 0.42);
   const steiner: TriangulationPoint[] = [];
   const minX = Math.min(...outer.map((point) => point.x));
   const maxX = Math.max(...outer.map((point) => point.x));

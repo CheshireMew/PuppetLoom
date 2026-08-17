@@ -21,6 +21,7 @@ export * from "./psd.js";
 export * from "./render-suite.js";
 export * from "./render-contract.js";
 export * from "./pose-field.js";
+export * from "./pose-corrections.js";
 export * from "./rig.js";
 export * from "./safety.js";
 export * from "./semantic-cage.js";

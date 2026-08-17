@@ -77,17 +77,19 @@ export class CalibrationIpcService {
       const replacements: Record<string, MeshBinding> = {};
       for (const layer of project.layers) {
         if (!requested.has(layer.id)) continue;
-        const detail = artMeshDetailForRole(layer.role);
+        const detail = layer.mesh.topology === "art" && layer.mesh.art
+          ? layer.mesh.art.detail
+          : artMeshDetailForRole(layer.role);
         const pixels = sources.get(layer.id);
-        const mesh = layer.mesh.topology === "art" && layer.mesh.art
-          ? remeshArtMesh(layer.mesh, layer.bounds, detail)
-          : pixels ? makeAdaptiveMesh({
+        const mesh = pixels ? makeAdaptiveMesh({
             bounds: layer.bounds,
             pixels,
             detail,
             fallbackRows: layer.mesh.rows ?? 8,
             fallbackCols: layer.mesh.cols ?? 8
-          }) : layer.mesh;
+          }) : layer.mesh.topology === "art" && layer.mesh.art
+            ? remeshArtMesh(layer.mesh, layer.bounds, detail)
+            : layer.mesh;
         if (mesh.topology !== "art") continue;
         mesh.influences = reprojectMeshInfluences(layer.mesh, mesh);
         replacements[layer.id] = mesh;

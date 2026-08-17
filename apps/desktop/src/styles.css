@@ -92,6 +92,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mode-tabs, .pose-tabs { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .editor-toolbar button { padding: 7px 10px; font-size: 12px; }
 .editor-toolbar button.active { border-color: #8d82ff; color: #fff; background: #655bd1; }
+.editor-toolbar button.pose-warning { border-color: #d68a4f; color: #ffd4a5; }
+.pose-edit-status { padding: 0 7px; color: #9eabc0; font-size: 11px; }
+.pose-edit-status.warning { color: #ffb26d; }
 .editor-workspace { display: grid; grid-template-columns: 225px minmax(560px, 1fr) 300px; min-height: 0; }
 .layer-panel, .inspector-panel { min-height: 0; padding: 15px; background: #121823; overflow: auto; }
 .layer-panel { border-right: 1px solid #2b3442; }
@@ -116,7 +119,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .viewport-navigation .fit-view { padding-inline: 10px; font-size: 11px; }
 .editor-overlay text { fill: #f7fbff; paint-order: stroke; stroke: #10141c; stroke-width: .0025; font: 0.013px "Segoe UI", sans-serif; pointer-events: none; }
 .cage-line { stroke: #48d9ff; stroke-width: .0015; opacity: .72; pointer-events: none; }
-.mesh-line { stroke: #62d8b0; stroke-width: .0009; opacity: .52; pointer-events: none; }
+.mesh-line { stroke: #4dcc82; stroke-width: .45px; opacity: .5; pointer-events: none; vector-effect: non-scaling-stroke; }
+.mesh-deformed { opacity: .56; }
+.mesh-neutral-reference { stroke: #a997ff; stroke-width: .45px; opacity: .24; stroke-dasharray: 4px 3px; vector-effect: non-scaling-stroke; }
 .handle { cursor: grab; vector-effect: non-scaling-stroke; stroke: #ffffff; stroke-width: 1.4px; }
 .handle:focus { outline: none; stroke-width: 3px; filter: drop-shadow(0 0 2px #ffffff); }
 .handle:active { cursor: grabbing; }
@@ -128,14 +133,20 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .anchor-handle { fill: #ffbb45; }
 .pivot-handle { fill: #a279ff; }
 .secondary-handle { fill: #46d6c8; }
-.mesh-handle { fill: #55d9a9; stroke-width: .8px; }
-.mesh-handle.selected { fill: #ffcb54; }
+.mesh-handle { fill: #f7fff9; stroke: #173326; stroke-width: .6px; }
+.mesh-handle.selected { fill: #ffcb54; stroke: #201a0d; stroke-width: 1px; }
+.mesh-transform-gizmo rect, .mesh-transform-gizmo line { fill: none; stroke: #ffcb54; stroke-width: .8px; stroke-dasharray: 3px 2px; pointer-events: none; vector-effect: non-scaling-stroke; }
+.mesh-transform-handle { fill: #ffcb54; stroke: #171c25; stroke-width: 1px; cursor: grab; vector-effect: non-scaling-stroke; }
+.mesh-transform-handle.rotate { fill: #8d82ff; }
+.mesh-transform-handle:active { cursor: grabbing; }
 .viewport-help { margin: 12px auto; max-width: 760px; color: #919db0; font-size: 12px; line-height: 1.55; }
 .inspector-panel label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; color: #aeb8c7; font-size: 12px; }
 .inspector-panel select, .inspector-panel input[type="text"], .save-panel input { width: 100%; border: 1px solid #3c4656; border-radius: 8px; padding: 8px; color: #eef3fa; background: #0d131c; }
 .inspector-panel dl { display: grid; grid-template-columns: 70px 1fr; gap: 7px; margin: 0 0 14px; font-size: 12px; }
 .inspector-panel dt { color: #8490a3; }
 .inspector-panel dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.inspector-panel dd.mesh-quality-good { color: #63d6ae; }
+.inspector-panel dd.mesh-quality-warning { color: #ffb66b; white-space: normal; }
 .range-row span { display: flex; justify-content: space-between; }
 .range-row input { width: 100%; accent-color: #8176ee; }
 .vertex-inspector, .authoring-summary, .save-panel, .session-panel { margin-top: 17px; padding-top: 15px; border-top: 1px solid #303a48; }

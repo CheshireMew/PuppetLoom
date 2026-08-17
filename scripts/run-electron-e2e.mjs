@@ -59,11 +59,12 @@ const editorNativeScreenshot = artifactRun.path("editor-native.png");
 const artMeshScreenshot = artifactRun.path("editor-art-mesh.png");
 const viewerNativeScreenshot = artifactRun.path("viewer-native.png");
 const windowShellEvidencePath = artifactRun.path("window-shell-evidence.json");
+const applicationProfile = artifactRun.path("user-data");
 
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js")],
   cwd: root,
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1" }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1", PUPPETLOOM_E2E_USER_DATA: applicationProfile }
 });
 
 try {
@@ -211,6 +212,12 @@ try {
   const structureWorkspaceButton = control.getByRole("button", { name: /02 结构与网格/ });
   await structureWorkspaceButton.click();
   await control.locator(".layer-list").waitFor();
+  if (await control.locator(".editor-overlay").count()) throw new Error("结构与网格工作区首次打开时仍默认遮挡编辑标记。");
+  const faceControlButton = control.getByRole("button", { name: "脸部控制点" });
+  await faceControlButton.click();
+  await control.locator(".editor-overlay").waitFor();
+  await faceControlButton.click();
+  if (await control.locator(".editor-overlay").count()) throw new Error("再次点击脸部控制点没有隐藏编辑标记。");
   const lockLayer = control.getByRole("button", { name: `${face.sourceName} 锁定` });
   await lockLayer.click();
   await control.getByRole("button", { name: `${face.sourceName} 解锁` }).click();
@@ -219,8 +226,29 @@ try {
   await control.getByRole("button", { name: `${face.sourceName} 显示` }).click();
 
   await control.getByRole("button", { name: "网格与权重" }).click();
-  await control.locator(".mesh-handle").first().waitFor();
-  const handles = control.locator(".mesh-handle");
+  await control.locator(".mesh-handle-hit").first().waitFor();
+  const handles = control.locator(".mesh-handle-hit");
+  const visibleHandles = control.locator(".mesh-handle");
+  const initialHandleSize = await visibleHandles.first().boundingBox();
+  const meshStage = await editorStage.boundingBox();
+  if (!initialHandleSize || !meshStage) throw new Error("无法测量网格节点的屏幕尺寸。");
+  const meshLineStyle = await control.locator(".mesh-deformed").evaluate((element) => ({
+    strokeWidth: getComputedStyle(element).strokeWidth,
+    vectorEffect: getComputedStyle(element).vectorEffect
+  }));
+  if (meshLineStyle.strokeWidth !== "0.45px" || meshLineStyle.vectorEffect !== "non-scaling-stroke") {
+    throw new Error(`网格线没有使用细线与恒定屏幕宽度：${JSON.stringify(meshLineStyle)}`);
+  }
+  await control.mouse.move(meshStage.x + meshStage.width * 0.5, meshStage.y + meshStage.height * 0.5);
+  await control.mouse.wheel(0, -480);
+  await control.waitForFunction(() => document.querySelector(".viewport-navigation output")?.textContent !== "100%");
+  await control.waitForTimeout(180);
+  const zoomedHandleSize = await visibleHandles.first().boundingBox();
+  if (!zoomedHandleSize || Math.max(initialHandleSize.width, zoomedHandleSize.width) > 5
+    || Math.abs(zoomedHandleSize.width - initialHandleSize.width) > 0.85) {
+    throw new Error(`缩放后网格节点变粗：${JSON.stringify({ initialHandleSize, zoomedHandleSize })}`);
+  }
+  await control.getByRole("button", { name: "适配" }).click();
   const vertexIndex = Math.floor(await handles.count() / 2);
   let vertex = await handles.nth(vertexIndex).boundingBox();
   if (!vertex) throw new Error("编辑器没有可拖动的网格顶点。" );
@@ -229,8 +257,14 @@ try {
   const beforeKeyboardNudge = await vertexPosition.innerText();
   await handles.nth(vertexIndex).focus();
   await handles.nth(vertexIndex).press("ArrowRight");
-  if (await vertexPosition.innerText() === beforeKeyboardNudge) throw new Error("键盘方向键没有微调网格顶点。" );
-  const softRadius = control.getByLabel(/软选择半径/);
+  const afterKeyboardNudge = await vertexPosition.innerText();
+  if (afterKeyboardNudge === beforeKeyboardNudge) throw new Error("键盘方向键没有微调网格顶点。" );
+  await control.keyboard.press("Control+z");
+  await control.waitForFunction((before) => document.querySelector(".vertex-inspector p")?.textContent === before, beforeKeyboardNudge);
+  await control.keyboard.press("Control+y");
+  await control.waitForFunction((after) => document.querySelector(".vertex-inspector p")?.textContent === after, afterKeyboardNudge);
+  await control.getByRole("checkbox", { name: "带动相邻顶点（软选择）" }).check();
+  const softRadius = control.getByLabel(/影响半径/);
   await softRadius.waitFor();
   await softRadius.evaluate((element) => {
     const input = element;
@@ -245,6 +279,15 @@ try {
   await control.mouse.down();
   await control.mouse.move(vertex.x + vertex.width / 2 + 3, vertex.y + vertex.height / 2, { steps: 3 });
   await control.mouse.up();
+
+  await control.locator(".pose-tabs").getByRole("button", { name: /右转/ }).click();
+  vertex = await handles.nth(vertexIndex).boundingBox();
+  if (!vertex) throw new Error("切换右转姿态后网格顶点消失。" );
+  await control.mouse.move(vertex.x + vertex.width / 2, vertex.y + vertex.height / 2);
+  await control.mouse.down();
+  await control.mouse.move(vertex.x + vertex.width / 2 + 2, vertex.y + vertex.height / 2 - 1, { steps: 2 });
+  await control.mouse.up();
+  await control.locator(".pose-tabs").getByRole("button", { name: /中立/ }).click();
 
   await control.getByRole("button", { name: "动作", exact: true }).click();
   const secondaryAmplitude = control.locator('.save-panel .range-row input[type="range"]').nth(6);
@@ -265,6 +308,9 @@ try {
   const persistedDraft = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
   const draftLayer = persistedDraft.draft?.overrides.layers?.[face.id];
   if (!draftLayer || Object.keys(draftLayer.meshPointDeltas ?? {}).length < 2) throw new Error("软选择没有把多个顶点写入自动保存草稿。" );
+  const correction = persistedDraft.draft?.overrides.model?.bindings.find((binding) => binding.id === `pose-correction:${face.id}`);
+  const rightKeyform = correction?.keyforms.find((keyform) => keyform.values[0] === 1 && (keyform.values[1] ?? 0) === 0);
+  if (!rightKeyform || Object.keys(rightKeyform.meshPointDeltas ?? {}).length < 1) throw new Error("右转姿态的网格微调没有写入独立关键形。" );
   if (persistedDraft.draft?.overrides.runtime?.secondaryMotionTuning?.frontHair?.amplitude !== 1.1) throw new Error("分部响应没有写入自动保存草稿。" );
   await control.getByRole("button", { name: "恢复全部自动绑定" }).click();
   await control.getByText(/请先保存或明确放弃当前草稿/).waitFor();
@@ -303,6 +349,9 @@ try {
   if (calibratedWorkspace.calibration.revision !== 1) throw new Error("桌面编辑器没有持久化校准修订。" );
   if (calibratedWorkspace.draft) throw new Error("保存校准后草稿仍被当作未提交内容恢复。" );
   if (Object.keys(calibratedWorkspace.calibration.overrides.layers?.[face.id]?.meshPointDeltas ?? {}).length < 2) throw new Error("校准修订没有保留软选择网格结果。" );
+  const savedCorrection = calibratedWorkspace.project.model.bindings.find((binding) => binding.id === `pose-correction:${face.id}`);
+  const savedRightKeyform = savedCorrection?.keyforms.find((keyform) => keyform.values[0] === 1 && (keyform.values[1] ?? 0) === 0);
+  if (!savedRightKeyform || Object.keys(savedRightKeyform.meshPointDeltas ?? {}).length < 1) throw new Error("保存校准后右转关键形丢失。" );
   if (calibratedWorkspace.project.runtime.secondaryMotionTuning?.frontHair?.amplitude !== 1.11) throw new Error("校准修订没有保留独立前发响应。" );
 
   await control.getByTestId("comparison-view").waitFor();
@@ -438,15 +487,15 @@ try {
   });
 
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
-  if (![pointer.x, pointer.y, pointer.strength].every(Number.isFinite) || pointer.strength !== 0) throw new Error(`角色窗口没有默认使用自主观察：${JSON.stringify(pointer)}`);
-  const trackingOn = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: viewerId });
-  if (!trackingOn?.mouseTracking) throw new Error("桌面端未能开启鼠标跟随。" );
-  const activePointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
-  if (activePointer.strength !== 1) throw new Error(`开启鼠标跟随后没有返回活动目标：${JSON.stringify(activePointer)}`);
+  if (![pointer.x, pointer.y, pointer.strength].every(Number.isFinite) || pointer.strength !== 1) throw new Error(`角色窗口首次启动没有默认开启鼠标跟随：${JSON.stringify(pointer)}`);
   const trackingOff = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pointer-tracking"), { id: viewerId });
   if (trackingOff?.mouseTracking) throw new Error("桌面端未能恢复自主观察。" );
   const disabledPointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
   if (disabledPointer.strength !== 0) throw new Error(`恢复自主观察后仍返回活动目标：${JSON.stringify(disabledPointer)}`);
+  const savedViewerPreference = JSON.parse(await readFile(resolve(applicationProfile, "viewer-preferences.json"), "utf8"));
+  if (savedViewerPreference.version !== 1 || savedViewerPreference.mouseTracking !== false) {
+    throw new Error(`鼠标跟随选择没有写入用户配置：${JSON.stringify(savedViewerPreference)}`);
+  }
 
   await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "larger"), { id: viewerId });
   const scaledSize = await browserWindow.evaluate((window) => window.getSize());
@@ -460,6 +509,18 @@ try {
   if (restored?.clickThrough) throw new Error("桌面端未能恢复鼠标交互。" );
   const resumed = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pause"), { id: viewerId });
   if (resumed?.paused) throw new Error("桌面端未能恢复自主运动。" );
+
+  const viewerClosed = viewer.waitForEvent("close");
+  await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "close"), { id: viewerId });
+  await viewerClosed;
+  const rememberedViewerPromise = electronApp.waitForEvent("window");
+  const rememberedLaunchPromise = control.evaluate((projectDirectory) => window.puppetloom.launchViewer(projectDirectory), output);
+  const rememberedViewer = await rememberedViewerPromise;
+  const rememberedLaunch = await rememberedLaunchPromise;
+  await rememberedViewer.getByTestId("viewer").waitFor();
+  if (rememberedLaunch.state.mouseTracking) throw new Error(`重新打开角色窗口后没有沿用自主观察：${JSON.stringify(rememberedLaunch.state)}`);
+  const rememberedPointer = await rememberedViewer.evaluate(() => window.puppetloom.pointerTarget());
+  if (rememberedPointer.strength !== 0) throw new Error(`重新打开角色窗口后鼠标跟随选择没有生效：${JSON.stringify(rememberedPointer)}`);
 
   await control.getByRole("button", { name: "动作", exact: true }).click();
   await calibrationLabel.scrollIntoViewIfNeeded();

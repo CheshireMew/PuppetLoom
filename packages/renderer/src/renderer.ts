@@ -164,6 +164,11 @@ export class PuppetRenderer {
     return this.currentProject;
   }
 
+  /** The exact state used by the most recently rendered frame. */
+  get motionState(): MotionState | undefined {
+    return this.lastState;
+  }
+
   static async create(canvas: HTMLCanvasElement, project: PuppetLoomProject, resolveTexture: TextureResolver): Promise<PuppetRenderer> {
     const renderer = new PuppetRenderer(canvas, project);
     await renderer.loadTextures(resolveTexture);

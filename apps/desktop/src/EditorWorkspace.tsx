@@ -1,12 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AuthoringModel,
   CalibrationOverrides,
   LayerBinding,
   MotionState,
+  Point,
+  PoseValidation,
   RevisionComparisonResult,
   SecondaryMotionPart
 } from "@puppetloom/core";
-import { applyCalibrationOverrides, applySafetyLimits, mergeCalibrationOverrides, meshGeodesicDistances, neutralMotionState } from "@puppetloom/core/browser";
+import {
+  applyCalibrationOverrides,
+  deformedPoints,
+  evaluateLayerAuthoring,
+  invertDeformedPoint,
+  mergeCalibrationOverrides,
+  meshGeodesicDistances,
+  neutralMotionState,
+  poseCorrectionPointDeltas,
+  poseCorrectionSamples,
+  reprojectLayerPoseCorrections,
+  reprojectSparsePointDeltas,
+  setPoseCorrectionPointDeltas,
+  validateProjectPoses,
+  validatePose
+} from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import type { DesktopCalibrationResponse, EditorWorkspace as EditorWorkspaceData } from "../electron/global.js";
 import {
@@ -34,10 +52,14 @@ import {
 import { useEditorDraftPersistence } from "./editor/useEditorDraftPersistence.js";
 
 interface MeshDragSnapshot {
-  selected: number;
-  selectedPoint: { x: number; y: number };
-  points: Array<{ x: number; y: number }>;
+  selected: number[];
+  pointerStart: Point;
+  center: Point;
+  displayedPoints: Point[];
+  authoredPoints: Point[];
   basePoints: Array<{ x: number; y: number }>;
+  correctionDeltas: Record<string, Point>;
+  model: AuthoringModel;
   pins: number[];
   distances: number[];
 }
@@ -62,10 +84,10 @@ function pose(overrides: Partial<MotionState>): MotionState {
 }
 
 const editorPoses: Record<string, { label: string; state: MotionState }> = {
-  neutral: { label: "中立", state: pose({}) }, left: { label: "左转", state: pose({ headYaw: -0.9 }) }, right: { label: "右转", state: pose({ headYaw: 0.9 }) },
-  up: { label: "向上看", state: pose({ headPitch: -0.78 }) }, down: { label: "向下看", state: pose({ headPitch: 0.78 }) },
-  "left-up": { label: "左上", state: pose({ headYaw: -0.72, headPitch: -0.58 }) }, "right-up": { label: "右上", state: pose({ headYaw: 0.72, headPitch: -0.58 }) },
-  "left-down": { label: "左下", state: pose({ headYaw: -0.72, headPitch: 0.58 }) }, "right-down": { label: "右下", state: pose({ headYaw: 0.72, headPitch: 0.58 }) }
+  neutral: { label: "中立", state: pose({}) }, left: { label: "左转", state: pose({ headYaw: -1 }) }, right: { label: "右转", state: pose({ headYaw: 1 }) },
+  up: { label: "向上看", state: pose({ headPitch: -1 }) }, down: { label: "向下看", state: pose({ headPitch: 1 }) },
+  "left-up": { label: "左上", state: pose({ headYaw: -1, headPitch: -1 }) }, "right-up": { label: "右上", state: pose({ headYaw: 1, headPitch: -1 }) },
+  "left-down": { label: "左下", state: pose({ headYaw: -1, headPitch: 1 }) }, "right-down": { label: "右下", state: pose({ headYaw: 1, headPitch: 1 }) }
 };
 
 function layerOverride(overrides: CalibrationOverrides, layerId: string, patch: NonNullable<CalibrationOverrides["layers"]>[string]): CalibrationOverrides {
@@ -81,6 +103,11 @@ function smoothstep(value: number): number {
   return t * t * (3 - 2 * t);
 }
 
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target.matches("input, textarea, select");
+}
+
 export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory: string; onBack: () => void }): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
@@ -91,8 +118,13 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [redoStack, setRedoStack] = useState<CalibrationOverrides[]>([]);
   const [selectedLayerId, setSelectedLayerId] = useState("");
   const [selectedVertex, setSelectedVertex] = useState<number>();
+  const [selectedVertices, setSelectedVertices] = useState<number[]>([]);
   const [section, setSection] = useState<StudioSection>("overview");
   const [mode, setMode] = useState<EditMode>("semantic");
+  const [editorOverlayVisible, setEditorOverlayVisible] = useState(false);
+  const [showNeutralMeshReference, setShowNeutralMeshReference] = useState(false);
+  const [showDraftBefore, setShowDraftBefore] = useState(false);
+  const [isolateSelectedLayer, setIsolateSelectedLayer] = useState(true);
   const [poseId, setPoseId] = useState("neutral");
   const [autonomous, setAutonomous] = useState(false);
   const [previewState, setPreviewState] = useState<MotionState>(() => clone(neutralMotionState));
@@ -109,11 +141,14 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [draftStatus, setDraftStatus] = useState<"idle" | "waiting" | "saving" | "saved" | "error">("idle");
+  const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softRadius, setSoftRadius] = useState(0.035);
   const [secondaryPart, setSecondaryPart] = useState<SecondaryMotionPart>("frontHair");
   const [comparison, setComparison] = useState<ComparisonImages>();
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>("split");
   const [splitPercent, setSplitPercent] = useState(50);
+  const [poseChecks, setPoseChecks] = useState<Record<string, PoseValidation>>({});
+  const [draftSafetyChecks, setDraftSafetyChecks] = useState<PoseValidation[]>([]);
   const { pendingRef, cancelScheduled, flushDraft } = useEditorDraftPersistence({
     projectDirectory,
     revision: workspace?.calibration.revision,
@@ -156,9 +191,37 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [projectDirectory]);
 
   const effectiveOverrides = useMemo(() => workspace ? mergeCalibrationOverrides(workspace.calibration.overrides, pending) : pending, [workspace, pending]);
-  const project = useMemo(() => workspace ? applySafetyLimits(applyCalibrationOverrides(workspace.baseProject, effectiveOverrides)) : undefined, [workspace, effectiveOverrides]);
+  // A draft must stay spatially stable while a point is dragged. Safety is
+  // reported below and enforced by the save transaction, never by silently
+  // shrinking the whole runtime envelope during pointer movement.
+  const project = useMemo(() => workspace ? applyCalibrationOverrides(workspace.baseProject, effectiveOverrides) : undefined, [workspace, effectiveOverrides]);
   const selectedLayer = project?.layers.find((layer) => layer.id === selectedLayerId);
   const hasPending = Object.keys(pending).length > 0;
+  const renderProject = useMemo(() => {
+    const source = showDraftBefore ? workspace?.project : project;
+    if (!source || showDraftBefore || !isolateSelectedLayer || section !== "rig" || mode !== "mesh" || !editorOverlayVisible) return source;
+    return {
+      ...source,
+      layers: source.layers.map((layer) => layer.id === selectedLayerId ? layer : { ...layer, opacity: layer.opacity * 0.28 })
+    };
+  }, [editorOverlayVisible, isolateSelectedLayer, mode, project, section, selectedLayerId, showDraftBefore, workspace?.project]);
+  const renderSelectedLayer = renderProject?.layers.find((layer) => layer.id === selectedLayerId);
+  const posedMeshPoints = useMemo(() => renderProject && renderSelectedLayer
+    ? deformedPoints(renderProject, renderSelectedLayer, previewState)
+    : [], [renderProject, renderSelectedLayer, previewState]);
+  const liveMeshPoints = useCallback(() => {
+    const state = renderer.current?.motionState;
+    return renderProject && renderSelectedLayer && state ? deformedPoints(renderProject, renderSelectedLayer, state) : undefined;
+  }, [renderProject, renderSelectedLayer]);
+
+  useEffect(() => {
+    if (!project) return;
+    const timeout = window.setTimeout(() => {
+      setPoseChecks(Object.fromEntries(Object.entries(editorPoses).map(([id, item]) => [id, validatePose(project, id, item.state)])));
+      setDraftSafetyChecks(validateProjectPoses(project));
+    }, 240);
+    return () => window.clearTimeout(timeout);
+  }, [project]);
 
   useEffect(() => {
     if (!workspace || !canvas.current) return;
@@ -178,15 +241,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [workspace?.projectDirectory]);
 
   useEffect(() => {
-    if (!project || !renderer.current) return;
+    if (!renderProject || !renderer.current) return;
     try {
-      renderer.current.updateProject(project);
+      renderer.current.updateProject(renderProject);
       renderer.current.setPaused(!autonomous);
       if (!autonomous) renderer.current.render(previewState);
     } catch (cause) {
       setError(messageOf(cause));
     }
-  }, [project, previewState, autonomous]);
+  }, [renderProject, previewState, autonomous]);
 
   useEffect(() => {
     if (!behaviorPlaying || !project) return;
@@ -243,6 +306,30 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     setRedoStack((items) => items.slice(0, -1));
   }
 
+  useEffect(() => {
+    function handleHistoryShortcut(event: KeyboardEvent): void {
+      if (event.key === "Escape" && drag.current) {
+        event.preventDefault();
+        cancelDrag();
+        return;
+      }
+      if (event.defaultPrevented || event.repeat || event.altKey || (!event.ctrlKey && !event.metaKey) || isTextEditingTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      const wantsUndo = key === "z" && !event.shiftKey;
+      const wantsRedo = (key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey);
+      if (wantsUndo && undoStack.length > 0) {
+        event.preventDefault();
+        undo();
+      } else if (wantsRedo && redoStack.length > 0) {
+        event.preventDefault();
+        redo();
+      }
+    }
+
+    window.addEventListener("keydown", handleHistoryShortcut);
+    return () => window.removeEventListener("keydown", handleHistoryShortcut);
+  }, [pending, redoStack, undoStack]);
+
   function meshBaseline(layerId: string): LayerBinding | undefined {
     if (!workspace) return undefined;
     const overrides = clone(effectiveOverrides);
@@ -254,35 +341,69 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     return applyCalibrationOverrides(workspace.baseProject, overrides).layers.find((candidate) => candidate.id === layerId);
   }
 
-  function beginDrag(event: React.PointerEvent<SVGCircleElement>, target: DragTarget): void {
+  function pointFromPointer(event: React.PointerEvent<SVGElement>): Point {
+    const svg = event.currentTarget.ownerSVGElement ?? (event.currentTarget instanceof SVGSVGElement ? event.currentTarget : undefined);
+    const rect = svg?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)))
+    };
+  }
+
+  function beginDrag(event: React.PointerEvent<SVGElement>, target: DragTarget): void {
     if (event.button !== 0) return;
-    if ((target.kind === "mesh" || target.kind === "pivot" || target.kind === "secondary") && selectedLayer?.locked) return;
+    const meshTarget = target.kind === "mesh" || target.kind === "mesh-scale" || target.kind === "mesh-rotate";
+    if ((meshTarget || target.kind === "pivot" || target.kind === "secondary") && selectedLayer?.locked) return;
+    if (target.kind === "mesh" && event.shiftKey) {
+      const next = selectedVertices.includes(target.index)
+        ? selectedVertices.filter((index) => index !== target.index)
+        : [...selectedVertices, target.index];
+      setSelectedVertices(next);
+      setSelectedVertex(next.at(-1));
+      event.preventDefault();
+      return;
+    }
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const active: { target: DragTarget; before: CalibrationOverrides; mesh?: MeshDragSnapshot } = { target, before: clone(pending) };
-    if (target.kind === "mesh" && selectedLayer) {
+    if (meshTarget && selectedLayer && project) {
       const baseline = meshBaseline(selectedLayer.id);
-      const selectedPoint = selectedLayer.mesh.points[target.index];
-      if (!baseline || !selectedPoint || baseline.mesh.points.length !== selectedLayer.mesh.points.length) return;
+      const selected = target.kind === "mesh"
+        ? (selectedVertices.includes(target.index) ? selectedVertices : [target.index])
+        : selectedVertices;
+      const displayedPoints = deformedPoints(project, selectedLayer, previewState);
+      const authoredPoints = evaluateLayerAuthoring(project, selectedLayer, previewState).points;
+      if (!baseline || selected.length === 0 || baseline.mesh.points.length !== selectedLayer.mesh.points.length) return;
+      const selectedPoints = selected.map((index) => displayedPoints[index]).filter((point): point is Point => Boolean(point));
+      if (selectedPoints.length !== selected.length) return;
+      const minX = Math.min(...selectedPoints.map((point) => point.x));
+      const maxX = Math.max(...selectedPoints.map((point) => point.x));
+      const minY = Math.min(...selectedPoints.map((point) => point.y));
+      const maxY = Math.max(...selectedPoints.map((point) => point.y));
+      const distanceSets = selected.map((index) => meshGeodesicDistances(selectedLayer.mesh.points, selectedLayer.mesh.triangles, index));
+      const distances = selectedLayer.mesh.points.map((_, index) => Math.min(...distanceSets.map((items) => items[index] ?? Number.POSITIVE_INFINITY)));
       active.mesh = {
-        selected: target.index,
-        selectedPoint: clone(selectedPoint),
-        points: clone(selectedLayer.mesh.points),
+        selected,
+        pointerStart: target.kind === "mesh" ? clone(displayedPoints[target.index]!) : pointFromPointer(event),
+        center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
+        displayedPoints: clone(displayedPoints),
+        authoredPoints: clone(authoredPoints),
         basePoints: clone(baseline.mesh.points),
+        correctionDeltas: poseCorrectionPointDeltas(project.model, selectedLayer.id, previewState.headYaw, previewState.headPitch),
+        model: clone(project.model),
         pins: clone(selectedLayer.mesh.influences?.pin ?? Array(selectedLayer.mesh.points.length).fill(0)),
-        distances: meshGeodesicDistances(selectedLayer.mesh.points, selectedLayer.mesh.triangles, target.index)
+        distances
       };
-      setSelectedVertex(target.index);
+      setSelectedVertices(selected);
+      setSelectedVertex(selected.at(-1));
+      setAutonomous(false);
+      setBehaviorPlaying(false);
     }
     drag.current = active;
   }
 
   function pointFromEvent(event: React.PointerEvent<SVGSVGElement>): { x: number; y: number } {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return {
-      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
-      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)))
-    };
+    return pointFromPointer(event);
   }
 
   function moveDrag(event: React.PointerEvent<SVGSVGElement>): void {
@@ -302,20 +423,49 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         next = layerOverride(next, selectedLayer.id, { pivot: position });
       } else if (target.kind === "secondary") {
         next = layerOverride(next, selectedLayer.id, { secondaryAnchors: { [target.key]: position } });
-      } else if (target.kind === "mesh" && active.mesh) {
-        const dx = position.x - active.mesh.selectedPoint.x;
-        const dy = position.y - active.mesh.selectedPoint.y;
+      } else if ((target.kind === "mesh" || target.kind === "mesh-scale" || target.kind === "mesh-rotate") && active.mesh && project) {
+        const dx = position.x - active.mesh.pointerStart.x;
+        const dy = position.y - active.mesh.pointerStart.y;
+        const selected = new Set(active.mesh.selected);
+        const startDistance = Math.max(1e-6, Math.hypot(active.mesh.pointerStart.x - active.mesh.center.x, active.mesh.pointerStart.y - active.mesh.center.y));
+        const scale = Math.max(0.2, Math.min(5, Math.hypot(position.x - active.mesh.center.x, position.y - active.mesh.center.y) / startDistance));
+        const angle = Math.atan2(position.y - active.mesh.center.y, position.x - active.mesh.center.x)
+          - Math.atan2(active.mesh.pointerStart.y - active.mesh.center.y, active.mesh.pointerStart.x - active.mesh.center.x);
         const deltas: Record<string, { x: number; y: number }> = {};
-        for (let index = 0; index < active.mesh.points.length; index += 1) {
-          const start = active.mesh.points[index]!;
-          const base = active.mesh.basePoints[index]!;
+        const poseDeltas = clone(active.mesh.correctionDeltas);
+        for (let index = 0; index < active.mesh.displayedPoints.length; index += 1) {
+          const start = active.mesh.displayedPoints[index]!;
           const distance = active.mesh.distances[index] ?? Number.POSITIVE_INFINITY;
-          if (index !== active.mesh.selected && distance > softRadius) continue;
-          const falloff = index === active.mesh.selected ? 1 : (1 - smoothstep(distance / Math.max(0.001, softRadius))) ** 2;
+          if (!selected.has(index) && (target.kind !== "mesh" || !softSelectionEnabled || distance > softRadius)) continue;
+          const falloff = selected.has(index) ? 1 : (1 - smoothstep(distance / Math.max(0.001, softRadius))) ** 2;
           const movable = falloff * (1 - (active.mesh.pins[index] ?? 0));
-          deltas[index] = { x: start.x + dx * movable - base.x, y: start.y + dy * movable - base.y };
+          let transformed = { x: start.x + dx, y: start.y + dy };
+          if (target.kind === "mesh-scale") transformed = {
+            x: active.mesh.center.x + (start.x - active.mesh.center.x) * scale,
+            y: active.mesh.center.y + (start.y - active.mesh.center.y) * scale
+          };
+          if (target.kind === "mesh-rotate") {
+            const localX = start.x - active.mesh.center.x;
+            const localY = start.y - active.mesh.center.y;
+            transformed = {
+              x: active.mesh.center.x + localX * Math.cos(angle) - localY * Math.sin(angle),
+              y: active.mesh.center.y + localX * Math.sin(angle) + localY * Math.cos(angle)
+            };
+          }
+          const desired = { x: start.x + (transformed.x - start.x) * movable, y: start.y + (transformed.y - start.y) * movable };
+          const authored = invertDeformedPoint(project, selectedLayer, desired, previewState, index, active.mesh.authoredPoints[index]!);
+          if (poseId === "neutral") {
+            const base = active.mesh.basePoints[index]!;
+            deltas[index] = { x: authored.x - base.x, y: authored.y - base.y };
+          } else {
+            const previous = active.mesh.correctionDeltas[String(index)] ?? { x: 0, y: 0 };
+            const initial = active.mesh.authoredPoints[index]!;
+            poseDeltas[String(index)] = { x: previous.x + authored.x - initial.x, y: previous.y + authored.y - initial.y };
+          }
         }
-        next = layerOverride(next, selectedLayer.id, { meshPointDeltas: deltas });
+        next = poseId === "neutral"
+          ? layerOverride(next, selectedLayer.id, { meshPointDeltas: deltas })
+          : mergeCalibrationOverrides(next, { model: setPoseCorrectionPointDeltas(active.mesh.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
       }
       pendingRef.current = next;
       return next;
@@ -330,6 +480,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       setUndoStack((items) => [...items, active.before]);
       setRedoStack([]);
     }
+  }
+
+  function cancelDrag(): void {
+    const active = drag.current;
+    if (!active) return;
+    drag.current = undefined;
+    pendingRef.current = clone(active.before);
+    setPending(clone(active.before));
+    setNotice("已取消本次拖动。" );
   }
 
   function nudgeWithKeyboard(event: React.KeyboardEvent<SVGCircleElement>, target: DragTarget): void {
@@ -364,13 +523,24 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       next = layerOverride(next, selectedLayer.id, { secondaryAnchors: { [target.key]: shifted(point) } });
     } else if (target.kind === "mesh" && selectedLayer) {
       setSelectedVertex(target.index);
+      setSelectedVertices([target.index]);
       if ((selectedLayer.mesh.influences?.pin?.[target.index] ?? 0) >= 1) return;
       const baseline = meshBaseline(selectedLayer.id);
-      const point = selectedLayer.mesh.points[target.index];
+      const point = deformedPoints(project!, selectedLayer, previewState)[target.index];
       const basePoint = baseline?.mesh.points[target.index];
       if (!point || !basePoint) return;
       const position = shifted(point);
-      next = layerOverride(next, selectedLayer.id, { meshPointDeltas: { [target.index]: { x: position.x - basePoint.x, y: position.y - basePoint.y } } });
+      const authoredPoints = evaluateLayerAuthoring(project!, selectedLayer, previewState).points;
+      const authored = invertDeformedPoint(project!, selectedLayer, position, previewState, target.index, authoredPoints[target.index]!);
+      if (poseId === "neutral") {
+        next = layerOverride(next, selectedLayer.id, { meshPointDeltas: { [target.index]: { x: authored.x - basePoint.x, y: authored.y - basePoint.y } } });
+      } else {
+        const poseDeltas = poseCorrectionPointDeltas(project!.model, selectedLayer.id, previewState.headYaw, previewState.headPitch);
+        const previous = poseDeltas[String(target.index)] ?? { x: 0, y: 0 };
+        const initial = authoredPoints[target.index]!;
+        poseDeltas[String(target.index)] = { x: previous.x + authored.x - initial.x, y: previous.y + authored.y - initial.y };
+        next = mergeCalibrationOverrides(next, { model: setPoseCorrectionPointDeltas(project!.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
+      }
     }
     commit(next);
   }
@@ -381,7 +551,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   function setLayerProperty(patch: NonNullable<CalibrationOverrides["layers"]>[string]): void {
     if (!selectedLayer) return;
-    if (patch.meshDensity || patch.meshDetail !== undefined) setSelectedVertex(undefined);
+    if (patch.meshDensity || patch.meshDetail !== undefined) { setSelectedVertex(undefined); setSelectedVertices([]); }
     patchLayer(selectedLayer.id, patch);
   }
 
@@ -499,6 +669,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   async function upgradeSelectedMesh(): Promise<void> {
     if (!selectedLayer) return;
+    const previousTopology = selectedLayer.mesh.topology;
+    const previousPoints = selectedLayer.mesh.points.length;
+    const previousTriangles = Math.floor(selectedLayer.mesh.triangles.length / 3);
     setMeshUpgrading(true);
     setError("");
     try {
@@ -508,11 +681,25 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         setNotice("当前图层没有生成新的轮廓网格；完全不透明的矩形素材会继续使用规则网格。" );
         return;
       }
-      commit(mergeCalibrationOverrides(pending, { layers: { [selectedLayer.id]: { mesh } } }));
+      const neutralDeltas = reprojectSparsePointDeltas(selectedLayer.mesh, mesh, effectiveOverrides.layers?.[selectedLayer.id]?.meshPointDeltas);
+      const model = reprojectLayerPoseCorrections(project!.model, selectedLayer.id, selectedLayer.mesh, mesh);
+      const next = mergeCalibrationOverrides(pending, {
+        model,
+        layers: { [selectedLayer.id]: { mesh, ...(neutralDeltas ? { meshPointDeltas: neutralDeltas } : {}) } }
+      });
+      const candidate = applyCalibrationOverrides(workspace!.baseProject, mergeCalibrationOverrides(workspace!.calibration.overrides, next));
+      const failed = validateProjectPoses(candidate).filter((check) => !check.passed);
+      if (failed.length > 0) {
+        throw new Error(`AI 重建结果未通过全姿态质量门：${failed[0]!.issues[0]?.message ?? failed[0]!.id}。原网格和当前草稿均未改动。`);
+      }
+      commit(next);
       setSelectedVertex(undefined);
+      setSelectedVertices([]);
       setMode("mesh");
+      setEditorOverlayVisible(true);
       setSection("rig");
-      setNotice(`已为“${selectedLayer.sourceName}”生成 Alpha ArtMesh。请先检查中立与九向姿态，再保存这个图层。`);
+      const action = previousTopology === "art" ? "重新生成" : "升级";
+      setNotice(`已${action}“${selectedLayer.sourceName}”的 Alpha ArtMesh：顶点 ${previousPoints} → ${mesh.points.length}，三角形 ${previousTriangles} → ${Math.floor(mesh.triangles.length / 3)}。请检查中立与九向姿态后再保存。`);
     } catch (cause) {
       setError(`当前图层网格升级失败：${messageOf(cause)}`);
     } finally {
@@ -551,6 +738,12 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   async function save(): Promise<void> {
     if (!hasPending) return;
+    const failed = validateProjectPoses(project!).filter((check) => !check.passed);
+    if (failed.length > 0) {
+      const firstIssue = failed[0]?.issues[0]?.message ?? "存在不安全姿态";
+      setError(`当前草稿未保存：${failed.length} 个安全姿态未通过。${firstIssue} 请先微调或撤销这次改动。`);
+      return;
+    }
     cancelScheduled();
     setBusy(true); setError(""); setNotice("");
     try {
@@ -626,17 +819,23 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   const sessions = [...workspace.sessions].reverse();
   const selectedTuning = { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[secondaryPart] ?? {}) };
+  const correctedSamples = new Map(poseCorrectionSamples(project.model, selectedLayerId)
+    .map((sample) => [`${sample.yaw},${sample.pitch}`, sample.pointCount]));
+  const neutralCorrectionCount = Object.keys(effectiveOverrides.layers?.[selectedLayerId]?.meshPointDeltas ?? {}).length;
+  const currentPoseCheck = poseChecks[poseId];
+  const draftSafetyPassed = draftSafetyChecks.length > 0 && draftSafetyChecks.every((check) => check.passed);
+  const currentPoseLabel = editorPoses[poseId]?.label ?? "自定义姿态";
 
   return (
     <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
       {focusedPreview && <button className="exit-focus-preview" onClick={() => setFocusedPreview(false)}>退出沉浸预览</button>}
       <header className="editor-header">
         <button onClick={() => void leaveEditor()}>返回主页</button>
-        <div><h1>{project.name}</h1><p>revision {workspace.calibration.revision} · {project.rigLevel} · {project.layers.length} 层 · 安全系数 {project.quality.safetyScale.toFixed(2)}</p></div>
+        <div><h1>{project.name}</h1><p>revision {workspace.calibration.revision} · {project.rigLevel} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
         <div className="editor-history-actions">
           <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
-          <button disabled={undoStack.length === 0} onClick={undo}>撤销</button>
-          <button disabled={redoStack.length === 0} onClick={redo}>重做</button>
+          <button aria-keyshortcuts="Control+Z Meta+Z" disabled={undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）">撤销</button>
+          <button aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）">重做</button>
           <button onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={busy}>恢复全部自动绑定</button>
           <button className="header-save" disabled={!hasPending || busy} onClick={() => void save()}>{busy ? "正在验证…" : "保存更改"}</button>
           <button onClick={() => void launchViewer()}>运行角色窗口</button>
@@ -646,7 +845,27 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       <StudioNavigation section={section} onSection={(next) => { setSection(next); if (next !== "preview") setFocusedPreview(false); }} />
 
       <section className="editor-toolbar">
-        {section === "rig" ? <><div className="mode-tabs">{(["semantic", "anchors", "layer", "mesh"] as EditMode[]).map((item) => <button className={mode === item ? "active" : ""} key={item} onClick={() => setMode(item)}>{item === "semantic" ? "脸部控制点" : item === "anchors" ? "身体锚点" : item === "layer" ? "图层轴心" : "网格与权重"}</button>)}</div><div className="pose-tabs">{Object.entries(editorPoses).map(([id, item]) => <button className={!autonomous && poseId === id ? "active" : ""} key={id} onClick={() => selectPose(id)}>{item.label}</button>)}<button className={autonomous ? "active" : ""} onClick={() => setAutonomous((value) => !value)}>{autonomous ? "暂停动作" : "自主预览"}</button></div></>
+        {section === "rig" ? <><div className="mode-tabs">{(["semantic", "anchors", "layer", "mesh"] as EditMode[]).map((item) => {
+          const active = editorOverlayVisible && mode === item;
+          const label = item === "semantic" ? "脸部控制点" : item === "anchors" ? "身体锚点" : item === "layer" ? "图层轴心" : "网格与权重";
+          return <button aria-pressed={active} className={active ? "active" : ""} key={item} title={active ? `再次点击隐藏${label}` : `显示${label}`} onClick={() => {
+            if (active) setEditorOverlayVisible(false);
+            else {
+              setMode(item); setEditorOverlayVisible(true);
+              if (item === "mesh") { setAutonomous(false); setBehaviorPlaying(false); if (!editorPoses[poseId]) selectPose("neutral"); }
+            }
+          }}>{label}</button>;
+        })}{editorOverlayVisible && mode === "mesh" && <>
+          <button aria-pressed={showNeutralMeshReference} className={showNeutralMeshReference ? "active" : ""} title="在实时变形网格下叠加中立网格" onClick={() => setShowNeutralMeshReference((value) => !value)}>中立参考</button>
+          <button aria-pressed={isolateSelectedLayer} className={isolateSelectedLayer ? "active" : ""} onClick={() => setIsolateSelectedLayer((value) => !value)}>突出当前图层</button>
+          <button disabled={!hasPending} className={showDraftBefore ? "active" : ""} onPointerDown={() => setShowDraftBefore(true)} onPointerUp={() => setShowDraftBefore(false)} onPointerCancel={() => setShowDraftBefore(false)} onPointerLeave={() => setShowDraftBefore(false)}>按住看修改前</button>
+          <span className={`pose-edit-status ${currentPoseCheck?.passed === false ? "warning" : ""}`}>正在校正：{currentPoseLabel}{poseId === "neutral" ? "（基础网格）" : "（姿态关键形）"}</span>
+        </>}</div><div className="pose-tabs">{Object.entries(editorPoses).map(([id, item]) => {
+          const key = `${item.state.headYaw},${item.state.headPitch}`;
+          const corrected = id === "neutral" ? neutralCorrectionCount > 0 : (correctedSamples.get(key) ?? 0) > 0;
+          const check = poseChecks[id];
+          return <button className={`${!autonomous && poseId === id ? "active" : ""} ${check?.passed === false ? "pose-warning" : ""}`} title={`${item.label}${corrected ? "已有人工微调" : "尚未微调"}${check?.passed === false ? `；${check.issues[0]?.message ?? "安全检查未通过"}` : ""}`} key={id} onClick={() => selectPose(id)}>{item.label}{corrected ? " ·" : ""}{check?.passed === false ? " !" : ""}</button>;
+        })}<button className={autonomous ? "active" : ""} onClick={() => setAutonomous((value) => !value)}>{autonomous ? "暂停动作" : "自主预览"}</button></div></>
           : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查中立、左右、上下、闭眼和张嘴。"}</small></div><div className="pose-tabs"><button onClick={() => selectPose("neutral")}>恢复中立</button><button className={autonomous ? "active" : ""} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
       </section>
 
@@ -654,17 +873,23 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         {section === "overview" ? <OverviewLeftPanel project={project} onSection={setSection} /> : section === "rig" ? <EditorLayerPanel
           project={project}
           selectedLayerId={selectedLayerId}
-          onSelect={(layerId) => { setSelectedLayerId(layerId); setSelectedVertex(undefined); }}
+          onSelect={(layerId) => { setSelectedLayerId(layerId); setSelectedVertex(undefined); setSelectedVertices([]); }}
           onPatchLayer={patchLayer}
         /> : section === "parameters" ? <ParameterLeftPanel project={project} selectedId={selectedParameterId} onSelect={setSelectedParameterId} /> : section === "dynamics" ? <DynamicsLeftPanel project={project} selectedBehaviorId={selectedBehaviorId} onBehavior={(id) => { setSelectedBehaviorId(id); setBehaviorTime(0); setBehaviorPlaying(false); setAutonomous(false); }} onCreateStarter={createStarterDynamics} /> : <PreviewLeftPanel activeSample={activePreviewSample} onSample={selectPreviewSample} />}
         <EditorViewportPanel
           canvas={canvas}
           project={project}
           mode={mode}
-          showOverlay={section === "rig"}
+          showOverlay={section === "rig" && editorOverlayVisible && !showDraftBefore}
+          showNeutralMeshReference={showNeutralMeshReference}
+          posedMeshPoints={posedMeshPoints}
+          liveMeshPoints={liveMeshPoints}
+          animateMesh={autonomous && mode === "mesh" && editorOverlayVisible}
           cleanPreview={section !== "rig"}
           selectedLayer={selectedLayer}
           selectedVertex={selectedVertex}
+          selectedVertices={selectedVertices}
+          softSelectionEnabled={softSelectionEnabled}
           softRadius={softRadius}
           comparison={comparison}
           comparisonMode={comparisonMode}
@@ -672,8 +897,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onBeginDrag={beginDrag}
           onMoveDrag={moveDrag}
           onEndDrag={endDrag}
+          onCancelDrag={cancelDrag}
           onNudge={nudgeWithKeyboard}
-          onSelectVertex={setSelectedVertex}
           onComparisonMode={setComparisonMode}
           onSplitPercent={setSplitPercent}
         />
@@ -681,6 +906,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           project={project}
           selectedLayer={selectedLayer}
           selectedVertex={selectedVertex}
+          softSelectionEnabled={softSelectionEnabled}
           softRadius={softRadius}
           secondaryPart={secondaryPart}
           selectedTuning={selectedTuning}
@@ -694,6 +920,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           meshUpgrading={meshUpgrading}
           onLayerProperty={setLayerProperty}
           onMoveLayer={moveSelectedLayer}
+          onSoftSelectionEnabled={setSoftSelectionEnabled}
           onSoftRadius={setSoftRadius}
           onVertexInfluence={setVertexInfluence}
           onResetLayer={() => void resetSelectedLayer()}

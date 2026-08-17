@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type React from "react";
 import type {
   AnchorGraph,
   CalibrationOverrides,
   CalibrationSessionDocument,
   LayerBinding,
+  Point,
   PuppetLoomProject,
   RevisionComparisonResult,
   SecondaryMotionPart,
@@ -21,7 +22,9 @@ export type DragTarget =
   | { kind: "anchor"; key: keyof AnchorGraph }
   | { kind: "pivot" }
   | { kind: "secondary"; key: keyof NonNullable<LayerBinding["secondaryAnchors"]> }
-  | { kind: "mesh"; index: number };
+  | { kind: "mesh"; index: number }
+  | { kind: "mesh-scale" }
+  | { kind: "mesh-rotate" };
 
 export interface ComparisonImages {
   result: RevisionComparisonResult;
@@ -32,6 +35,69 @@ export interface ComparisonImages {
 
 type LayerPatch = NonNullable<CalibrationOverrides["layers"]>[string];
 type VertexChannel = "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin";
+
+function meshEdgePath(points: Point[], triangles: number[]): string {
+  const commands: string[] = [];
+  const edges = new Set<string>();
+  const append = (left: number | undefined, right: number | undefined): void => {
+    if (left === undefined || right === undefined) return;
+    const key = left < right ? `${left},${right}` : `${right},${left}`;
+    if (edges.has(key)) return;
+    const a = points[left];
+    const b = points[right];
+    if (!a || !b) return;
+    edges.add(key);
+    commands.push(`M${a.x} ${a.y}L${b.x} ${b.y}`);
+  };
+  for (let index = 0; index < triangles.length; index += 3) {
+    const a = triangles[index];
+    const b = triangles[index + 1];
+    const c = triangles[index + 2];
+    append(a, b); append(b, c); append(c, a);
+  }
+  return commands.join("");
+}
+
+function artMeshQuality(layer: LayerBinding): { balanced: boolean; label: string } | undefined {
+  const mesh = layer.mesh;
+  if (mesh.topology !== "art" || !mesh.art || mesh.uvs.length !== mesh.points.length) return undefined;
+  const edges = new Map<string, number>();
+  const addEdge = (left: number, right: number): void => {
+    const key = left < right ? `${left},${right}` : `${right},${left}`;
+    if (edges.has(key)) return;
+    const a = mesh.uvs[left];
+    const b = mesh.uvs[right];
+    if (!a || !b) return;
+    edges.set(key, Math.hypot(
+      (a.x - b.x) * mesh.art!.textureSize.width,
+      (a.y - b.y) * mesh.art!.textureSize.height
+    ));
+  };
+  let worstAspect = 1;
+  for (let index = 0; index < mesh.triangles.length; index += 3) {
+    const ids = mesh.triangles.slice(index, index + 3);
+    if (ids.length < 3) continue;
+    addEdge(ids[0]!, ids[1]!);
+    addEdge(ids[1]!, ids[2]!);
+    addEdge(ids[2]!, ids[0]!);
+    const lengths = [
+      edges.get(ids[0]! < ids[1]! ? `${ids[0]},${ids[1]}` : `${ids[1]},${ids[0]}`),
+      edges.get(ids[1]! < ids[2]! ? `${ids[1]},${ids[2]}` : `${ids[2]},${ids[1]}`),
+      edges.get(ids[2]! < ids[0]! ? `${ids[2]},${ids[0]}` : `${ids[0]},${ids[2]}`)
+    ].filter((length): length is number => length !== undefined).sort((a, b) => a - b);
+    if (lengths.length === 3) worstAspect = Math.max(worstAspect, lengths[2]! / Math.max(0.001, lengths[0]!));
+  }
+  const shortThreshold = Math.max(1.5, mesh.art.detail * 0.3);
+  const shortEdges = [...edges.values()].filter((length) => length < shortThreshold).length;
+  const shortRatio = edges.size > 0 ? shortEdges / edges.size : 0;
+  const balanced = shortRatio <= 0.1 && worstAspect <= 12;
+  return {
+    balanced,
+    label: balanced
+      ? `均衡 · 最差边比 ${worstAspect.toFixed(1)}:1`
+      : `需要重建 · ${shortEdges} 条过短边 · 最差边比 ${worstAspect.toFixed(1)}:1`
+  };
+}
 
 const semanticRoles: SemanticRole[] = [
   "backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "tail", "accessory", "unknown"
@@ -121,9 +187,15 @@ export function EditorViewportPanel({
   project,
   mode,
   showOverlay,
+  showNeutralMeshReference,
+  posedMeshPoints,
+  liveMeshPoints,
+  animateMesh,
   cleanPreview,
   selectedLayer,
   selectedVertex,
+  selectedVertices,
+  softSelectionEnabled,
   softRadius,
   comparison,
   comparisonMode,
@@ -131,8 +203,8 @@ export function EditorViewportPanel({
   onBeginDrag,
   onMoveDrag,
   onEndDrag,
+  onCancelDrag,
   onNudge,
-  onSelectVertex,
   onComparisonMode,
   onSplitPercent
 }: {
@@ -140,27 +212,65 @@ export function EditorViewportPanel({
   project: PuppetLoomProject;
   mode: EditMode;
   showOverlay: boolean;
+  showNeutralMeshReference: boolean;
+  posedMeshPoints: Point[];
+  liveMeshPoints: () => Point[] | undefined;
+  animateMesh: boolean;
   cleanPreview: boolean;
   selectedLayer: LayerBinding | undefined;
   selectedVertex: number | undefined;
+  selectedVertices: number[];
+  softSelectionEnabled: boolean;
   softRadius: number;
   comparison: ComparisonImages | undefined;
   comparisonMode: ComparisonMode;
   splitPercent: number;
-  onBeginDrag: (event: React.PointerEvent<SVGCircleElement>, target: DragTarget) => void;
+  onBeginDrag: (event: React.PointerEvent<SVGElement>, target: DragTarget) => void;
   onMoveDrag: (event: React.PointerEvent<SVGSVGElement>) => void;
   onEndDrag: () => void;
+  onCancelDrag: () => void;
   onNudge: (event: React.KeyboardEvent<SVGCircleElement>, target: DragTarget) => void;
-  onSelectVertex: (index: number) => void;
   onComparisonMode: (mode: ComparisonMode) => void;
   onSplitPercent: (percent: number) => void;
 }): React.JSX.Element {
   const cage = project.runtime.semanticCage;
   const meshTriangles = selectedLayer?.mesh.triangles ?? [];
-  const meshPoints = selectedLayer?.mesh.points ?? [];
-  const meshVertexRadius = meshPoints.length > 300 ? 0.002 : meshPoints.length > 120 ? 0.0028 : 0.0045;
-  const locked = selectedLayer?.locked === true;
+  const neutralMeshPoints = selectedLayer?.mesh.points ?? [];
+  const [animatedMesh, setAnimatedMesh] = useState<{ layerId: string; points: Point[] }>();
+  useEffect(() => {
+    if (!animateMesh || !selectedLayer) {
+      setAnimatedMesh(undefined);
+      return;
+    }
+    let animationFrame = 0;
+    let previousUpdate = 0;
+    const layerId = selectedLayer.id;
+    const update = (now: number) => {
+      if (now - previousUpdate >= 1000 / 30) {
+        const points = liveMeshPoints();
+        if (points) setAnimatedMesh({ layerId, points });
+        previousUpdate = now;
+      }
+      animationFrame = requestAnimationFrame(update);
+    };
+    animationFrame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [animateMesh, liveMeshPoints, selectedLayer?.id]);
+  const meshPoints = animateMesh && animatedMesh && animatedMesh.layerId === selectedLayer?.id ? animatedMesh.points : posedMeshPoints;
   const navigation = useViewportNavigation(project.canvas.width / project.canvas.height);
+  const screenPixel = 1 / Math.max(1, Math.sqrt(navigation.stageSize.width * navigation.stageSize.height) * navigation.transform.zoom);
+  const meshVertexRadius = screenPixel * (meshPoints.length > 300 ? 1.15 : meshPoints.length > 120 ? 1.35 : 1.55);
+  const selectedVertexRadius = screenPixel * 2.35;
+  const meshHitRadius = screenPixel * 6.5;
+  const transformHandleRadius = screenPixel * 5;
+  const rotateHandleOffset = screenPixel * 18;
+  const selectedSet = new Set(selectedVertices);
+  const selectedPoints = selectedVertices.map((index) => meshPoints[index]).filter((point): point is Point => Boolean(point));
+  const selectionBounds = selectedPoints.length > 1 ? {
+    minX: Math.min(...selectedPoints.map((point) => point.x)), maxX: Math.max(...selectedPoints.map((point) => point.x)),
+    minY: Math.min(...selectedPoints.map((point) => point.y)), maxY: Math.max(...selectedPoints.map((point) => point.y))
+  } : undefined;
+  const locked = selectedLayer?.locked === true;
   return (
     <section className="viewport-panel">
       <div
@@ -183,7 +293,7 @@ export function EditorViewportPanel({
           }}
         >
           <canvas ref={canvas} className="editor-canvas" />
-          {showOverlay && <svg className="editor-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" onPointerMove={onMoveDrag} onPointerUp={onEndDrag} onPointerCancel={onEndDrag}>
+          {showOverlay && <svg className="editor-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" onPointerMove={onMoveDrag} onPointerUp={onEndDrag} onPointerCancel={onCancelDrag}>
           {mode === "semantic" && cage && <>
             {[...cage.faceTriangles, ...cage.skullTriangles].flatMap((triangle, triangleIndex) => triangle.map((id, index) => {
               const nextId = triangle[(index + 1) % 3]!; const a = cage.points[id].position; const b = cage.points[nextId].position;
@@ -207,12 +317,19 @@ export function EditorViewportPanel({
             </g>)}
           </>}
           {mode === "mesh" && selectedLayer && <>
-            {Array.from({ length: Math.floor(meshTriangles.length / 3) }, (_, triangleIndex) => {
-              const ids = meshTriangles.slice(triangleIndex * 3, triangleIndex * 3 + 3);
-              return ids.map((id, edgeIndex) => { const a = meshPoints[id!]; const b = meshPoints[ids[(edgeIndex + 1) % 3]!]; return a && b ? <line key={`${triangleIndex}-${edgeIndex}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} className="mesh-line" /> : null; });
-            })}
-            {selectedVertex !== undefined && meshPoints[selectedVertex] && <circle cx={meshPoints[selectedVertex]!.x} cy={meshPoints[selectedVertex]!.y} r={softRadius} className="soft-radius" />}
-            {meshPoints.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r={selectedVertex === index ? 0.007 : meshVertexRadius} className={`handle mesh-handle ${selectedVertex === index ? "selected" : ""} ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 网格顶点 ${index}`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onFocus={() => onSelectVertex(index)} onKeyDown={(event) => onNudge(event, { kind: "mesh", index })} onPointerDown={(event) => onBeginDrag(event, { kind: "mesh", index })} />)}
+            {showNeutralMeshReference && <path d={meshEdgePath(neutralMeshPoints, meshTriangles)} className="mesh-line mesh-neutral-reference" />}
+            <path d={meshEdgePath(meshPoints, meshTriangles)} className="mesh-line mesh-deformed" />
+            {softSelectionEnabled && selectedVertex !== undefined && meshPoints[selectedVertex] && <circle cx={meshPoints[selectedVertex]!.x} cy={meshPoints[selectedVertex]!.y} r={softRadius} className="soft-radius" />}
+            {meshPoints.map((point, index) => <g key={index}>
+              <circle cx={point.x} cy={point.y} r={meshHitRadius} className="handle-hit mesh-handle-hit" tabIndex={locked || animateMesh ? -1 : 0} role="slider" aria-disabled={locked || animateMesh} aria-label={`${selectedLayer.sourceName} 网格顶点 ${index}；按住 Shift 可多选`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={locked || animateMesh ? undefined : (event) => onNudge(event, { kind: "mesh", index })} onPointerDown={locked || animateMesh ? undefined : (event) => onBeginDrag(event, { kind: "mesh", index })} />
+              <circle cx={point.x} cy={point.y} r={selectedSet.has(index) ? selectedVertexRadius : meshVertexRadius} className={`handle handle-visible mesh-handle ${selectedSet.has(index) ? "selected" : ""} ${locked || animateMesh ? "locked" : ""}`} aria-hidden="true" />
+            </g>)}
+            {selectionBounds && !animateMesh && <g className="mesh-transform-gizmo">
+              <rect x={selectionBounds.minX} y={selectionBounds.minY} width={Math.max(0.001, selectionBounds.maxX - selectionBounds.minX)} height={Math.max(0.001, selectionBounds.maxY - selectionBounds.minY)} />
+              <line x1={(selectionBounds.minX + selectionBounds.maxX) / 2} y1={selectionBounds.minY} x2={(selectionBounds.minX + selectionBounds.maxX) / 2} y2={selectionBounds.minY - rotateHandleOffset} />
+              <circle cx={(selectionBounds.minX + selectionBounds.maxX) / 2} cy={selectionBounds.minY - rotateHandleOffset} r={transformHandleRadius} className="mesh-transform-handle rotate" onPointerDown={(event) => onBeginDrag(event, { kind: "mesh-rotate" })}><title>旋转所选顶点</title></circle>
+              <circle cx={selectionBounds.maxX} cy={selectionBounds.maxY} r={transformHandleRadius} className="mesh-transform-handle scale" onPointerDown={(event) => onBeginDrag(event, { kind: "mesh-scale" })}><title>缩放所选顶点</title></circle>
+            </g>}
           </>}
           </svg>}
         </div>
@@ -223,7 +340,7 @@ export function EditorViewportPanel({
           <button className="fit-view" onClick={navigation.fit} title="适配窗口（0）">适配</button>
         </div>
       </div>
-      <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
+      <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? "单击并拖动微调一个点；Shift+单击选择少量点后可整体移动、旋转或缩放；Esc 取消当前拖动。空白处仍可移动视图。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
 
       {comparison && <section className="evidence-preview" data-testid="comparison-view">
         <div className="comparison-header"><h3>revision {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => <button key={item} className={comparisonMode === item ? "active" : ""} onClick={() => onComparisonMode(item)}>{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>)}</div></div>
@@ -244,6 +361,7 @@ export function EditorInspectorPanel({
   project,
   selectedLayer,
   selectedVertex,
+  softSelectionEnabled,
   softRadius,
   secondaryPart,
   selectedTuning,
@@ -257,6 +375,7 @@ export function EditorInspectorPanel({
   meshUpgrading,
   onLayerProperty,
   onMoveLayer,
+  onSoftSelectionEnabled,
   onSoftRadius,
   onVertexInfluence,
   onResetLayer,
@@ -274,6 +393,7 @@ export function EditorInspectorPanel({
   project: PuppetLoomProject;
   selectedLayer: LayerBinding | undefined;
   selectedVertex: number | undefined;
+  softSelectionEnabled: boolean;
   softRadius: number;
   secondaryPart: SecondaryMotionPart;
   selectedTuning: { amplitude: number; response: number; stability: number };
@@ -287,6 +407,7 @@ export function EditorInspectorPanel({
   meshUpgrading: boolean;
   onLayerProperty: (patch: LayerPatch) => void;
   onMoveLayer: (direction: -1 | 1) => void;
+  onSoftSelectionEnabled: (enabled: boolean) => void;
   onSoftRadius: (radius: number) => void;
   onVertexInfluence: (channel: VertexChannel, value: number) => void;
   onResetLayer: () => void;
@@ -304,6 +425,7 @@ export function EditorInspectorPanel({
   const [inspectorTab, setInspectorTab] = useState<"layer" | "motion" | "history">("layer");
   const locked = selectedLayer?.locked === true;
   const meshPoints = selectedLayer?.mesh.points ?? [];
+  const meshQuality = selectedLayer ? artMeshQuality(selectedLayer) : undefined;
   const layerMap = new Map(project.layers.map((layer) => [layer.id, layer]));
   return (
     <aside className="inspector-panel">
@@ -315,6 +437,7 @@ export function EditorInspectorPanel({
           <dt>图层</dt><dd>{selectedLayer.sourceName}</dd>
           <dt>网格</dt><dd>{selectedLayer.mesh.topology === "art" ? "Alpha ArtMesh" : `${selectedLayer.mesh.rows} × ${selectedLayer.mesh.cols} 规则网格`}</dd>
           <dt>顶点 / 三角形</dt><dd>{selectedLayer.mesh.points.length} / {Math.floor(selectedLayer.mesh.triangles.length / 3)}</dd>
+          {meshQuality && <><dt>网格质量</dt><dd className={meshQuality.balanced ? "mesh-quality-good" : "mesh-quality-warning"}>{meshQuality.label}</dd></>}
         </dl>
         <label className="check-row"><input type="checkbox" checked={selectedLayer.visible !== false} onChange={(event) => onLayerProperty({ visible: event.target.checked })} />参与渲染</label>
         <label className="check-row"><input type="checkbox" checked={locked} onChange={(event) => onLayerProperty({ locked: event.target.checked })} />锁定编辑</label>
@@ -330,6 +453,7 @@ export function EditorInspectorPanel({
           {selectedLayer.mesh.topology === "art" && selectedLayer.mesh.art ? <>
             <label>细节尺度（纹理像素）<input disabled={locked} type="number" min="4" max="256" value={selectedLayer.mesh.art.detail} onChange={(event) => onLayerProperty({ meshDetail: Math.max(4, Math.min(256, Math.round(Number(event.target.value) || 4))) })} /></label>
             <small>{selectedLayer.mesh.art.regions.length} 个独立区域，{selectedLayer.mesh.art.regions.reduce((count, region) => count + region.holes.length, 0)} 个孔洞。数值越小，轮廓和内部网格越密。</small>
+            <button disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}>{meshUpgrading ? "正在重新计算轮廓与三角形…" : "按当前细节重新生成网格"}</button>
           </> : selectedLayer.mesh.rows !== undefined && selectedLayer.mesh.cols !== undefined ? <>
             <div><label>行<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.rows} onChange={(event) => onLayerProperty({ meshDensity: { rows: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))), cols: selectedLayer.mesh.cols! } })} /></label><label>列<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.cols} onChange={(event) => onLayerProperty({ meshDensity: { rows: selectedLayer.mesh.rows!, cols: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))) } })} /></label></div>
             <small>规则网格仅用于完全不透明的矩形图层和旧项目兼容。</small>
@@ -340,7 +464,8 @@ export function EditorInspectorPanel({
 
         {selectedVertex !== undefined && <section className="vertex-inspector">
           <h3>顶点 {selectedVertex}</h3><p>x {meshPoints[selectedVertex]?.x.toFixed(5)} · y {meshPoints[selectedVertex]?.y.toFixed(5)}</p>
-          <label className="range-row"><span>软选择半径 {softRadius.toFixed(3)}</span><input type="range" min="0.005" max="0.2" step="0.005" value={softRadius} onChange={(event) => onSoftRadius(Number(event.target.value))} /></label>
+          <label className="check-row"><input type="checkbox" checked={softSelectionEnabled} onChange={(event) => onSoftSelectionEnabled(event.target.checked)} />带动相邻顶点（软选择）</label>
+          <label className="range-row"><span>影响半径 {softRadius.toFixed(3)}</span><input disabled={!softSelectionEnabled} type="range" min="0.005" max="0.2" step="0.005" value={softRadius} onChange={(event) => onSoftRadius(Number(event.target.value))} /></label>
           {(["face", "skull", "head", "body", "gaze", "physics", "pin"] as const).map((channel) => {
             const fallback = channel === "pin" ? 0 : 1;
             const influenceChannels = selectedLayer.mesh.influences as Record<string, number[] | undefined> | undefined;

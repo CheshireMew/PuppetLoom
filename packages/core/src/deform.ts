@@ -379,6 +379,46 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   return deformResolvedPoint(project, layer, base, resolveMotionState(project, state), vertexIndex);
 }
 
+/**
+ * Finds the authored mesh point that produces a requested on-canvas point after
+ * procedural pose and physics deformation. Editors use this to avoid a vertex
+ * jumping when a visible posed mesh is dragged.
+ */
+export function invertDeformedPoint(
+  project: PuppetLoomProject,
+  layer: LayerBinding,
+  target: Point,
+  state: MotionState,
+  vertexIndex: number,
+  initial: Point
+): Point {
+  const resolvedState = resolveMotionState(project, state);
+  let current = { ...initial };
+  const epsilon = 1e-5;
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    const value = deformResolvedPoint(project, layer, current, resolvedState, vertexIndex);
+    const error = { x: target.x - value.x, y: target.y - value.y };
+    if (Math.hypot(error.x, error.y) < 1e-8) break;
+    const dx = deformResolvedPoint(project, layer, { x: current.x + epsilon, y: current.y }, resolvedState, vertexIndex);
+    const dy = deformResolvedPoint(project, layer, { x: current.x, y: current.y + epsilon }, resolvedState, vertexIndex);
+    const j00 = (dx.x - value.x) / epsilon;
+    const j10 = (dx.y - value.y) / epsilon;
+    const j01 = (dy.x - value.x) / epsilon;
+    const j11 = (dy.y - value.y) / epsilon;
+    const determinant = j00 * j11 - j01 * j10;
+    let step = Math.abs(determinant) > 1e-10
+      ? {
+          x: (error.x * j11 - error.y * j01) / determinant,
+          y: (j00 * error.y - j10 * error.x) / determinant
+        }
+      : error;
+    const length = Math.hypot(step.x, step.y);
+    if (length > 0.05) step = { x: step.x * 0.05 / length, y: step.y * 0.05 / length };
+    current = { x: current.x + step.x, y: current.y + step.y };
+  }
+  return current;
+}
+
 export function deformedPoints(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): Point[] {
   const resolvedState = resolveMotionState(project, state);
   const authored = evaluateLayerAuthoring(project, layer, resolvedState);

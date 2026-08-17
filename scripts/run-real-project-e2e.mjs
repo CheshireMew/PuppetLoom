@@ -8,12 +8,13 @@ const source = resolve(process.argv[2] ?? "workspace/blue-whale-maid-r34");
 await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", estimatedBytes: 1024 * 1024 ** 2, reuse: { applicable: false, reason: "真实项目副本会被草稿和校准链修改，必须与来源及其它验收运行隔离。" } }, async (artifactRun) => {
 const project = artifactRun.path(`project-${basename(source)}`);
 const screenshot = artifactRun.path("editor.png");
+const applicationProfile = artifactRun.path("user-data");
 await cp(source, project, { recursive: true, errorOnExist: true, force: false });
 
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js"), "--edit", "--project", project],
   cwd: root,
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1" }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1", PUPPETLOOM_E2E_USER_DATA: applicationProfile }
 });
 
 try {
@@ -44,6 +45,20 @@ try {
   }
 
   await editor.getByRole("button", { name: /02 结构与网格/ }).click();
+  if (await editor.locator(".editor-overlay").count()) throw new Error("真实项目首次进入结构与网格时编辑标记没有默认隐藏。");
+  const frontHair = baseline.project.layers.find((layer) => layer.role === "frontHair");
+  if (!frontHair) throw new Error("真实项目缺少前发图层，无法验证动态网格。" );
+  await editor.locator(".layer-select").filter({ hasText: frontHair.sourceName }).click();
+  const meshButton = editor.getByRole("button", { name: "网格与权重" });
+  await meshButton.click();
+  const deformedMesh = editor.locator(".mesh-deformed");
+  await deformedMesh.waitFor();
+  const staticMeshPath = await deformedMesh.getAttribute("d");
+  await editor.getByRole("button", { name: "自主预览" }).click();
+  await editor.waitForFunction((before) => document.querySelector(".mesh-deformed")?.getAttribute("d") !== before, staticMeshPath, { timeout: 10_000 });
+  await editor.getByRole("button", { name: "暂停动作" }).click();
+  await meshButton.click();
+  if (await editor.locator(".editor-overlay").count()) throw new Error("真实项目再次点击网格与权重后没有隐藏网格。" );
   await editor.getByRole("button", { name: "动作", exact: true }).click();
   const frontHairAmplitude = editor.locator('.save-panel .range-row input[type="range"]').nth(6);
   await frontHairAmplitude.evaluate((element) => {
@@ -116,7 +131,7 @@ try {
   const secondFrame = await viewer.evaluate(frameSignature);
   if (firstFrame === secondFrame) throw new Error("真实 r34 角色窗口默认启动后画面没有自主运动。" );
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
-  if (pointer.strength !== 0) throw new Error(`真实 r34 角色窗口没有默认使用自主观察：${JSON.stringify(pointer)}`);
+  if (pointer.strength !== 1) throw new Error(`真实 r34 角色窗口首次启动没有默认开启鼠标跟随：${JSON.stringify(pointer)}`);
 
   process.stdout.write(`${JSON.stringify({ ok: true, source, projectCopy: project, screenshot, revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale }, null, 2)}\n`);
 } finally {
