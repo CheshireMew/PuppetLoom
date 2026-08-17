@@ -34,7 +34,8 @@ import {
   type ComparisonImages,
   type ComparisonMode,
   type DragTarget,
-  type EditMode
+  type EditMode,
+  type MeshSelectionMode
 } from "./editor/EditorPresentation.js";
 import {
   DynamicsInspector,
@@ -124,7 +125,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [editorOverlayVisible, setEditorOverlayVisible] = useState(false);
   const [showNeutralMeshReference, setShowNeutralMeshReference] = useState(false);
   const [showDraftBefore, setShowDraftBefore] = useState(false);
-  const [isolateSelectedLayer, setIsolateSelectedLayer] = useState(true);
+  const [soloSelectedLayer, setSoloSelectedLayer] = useState(false);
   const [poseId, setPoseId] = useState("neutral");
   const [autonomous, setAutonomous] = useState(false);
   const [previewState, setPreviewState] = useState<MotionState>(() => clone(neutralMotionState));
@@ -199,12 +200,14 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const hasPending = Object.keys(pending).length > 0;
   const renderProject = useMemo(() => {
     const source = showDraftBefore ? workspace?.project : project;
-    if (!source || showDraftBefore || !isolateSelectedLayer || section !== "rig" || mode !== "mesh" || !editorOverlayVisible) return source;
+    if (!source || !soloSelectedLayer || section !== "rig") return source;
     return {
       ...source,
-      layers: source.layers.map((layer) => layer.id === selectedLayerId ? layer : { ...layer, opacity: layer.opacity * 0.28 })
+      layers: source.layers.map((layer) => layer.id === selectedLayerId
+        ? { ...layer, visible: true }
+        : { ...layer, visible: false })
     };
-  }, [editorOverlayVisible, isolateSelectedLayer, mode, project, section, selectedLayerId, showDraftBefore, workspace?.project]);
+  }, [project, section, selectedLayerId, showDraftBefore, soloSelectedLayer, workspace?.project]);
   const renderSelectedLayer = renderProject?.layers.find((layer) => layer.id === selectedLayerId);
   const posedMeshPoints = useMemo(() => renderProject && renderSelectedLayer
     ? deformedPoints(renderProject, renderSelectedLayer, previewState)
@@ -350,19 +353,30 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     };
   }
 
+  function updateMeshSelection(indices: number[], mode: MeshSelectionMode): void {
+    if (!selectedLayer) return;
+    const valid = [...new Set(indices)].filter((index) => Number.isInteger(index) && index >= 0 && index < selectedLayer.mesh.points.length);
+    let next: number[];
+    if (mode === "replace") {
+      next = valid;
+    } else if (mode === "add") {
+      next = [...selectedVertices, ...valid.filter((index) => !selectedVertices.includes(index))];
+    } else {
+      next = [...selectedVertices];
+      valid.forEach((index) => {
+        const existing = next.indexOf(index);
+        if (existing >= 0) next.splice(existing, 1);
+        else next.push(index);
+      });
+    }
+    setSelectedVertices(next);
+    setSelectedVertex(next.at(-1));
+  }
+
   function beginDrag(event: React.PointerEvent<SVGElement>, target: DragTarget): void {
     if (event.button !== 0) return;
-    const meshTarget = target.kind === "mesh" || target.kind === "mesh-scale" || target.kind === "mesh-rotate";
+    const meshTarget = target.kind === "mesh" || target.kind === "mesh-move" || target.kind === "mesh-scale" || target.kind === "mesh-rotate";
     if ((meshTarget || target.kind === "pivot" || target.kind === "secondary") && selectedLayer?.locked) return;
-    if (target.kind === "mesh" && event.shiftKey) {
-      const next = selectedVertices.includes(target.index)
-        ? selectedVertices.filter((index) => index !== target.index)
-        : [...selectedVertices, target.index];
-      setSelectedVertices(next);
-      setSelectedVertex(next.at(-1));
-      event.preventDefault();
-      return;
-    }
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const active: { target: DragTarget; before: CalibrationOverrides; mesh?: MeshDragSnapshot } = { target, before: clone(pending) };
@@ -423,7 +437,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         next = layerOverride(next, selectedLayer.id, { pivot: position });
       } else if (target.kind === "secondary") {
         next = layerOverride(next, selectedLayer.id, { secondaryAnchors: { [target.key]: position } });
-      } else if ((target.kind === "mesh" || target.kind === "mesh-scale" || target.kind === "mesh-rotate") && active.mesh && project) {
+      } else if ((target.kind === "mesh" || target.kind === "mesh-move" || target.kind === "mesh-scale" || target.kind === "mesh-rotate") && active.mesh && project) {
         const dx = position.x - active.mesh.pointerStart.x;
         const dy = position.y - active.mesh.pointerStart.y;
         const selected = new Set(active.mesh.selected);
@@ -857,7 +871,6 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           }}>{label}</button>;
         })}{editorOverlayVisible && mode === "mesh" && <>
           <button aria-pressed={showNeutralMeshReference} className={showNeutralMeshReference ? "active" : ""} title="在实时变形网格下叠加中立网格" onClick={() => setShowNeutralMeshReference((value) => !value)}>中立参考</button>
-          <button aria-pressed={isolateSelectedLayer} className={isolateSelectedLayer ? "active" : ""} onClick={() => setIsolateSelectedLayer((value) => !value)}>突出当前图层</button>
           <button disabled={!hasPending} className={showDraftBefore ? "active" : ""} onPointerDown={() => setShowDraftBefore(true)} onPointerUp={() => setShowDraftBefore(false)} onPointerCancel={() => setShowDraftBefore(false)} onPointerLeave={() => setShowDraftBefore(false)}>按住看修改前</button>
           <span className={`pose-edit-status ${currentPoseCheck?.passed === false ? "warning" : ""}`}>正在校正：{currentPoseLabel}{poseId === "neutral" ? "（基础网格）" : "（姿态关键形）"}</span>
         </>}</div><div className="pose-tabs">{Object.entries(editorPoses).map(([id, item]) => {
@@ -875,6 +888,16 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           selectedLayerId={selectedLayerId}
           onSelect={(layerId) => { setSelectedLayerId(layerId); setSelectedVertex(undefined); setSelectedVertices([]); }}
           onPatchLayer={patchLayer}
+          soloSelectedLayer={soloSelectedLayer}
+          onSolo={(layerId) => {
+            if (soloSelectedLayer && selectedLayerId === layerId) setSoloSelectedLayer(false);
+            else {
+              setSelectedLayerId(layerId);
+              setSelectedVertex(undefined);
+              setSelectedVertices([]);
+              setSoloSelectedLayer(true);
+            }
+          }}
         /> : section === "parameters" ? <ParameterLeftPanel project={project} selectedId={selectedParameterId} onSelect={setSelectedParameterId} /> : section === "dynamics" ? <DynamicsLeftPanel project={project} selectedBehaviorId={selectedBehaviorId} onBehavior={(id) => { setSelectedBehaviorId(id); setBehaviorTime(0); setBehaviorPlaying(false); setAutonomous(false); }} onCreateStarter={createStarterDynamics} /> : <PreviewLeftPanel activeSample={activePreviewSample} onSample={selectPreviewSample} />}
         <EditorViewportPanel
           canvas={canvas}
@@ -898,6 +921,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onMoveDrag={moveDrag}
           onEndDrag={endDrag}
           onCancelDrag={cancelDrag}
+          onSelectMeshVertices={updateMeshSelection}
           onNudge={nudgeWithKeyboard}
           onComparisonMode={setComparisonMode}
           onSplitPercent={setSplitPercent}

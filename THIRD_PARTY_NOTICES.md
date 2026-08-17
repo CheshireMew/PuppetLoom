@@ -36,6 +36,15 @@ The MIT license text is reproduced in `docs/licenses/ag-psd-MIT.txt`.
 
 The BSD 3-Clause license text is reproduced in `docs/licenses/poly2tri-BSD-3-Clause.txt`.
 
+## Lucide
+
+- Project: `lucide-icons/lucide`
+- Use: scalable interface icons in the desktop layer controls
+- License: ISC; selected icons derived from Feather retain the MIT license
+- Copyright: Copyright (c) 2026 Lucide Icons and Contributors; Feather portions Copyright (c) 2013-present Cole Bemis
+
+The applicable ISC and MIT license texts are reproduced in `docs/licenses/Lucide-ISC-MIT.txt`.
+
 ## Live2D Cubism
 
 - Project and documentation: Live2D Cubism Editor, Cubism SDK manuals, External Application Integration API, and `Live2D/CubismWebSamples`

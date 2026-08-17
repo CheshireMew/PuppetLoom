@@ -13,6 +13,7 @@ interface PanGesture {
   startY: number;
   originX: number;
   originY: number;
+  backgroundClick: boolean;
 }
 
 const MIN_ZOOM = 0.25;
@@ -35,7 +36,24 @@ function isEditorHandle(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest(".handle, .handle-hit"));
 }
 
-export function useViewportNavigation(aspectRatio: number): {
+function isEditorHandleAtPointer(target: EventTarget | null, clientX: number, clientY: number, shiftKey: boolean): boolean {
+  if (!(target instanceof Element)) return false;
+  const handle = target.closest(".handle, .handle-hit");
+  if (!handle) return false;
+  if (!handle.classList.contains("mesh-handle-hit") || shiftKey) return true;
+  const svg = handle instanceof SVGElement ? handle.ownerSVGElement : undefined;
+  if (!svg) return true;
+  const isNearVisiblePoint = [...svg.querySelectorAll<SVGGraphicsElement>(".mesh-handle")].some((visiblePoint) => {
+    const rect = visiblePoint.getBoundingClientRect();
+    return Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)) <= 5;
+  });
+  // The outer portion of the transparent acquisition target is deliberately
+  // reserved for canvas panning. This keeps dense meshes navigable while the
+  // visible point itself still supports one-press direct manipulation.
+  return isNearVisiblePoint;
+}
+
+export function useViewportNavigation(aspectRatio: number, onBackgroundClick?: () => void): {
   viewportRef: React.RefObject<HTMLDivElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   transform: ViewportTransform;
@@ -180,7 +198,9 @@ export function useViewportNavigation(aspectRatio: number): {
 
   const onPointerDownCapture = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     const forcedPan = event.button === 1 || event.button === 0 && spaceDown.current;
-    const backgroundPan = event.button === 0 && !isEditorHandle(event.target) && !isViewportControl(event.target);
+    const backgroundPan = event.button === 0
+      && !isEditorHandleAtPointer(event.target, event.clientX, event.clientY, event.shiftKey)
+      && !isViewportControl(event.target);
     if (!forcedPan && !backgroundPan) return;
     event.preventDefault();
     event.stopPropagation();
@@ -191,7 +211,8 @@ export function useViewportNavigation(aspectRatio: number): {
       startX: event.clientX,
       startY: event.clientY,
       originX: transform.x,
-      originY: transform.y
+      originY: transform.y,
+      backgroundClick: backgroundPan && !forcedPan
     };
     setPanning(true);
   }, [transform.x, transform.y]);
@@ -211,12 +232,15 @@ export function useViewportNavigation(aspectRatio: number): {
   const finishPan = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     const gesture = panGesture.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const backgroundClick = event.type === "pointerup" && gesture.backgroundClick
+      && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 4;
     event.preventDefault();
     event.stopPropagation();
     panGesture.current = undefined;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     setPanning(false);
-  }, []);
+    if (backgroundClick) onBackgroundClick?.();
+  }, [onBackgroundClick]);
 
   const onLostPointerCapture = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     if (panGesture.current?.pointerId !== event.pointerId) return;

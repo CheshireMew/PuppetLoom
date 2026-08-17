@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
 import type {
   AnchorGraph,
@@ -13,16 +13,19 @@ import type {
   SemanticRole,
   Side
 } from "@puppetloom/core";
+import { Eye, EyeOff, Lock, LockOpen, ScanEye } from "lucide-react";
 import { useViewportNavigation } from "./useViewportNavigation.js";
 
 export type EditMode = "semantic" | "anchors" | "layer" | "mesh";
 export type ComparisonMode = "before" | "after" | "split" | "overlay" | "difference";
+export type MeshSelectionMode = "replace" | "add" | "toggle";
 export type DragTarget =
   | { kind: "semantic"; key: SemanticCagePointId }
   | { kind: "anchor"; key: keyof AnchorGraph }
   | { kind: "pivot" }
   | { kind: "secondary"; key: keyof NonNullable<LayerBinding["secondaryAnchors"]> }
   | { kind: "mesh"; index: number }
+  | { kind: "mesh-move" }
   | { kind: "mesh-scale" }
   | { kind: "mesh-rotate" };
 
@@ -139,12 +142,16 @@ export function EditorLayerPanel({
   project,
   selectedLayerId,
   onSelect,
-  onPatchLayer
+  onPatchLayer,
+  soloSelectedLayer,
+  onSolo
 }: {
   project: PuppetLoomProject;
   selectedLayerId: string;
   onSelect: (layerId: string) => void;
   onPatchLayer: (layerId: string, patch: LayerPatch) => void;
+  soloSelectedLayer: boolean;
+  onSolo: (layerId: string) => void;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [orderMode, setOrderMode] = useState<"hierarchy" | "draw">("hierarchy");
@@ -169,12 +176,13 @@ export function EditorLayerPanel({
       <div className="layer-order-tabs"><button className={orderMode === "hierarchy" ? "active" : ""} onClick={() => setOrderMode("hierarchy")}>结构层级</button><button className={orderMode === "draw" ? "active" : ""} onClick={() => setOrderMode("draw")}>绘制顺序</button></div>
       <div className="layer-list">
         {ordered.map((layer) => (
-          <div key={layer.id} className={`layer-row ${selectedLayerId === layer.id ? "selected" : ""} ${layer.visible === false ? "hidden" : ""}`} style={{ paddingLeft: `${8 + layerDepth(layer, byId) * 16}px` }}>
+          <div key={layer.id} className={`layer-row ${selectedLayerId === layer.id ? "selected" : ""} ${layer.visible === false ? "hidden" : ""} ${soloSelectedLayer && selectedLayerId === layer.id ? "solo" : ""}`} style={{ paddingLeft: `${8 + layerDepth(layer, byId) * 16}px` }}>
             <button className="layer-select" onClick={() => onSelect(layer.id)}>
               <span>{layer.sourceName}</span><small>{layer.role} · {layer.side} · #{layer.order}{layer.deformerId ? ` · ${layer.deformerId}` : ""}</small>
             </button>
-            <button className="layer-icon" title={layer.visible === false ? "显示图层" : "隐藏图层"} aria-label={`${layer.sourceName} ${layer.visible === false ? "显示" : "隐藏"}`} onClick={() => onPatchLayer(layer.id, { visible: layer.visible === false })}>{layer.visible === false ? "隐" : "显"}</button>
-            <button className="layer-icon" title={layer.locked ? "解锁图层" : "锁定图层"} aria-label={`${layer.sourceName} ${layer.locked ? "解锁" : "锁定"}`} onClick={() => onPatchLayer(layer.id, { locked: !layer.locked })}>{layer.locked ? "锁" : "编"}</button>
+            <button className={`layer-icon ${layer.visible === false ? "is-off" : ""}`} title={layer.visible === false ? "显示图层" : "隐藏图层"} aria-label={`${layer.sourceName} ${layer.visible === false ? "显示" : "隐藏"}`} onClick={() => onPatchLayer(layer.id, { visible: layer.visible === false })}>{layer.visible === false ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</button>
+            <button className={`layer-icon ${layer.locked ? "is-off" : ""}`} title={layer.locked ? "解锁图层" : "锁定图层"} aria-label={`${layer.sourceName} ${layer.locked ? "解锁" : "锁定"}`} onClick={() => onPatchLayer(layer.id, { locked: !layer.locked })}>{layer.locked ? <Lock aria-hidden="true" /> : <LockOpen aria-hidden="true" />}</button>
+            <button className={`layer-icon layer-solo ${soloSelectedLayer && selectedLayerId === layer.id ? "is-active" : ""}`} aria-pressed={soloSelectedLayer && selectedLayerId === layer.id} title={soloSelectedLayer && selectedLayerId === layer.id ? "恢复显示全部图层" : "仅显示此图层"} aria-label={`${layer.sourceName} ${soloSelectedLayer && selectedLayerId === layer.id ? "恢复显示全部图层" : "仅显示此图层"}`} onClick={() => onSolo(layer.id)}><ScanEye aria-hidden="true" /></button>
           </div>
         ))}
       </div>
@@ -204,6 +212,7 @@ export function EditorViewportPanel({
   onMoveDrag,
   onEndDrag,
   onCancelDrag,
+  onSelectMeshVertices,
   onNudge,
   onComparisonMode,
   onSplitPercent
@@ -229,6 +238,7 @@ export function EditorViewportPanel({
   onMoveDrag: (event: React.PointerEvent<SVGSVGElement>) => void;
   onEndDrag: () => void;
   onCancelDrag: () => void;
+  onSelectMeshVertices: (indices: number[], mode: MeshSelectionMode) => void;
   onNudge: (event: React.KeyboardEvent<SVGCircleElement>, target: DragTarget) => void;
   onComparisonMode: (mode: ComparisonMode) => void;
   onSplitPercent: (percent: number) => void;
@@ -237,6 +247,7 @@ export function EditorViewportPanel({
   const meshTriangles = selectedLayer?.mesh.triangles ?? [];
   const neutralMeshPoints = selectedLayer?.mesh.points ?? [];
   const [animatedMesh, setAnimatedMesh] = useState<{ layerId: string; points: Point[] }>();
+  const [hoveredMeshVertex, setHoveredMeshVertex] = useState<number>();
   useEffect(() => {
     if (!animateMesh || !selectedLayer) {
       setAnimatedMesh(undefined);
@@ -257,29 +268,174 @@ export function EditorViewportPanel({
     return () => cancelAnimationFrame(animationFrame);
   }, [animateMesh, liveMeshPoints, selectedLayer?.id]);
   const meshPoints = animateMesh && animatedMesh && animatedMesh.layerId === selectedLayer?.id ? animatedMesh.points : posedMeshPoints;
-  const navigation = useViewportNavigation(project.canvas.width / project.canvas.height);
+  const clearMeshSelection = useCallback(() => {
+    if (mode === "mesh" && selectedVertices.length > 0) onSelectMeshVertices([], "replace");
+  }, [mode, onSelectMeshVertices, selectedVertices.length]);
+  const navigation = useViewportNavigation(project.canvas.width / project.canvas.height, clearMeshSelection);
+  const meshSelectionGesture = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    start: Point;
+    end: Point;
+    moved: boolean;
+  } | undefined>(undefined);
+  const [meshSelectionBox, setMeshSelectionBox] = useState<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    start: Point;
+    end: Point;
+    moved: boolean;
+  }>();
   const screenPixel = 1 / Math.max(1, Math.sqrt(navigation.stageSize.width * navigation.stageSize.height) * navigation.transform.zoom);
   const meshVertexRadius = screenPixel * (meshPoints.length > 300 ? 1.15 : meshPoints.length > 120 ? 1.35 : 1.55);
-  const selectedVertexRadius = screenPixel * 2.35;
+  // Keep the visible point Cubism-thin while retaining a practical 13 px hit
+  // target. A larger target makes neighbouring vertices overlap and steals
+  // ordinary canvas-pan gestures in dense meshes.
   const meshHitRadius = screenPixel * 6.5;
-  const transformHandleRadius = screenPixel * 5;
-  const rotateHandleOffset = screenPixel * 18;
   const selectedSet = new Set(selectedVertices);
-  const selectedPoints = selectedVertices.map((index) => meshPoints[index]).filter((point): point is Point => Boolean(point));
-  const selectionBounds = selectedPoints.length > 1 ? {
-    minX: Math.min(...selectedPoints.map((point) => point.x)), maxX: Math.max(...selectedPoints.map((point) => point.x)),
-    minY: Math.min(...selectedPoints.map((point) => point.y)), maxY: Math.max(...selectedPoints.map((point) => point.y))
-  } : undefined;
+  const selectedMeshBounds = selectedVertices.length > 1 ? (() => {
+    const points = selectedVertices.map((index) => meshPoints[index]).filter((point): point is Point => Boolean(point));
+    if (points.length < 2) return undefined;
+    const padding = screenPixel * 4;
+    const left = Math.max(0, Math.min(...points.map((point) => point.x)) - padding);
+    const top = Math.max(0, Math.min(...points.map((point) => point.y)) - padding);
+    const right = Math.min(1, Math.max(...points.map((point) => point.x)) + padding);
+    const bottom = Math.min(1, Math.max(...points.map((point) => point.y)) + padding);
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  })() : undefined;
   const locked = selectedLayer?.locked === true;
+  const meshViewportRect = (): DOMRect | undefined => navigation.stageRef.current?.querySelector<SVGSVGElement>(".editor-overlay")?.getBoundingClientRect()
+    ?? navigation.stageRef.current?.getBoundingClientRect();
+  const normalizedMeshPoint = (clientX: number, clientY: number): Point | undefined => {
+    const rect = meshViewportRect();
+    if (!rect) return undefined;
+    return {
+      x: Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width))),
+      y: Math.max(0, Math.min(1, (clientY - rect.top) / Math.max(1, rect.height)))
+    };
+  };
+  const nearestMeshVertexAt = (clientX: number, clientY: number, maximumPixels = 7): number | undefined => {
+    const rect = meshViewportRect();
+    if (!rect || meshPoints.length === 0) return undefined;
+    let nearest: number | undefined;
+    let nearestDistance = maximumPixels;
+    meshPoints.forEach((point, index) => {
+      const distance = Math.hypot(
+        clientX - (rect.left + point.x * rect.width),
+        clientY - (rect.top + point.y * rect.height)
+      );
+      if (distance >= nearestDistance) return;
+      nearest = index;
+      nearestDistance = distance;
+    });
+    return nearest;
+  };
+  const nearestMeshVertex = (event: React.PointerEvent<SVGElement>, maximumPixels = 7): number | undefined => nearestMeshVertexAt(event.clientX, event.clientY, maximumPixels);
+  const moveOverlayPointer = (event: React.PointerEvent<SVGSVGElement>): void => {
+    onMoveDrag(event);
+    if (mode === "mesh" && !locked && !animateMesh) setHoveredMeshVertex(nearestMeshVertex(event));
+  };
+  const beginViewportPointer = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const viewportControl = event.target instanceof Element && Boolean(event.target.closest(".viewport-navigation"));
+    if (event.button === 0 && event.shiftKey && mode === "mesh" && selectedLayer && !animateMesh && !viewportControl) {
+      const start = normalizedMeshPoint(event.clientX, event.clientY);
+      if (!start) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.focus({ preventScroll: true });
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const gesture = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        start,
+        end: start,
+        moved: false
+      };
+      meshSelectionGesture.current = gesture;
+      setMeshSelectionBox(gesture);
+      return;
+    }
+    navigation.viewportHandlers.onPointerDownCapture(event);
+  };
+  const moveViewportPointer = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const gesture = meshSelectionGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) {
+      navigation.viewportHandlers.onPointerMoveCapture(event);
+      return;
+    }
+    const end = normalizedMeshPoint(event.clientX, event.clientY);
+    if (!end) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = {
+      ...gesture,
+      end,
+      moved: gesture.moved || Math.hypot(event.clientX - gesture.startClientX, event.clientY - gesture.startClientY) >= 4
+    };
+    meshSelectionGesture.current = next;
+    setMeshSelectionBox(next);
+  };
+  const finishViewportPointer = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const gesture = meshSelectionGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) {
+      navigation.viewportHandlers.onPointerUpCapture(event);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const end = normalizedMeshPoint(event.clientX, event.clientY) ?? gesture.end;
+    const moved = gesture.moved || Math.hypot(event.clientX - gesture.startClientX, event.clientY - gesture.startClientY) >= 4;
+    meshSelectionGesture.current = undefined;
+    setMeshSelectionBox(undefined);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (moved) {
+      const left = Math.min(gesture.start.x, end.x);
+      const right = Math.max(gesture.start.x, end.x);
+      const top = Math.min(gesture.start.y, end.y);
+      const bottom = Math.max(gesture.start.y, end.y);
+      const enclosed = meshPoints.flatMap((point, index) => point.x >= left && point.x <= right && point.y >= top && point.y <= bottom ? [index] : []);
+      onSelectMeshVertices(enclosed, "add");
+    } else {
+      const nearest = nearestMeshVertexAt(event.clientX, event.clientY);
+      if (nearest !== undefined) onSelectMeshVertices([nearest], "toggle");
+    }
+  };
+  const cancelViewportPointer = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (meshSelectionGesture.current?.pointerId !== event.pointerId) {
+      navigation.viewportHandlers.onPointerCancelCapture(event);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    meshSelectionGesture.current = undefined;
+    setMeshSelectionBox(undefined);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const loseViewportPointer = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (meshSelectionGesture.current?.pointerId === event.pointerId) {
+      meshSelectionGesture.current = undefined;
+      setMeshSelectionBox(undefined);
+      return;
+    }
+    navigation.viewportHandlers.onLostPointerCapture(event);
+  };
   return (
     <section className="viewport-panel">
       <div
         ref={navigation.viewportRef}
-        className={`editor-viewport ${cleanPreview ? "clean-preview" : ""} ${navigation.panning ? "is-panning" : ""} ${navigation.spacePressed ? "is-space-ready" : ""}`}
+        className={`editor-viewport ${cleanPreview ? "clean-preview" : ""} ${navigation.panning ? "is-panning" : ""} ${navigation.spacePressed ? "is-space-ready" : ""} ${meshSelectionBox ? "is-box-selecting" : ""}`}
         data-testid="editor-viewport"
         tabIndex={0}
         aria-label="角色编辑视图"
         {...navigation.viewportHandlers}
+        onPointerDownCapture={beginViewportPointer}
+        onPointerMoveCapture={moveViewportPointer}
+        onPointerUpCapture={finishViewportPointer}
+        onPointerCancelCapture={cancelViewportPointer}
+        onLostPointerCapture={loseViewportPointer}
       >
         <div
           ref={navigation.stageRef}
@@ -293,7 +449,7 @@ export function EditorViewportPanel({
           }}
         >
           <canvas ref={canvas} className="editor-canvas" />
-          {showOverlay && <svg className="editor-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" onPointerMove={onMoveDrag} onPointerUp={onEndDrag} onPointerCancel={onCancelDrag}>
+          {showOverlay && <svg className="editor-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" onPointerMove={moveOverlayPointer} onPointerLeave={() => setHoveredMeshVertex(undefined)} onPointerUp={onEndDrag} onPointerCancel={onCancelDrag}>
           {mode === "semantic" && cage && <>
             {[...cage.faceTriangles, ...cage.skullTriangles].flatMap((triangle, triangleIndex) => triangle.map((id, index) => {
               const nextId = triangle[(index + 1) % 3]!; const a = cage.points[id].position; const b = cage.points[nextId].position;
@@ -320,16 +476,27 @@ export function EditorViewportPanel({
             {showNeutralMeshReference && <path d={meshEdgePath(neutralMeshPoints, meshTriangles)} className="mesh-line mesh-neutral-reference" />}
             <path d={meshEdgePath(meshPoints, meshTriangles)} className="mesh-line mesh-deformed" />
             {softSelectionEnabled && selectedVertex !== undefined && meshPoints[selectedVertex] && <circle cx={meshPoints[selectedVertex]!.x} cy={meshPoints[selectedVertex]!.y} r={softRadius} className="soft-radius" />}
-            {meshPoints.map((point, index) => <g key={index}>
-              <circle cx={point.x} cy={point.y} r={meshHitRadius} className="handle-hit mesh-handle-hit" tabIndex={locked || animateMesh ? -1 : 0} role="slider" aria-disabled={locked || animateMesh} aria-label={`${selectedLayer.sourceName} 网格顶点 ${index}；按住 Shift 可多选`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={locked || animateMesh ? undefined : (event) => onNudge(event, { kind: "mesh", index })} onPointerDown={locked || animateMesh ? undefined : (event) => onBeginDrag(event, { kind: "mesh", index })} />
-              <circle cx={point.x} cy={point.y} r={selectedSet.has(index) ? selectedVertexRadius : meshVertexRadius} className={`handle handle-visible mesh-handle ${selectedSet.has(index) ? "selected" : ""} ${locked || animateMesh ? "locked" : ""}`} aria-hidden="true" />
+            {meshPoints.map((point, index) => <g key={index} className="mesh-vertex-target">
+              <circle cx={point.x} cy={point.y} r={meshHitRadius} className="handle-hit mesh-handle-hit" tabIndex={locked || animateMesh ? -1 : 0} role="slider" aria-disabled={locked || animateMesh} aria-label={`${selectedLayer.sourceName} 网格顶点 ${index}；按住 Shift 可多选`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={locked || animateMesh ? undefined : (event) => onNudge(event, { kind: "mesh", index })} onPointerDown={locked || animateMesh ? undefined : (event) => {
+                const nearest = nearestMeshVertex(event);
+                if (nearest !== undefined) onBeginDrag(event, { kind: "mesh", index: nearest });
+              }} />
+              <circle cx={point.x} cy={point.y} r={meshVertexRadius} className={`handle handle-visible mesh-handle ${selectedSet.has(index) ? "selected" : ""} ${hoveredMeshVertex === index ? "hovered" : ""} ${locked || animateMesh ? "locked" : ""}`} aria-hidden="true" />
             </g>)}
-            {selectionBounds && !animateMesh && <g className="mesh-transform-gizmo">
-              <rect x={selectionBounds.minX} y={selectionBounds.minY} width={Math.max(0.001, selectionBounds.maxX - selectionBounds.minX)} height={Math.max(0.001, selectionBounds.maxY - selectionBounds.minY)} />
-              <line x1={(selectionBounds.minX + selectionBounds.maxX) / 2} y1={selectionBounds.minY} x2={(selectionBounds.minX + selectionBounds.maxX) / 2} y2={selectionBounds.minY - rotateHandleOffset} />
-              <circle cx={(selectionBounds.minX + selectionBounds.maxX) / 2} cy={selectionBounds.minY - rotateHandleOffset} r={transformHandleRadius} className="mesh-transform-handle rotate" onPointerDown={(event) => onBeginDrag(event, { kind: "mesh-rotate" })}><title>旋转所选顶点</title></circle>
-              <circle cx={selectionBounds.maxX} cy={selectionBounds.maxY} r={transformHandleRadius} className="mesh-transform-handle scale" onPointerDown={(event) => onBeginDrag(event, { kind: "mesh-scale" })}><title>缩放所选顶点</title></circle>
-            </g>}
+            {selectedMeshBounds && !locked && !animateMesh && <rect
+              {...selectedMeshBounds}
+              className="handle-hit mesh-selection-move-area"
+              aria-label={`移动已选择的 ${selectedVertices.length} 个网格顶点`}
+              onPointerDown={(event) => onBeginDrag(event, { kind: "mesh-move" })}
+            />}
+            {meshSelectionBox?.moved && <rect
+              x={Math.min(meshSelectionBox.start.x, meshSelectionBox.end.x)}
+              y={Math.min(meshSelectionBox.start.y, meshSelectionBox.end.y)}
+              width={Math.abs(meshSelectionBox.end.x - meshSelectionBox.start.x)}
+              height={Math.abs(meshSelectionBox.end.y - meshSelectionBox.start.y)}
+              className="mesh-selection-box"
+              aria-hidden="true"
+            />}
           </>}
           </svg>}
         </div>
@@ -340,7 +507,7 @@ export function EditorViewportPanel({
           <button className="fit-view" onClick={navigation.fit} title="适配窗口（0）">适配</button>
         </div>
       </div>
-      <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? "单击并拖动微调一个点；Shift+单击选择少量点后可整体移动、旋转或缩放；Esc 取消当前拖动。空白处仍可移动视图。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
+      <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? selectedVertices.length > 1 ? `已选择 ${selectedVertices.length} 个点；拖动任意一个黄色节点即可整体移动。单击空白取消选择，Shift+拖动框选更多节点，Shift+单击可增减单点。` : "鼠标靠近节点会自动高亮，按下即可直接拖动。单击空白取消选择；按住 Shift 拖动可框选，Shift+单击可增减单点。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
 
       {comparison && <section className="evidence-preview" data-testid="comparison-view">
         <div className="comparison-header"><h3>revision {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => <button key={item} className={comparisonMode === item ? "active" : ""} onClick={() => onComparisonMode(item)}>{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>)}</div></div>

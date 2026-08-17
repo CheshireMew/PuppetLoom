@@ -224,11 +224,37 @@ try {
   const hideLayer = control.getByRole("button", { name: `${face.sourceName} 隐藏` });
   await hideLayer.click();
   await control.getByRole("button", { name: `${face.sourceName} 显示` }).click();
+  if (await control.getByRole("button", { name: "突出当前图层" }).count()) throw new Error("已移除的“突出当前图层”仍出现在工具栏。");
+  const firstLayerIcons = control.locator(".layer-row").first().locator(".layer-icon");
+  if (await firstLayerIcons.count() !== 3 || await firstLayerIcons.locator("svg").count() !== 3) throw new Error("图层行没有显示完整的可见、锁定和单层查看图标。");
+  if ((await firstLayerIcons.allInnerTexts()).some((text) => /[显隐编锁]/.test(text))) throw new Error("图层操作仍在使用文字假装图标。");
+  await control.getByText("草稿已保存", { exact: true }).waitFor({ timeout: 10_000 });
+  await control.waitForTimeout(350);
+  const workspaceBeforeSolo = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
+  const canvasBeforeSolo = await control.locator(".editor-canvas").screenshot();
+  const soloLayerButton = control.getByRole("button", { name: `${face.sourceName} 仅显示此图层` });
+  await soloLayerButton.click();
+  const restoreAllLayersButton = control.getByRole("button", { name: `${face.sourceName} 恢复显示全部图层` });
+  await restoreAllLayersButton.waitFor();
+  if (await restoreAllLayersButton.getAttribute("aria-pressed") !== "true") throw new Error("单层查看按钮没有显示激活状态。");
+  await control.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()))));
+  const canvasDuringSolo = await control.locator(".editor-canvas").screenshot();
+  if (canvasBeforeSolo.equals(canvasDuringSolo)) throw new Error("单层查看没有改变实际渲染内容。");
+  await restoreAllLayersButton.click();
+  await soloLayerButton.waitFor();
+  await control.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()))));
+  const canvasAfterSolo = await control.locator(".editor-canvas").screenshot();
+  if (!canvasBeforeSolo.equals(canvasAfterSolo)) throw new Error("退出单层查看后没有准确恢复原画面。");
+  await control.waitForTimeout(350);
+  const workspaceAfterSolo = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
+  if (JSON.stringify(workspaceAfterSolo.draft) !== JSON.stringify(workspaceBeforeSolo.draft)) throw new Error("单层查看被错误写入了项目草稿。");
 
   await control.getByRole("button", { name: "网格与权重" }).click();
   await control.locator(".mesh-handle-hit").first().waitFor();
   const handles = control.locator(".mesh-handle-hit");
   const visibleHandles = control.locator(".mesh-handle");
+  const meshCursor = await handles.first().evaluate((element) => getComputedStyle(element).cursor);
+  if (meshCursor !== "default") throw new Error(`靠近网格节点时仍然不是小箭头指针：${meshCursor}`);
   const initialHandleSize = await visibleHandles.first().boundingBox();
   const meshStage = await editorStage.boundingBox();
   if (!initialHandleSize || !meshStage) throw new Error("无法测量网格节点的屏幕尺寸。");
@@ -236,9 +262,40 @@ try {
     strokeWidth: getComputedStyle(element).strokeWidth,
     vectorEffect: getComputedStyle(element).vectorEffect
   }));
-  if (meshLineStyle.strokeWidth !== "0.45px" || meshLineStyle.vectorEffect !== "non-scaling-stroke") {
+  if (meshLineStyle.strokeWidth !== "0.3px" || meshLineStyle.vectorEffect !== "non-scaling-stroke") {
     throw new Error(`网格线没有使用细线与恒定屏幕宽度：${JSON.stringify(meshLineStyle)}`);
   }
+  const overlayPointerEvents = await control.locator(".editor-overlay").evaluate((element) => getComputedStyle(element).pointerEvents);
+  if (overlayPointerEvents !== "none") throw new Error(`网格覆盖层仍在拦截画布事件：${overlayPointerEvents}`);
+  const meshPanStart = await control.evaluate(() => {
+    const stage = document.querySelector("[data-testid='editor-stage']");
+    if (!(stage instanceof HTMLElement)) return undefined;
+    const rect = stage.getBoundingClientRect();
+    for (let y = rect.top + 8; y < rect.bottom - 8; y += 8) {
+      for (let x = rect.left + 8; x < rect.right - 8; x += 8) {
+        const point = { x, y };
+        const target = document.elementFromPoint(point.x, point.y);
+        if (!(target instanceof Element) || target.closest(".viewport-navigation")) continue;
+        const meshHit = target.closest(".mesh-handle-hit");
+        if (!meshHit) return point;
+        const visiblePoint = meshHit.nextElementSibling;
+        if (!(visiblePoint instanceof SVGGraphicsElement)) continue;
+        const pointRect = visiblePoint.getBoundingClientRect();
+        if (Math.hypot(x - (pointRect.left + pointRect.width / 2), y - (pointRect.top + pointRect.height / 2)) > 5.25) return point;
+      }
+    }
+    return undefined;
+  });
+  if (!meshPanStart) throw new Error("网格显示时没有可用于平移画布的空白区域。");
+  const meshStageBeforePan = await editorStage.boundingBox();
+  if (!meshStageBeforePan) throw new Error("网格显示时画布不可见。");
+  await control.mouse.move(meshPanStart.x, meshPanStart.y);
+  await control.mouse.down();
+  await control.mouse.move(meshPanStart.x + 48, meshPanStart.y + 30, { steps: 4 });
+  await control.mouse.up();
+  await control.waitForFunction((x) => (document.querySelector("[data-testid='editor-stage']")?.getBoundingClientRect().x ?? x) > x + 36, meshStageBeforePan.x);
+  await control.getByRole("button", { name: "适配" }).click();
+  await control.waitForTimeout(120);
   await control.mouse.move(meshStage.x + meshStage.width * 0.5, meshStage.y + meshStage.height * 0.5);
   await control.mouse.wheel(0, -480);
   await control.waitForFunction(() => document.querySelector(".viewport-navigation output")?.textContent !== "100%");
@@ -249,6 +306,17 @@ try {
     throw new Error(`缩放后网格节点变粗：${JSON.stringify({ initialHandleSize, zoomedHandleSize })}`);
   }
   await control.getByRole("button", { name: "适配" }).click();
+  await control.waitForTimeout(180);
+  const directDragIndex = Math.min(await handles.count() - 1, Math.floor(await handles.count() / 2) + 1);
+  const directDragBefore = await handles.nth(directDragIndex).getAttribute("aria-valuetext");
+  const directDragTarget = await visibleHandles.nth(directDragIndex).boundingBox();
+  if (!directDragTarget || !directDragBefore) throw new Error("无法验证未选中节点的直接拖动。" );
+  await control.mouse.move(directDragTarget.x + directDragTarget.width / 2, directDragTarget.y + directDragTarget.height / 2);
+  await control.mouse.down();
+  await control.mouse.move(directDragTarget.x + directDragTarget.width / 2 + 4, directDragTarget.y + directDragTarget.height / 2 - 2, { steps: 3 });
+  await control.mouse.up();
+  const directDragAfter = await handles.nth(directDragIndex).getAttribute("aria-valuetext");
+  if (directDragAfter === directDragBefore) throw new Error("未选中的网格节点不能在第一次按下时直接拖动。" );
   const vertexIndex = Math.floor(await handles.count() / 2);
   let vertex = await handles.nth(vertexIndex).boundingBox();
   if (!vertex) throw new Error("编辑器没有可拖动的网格顶点。" );
@@ -263,6 +331,108 @@ try {
   await control.waitForFunction((before) => document.querySelector(".vertex-inspector p")?.textContent === before, beforeKeyboardNudge);
   await control.keyboard.press("Control+y");
   await control.waitForFunction((after) => document.querySelector(".vertex-inspector p")?.textContent === after, afterKeyboardNudge);
+  const multiIndex = Math.min(await handles.count() - 1, vertexIndex + 3);
+  const multiTarget = await visibleHandles.nth(multiIndex).boundingBox();
+  if (!multiTarget) throw new Error("无法验证 Shift 多选。" );
+  await control.keyboard.down("Shift");
+  await control.mouse.click(multiTarget.x + multiTarget.width / 2, multiTarget.y + multiTarget.height / 2);
+  await control.keyboard.up("Shift");
+  if (await control.locator(".mesh-handle.selected").count() !== 2) throw new Error("Shift+单击没有保留原节点并加入第二个节点。" );
+  const selectedVisuals = await control.locator(".mesh-handle.selected").evaluateAll((elements) => elements.map((element) => ({
+    fill: getComputedStyle(element).fill,
+    strokeWidth: getComputedStyle(element).strokeWidth
+  })));
+  if (selectedVisuals.some((style) => style.fill !== "rgb(255, 200, 87)" || Number.parseFloat(style.strokeWidth) > 1)) {
+    throw new Error(`多选节点没有使用清晰且等大的黄色选中态：${JSON.stringify(selectedVisuals)}`);
+  }
+  const focusedPointStroke = await control.evaluate(() => {
+    const active = document.activeElement;
+    const visible = active instanceof SVGElement ? active.nextElementSibling : undefined;
+    return visible instanceof SVGElement ? getComputedStyle(visible).strokeWidth : undefined;
+  });
+  if (focusedPointStroke && Number.parseFloat(focusedPointStroke) > 1) throw new Error(`焦点样式把网格节点异常放大：${focusedPointStroke}`);
+  await control.getByText("已选择 2 个点；拖动任意一个黄色节点即可整体移动。单击空白取消选择，Shift+拖动框选更多节点，Shift+单击可增减单点。", { exact: true }).waitFor();
+  const primaryBeforeGroupDrag = await handles.nth(vertexIndex).getAttribute("aria-valuetext");
+  const secondaryBeforeGroupDrag = await handles.nth(multiIndex).getAttribute("aria-valuetext");
+  vertex = await visibleHandles.nth(vertexIndex).boundingBox();
+  if (!vertex) throw new Error("多选后主节点消失。" );
+  await control.mouse.move(vertex.x + vertex.width / 2, vertex.y + vertex.height / 2);
+  await control.mouse.down();
+  await control.mouse.move(vertex.x + vertex.width / 2 + 3, vertex.y + vertex.height / 2 - 2, { steps: 3 });
+  await control.mouse.up();
+  if (await handles.nth(vertexIndex).getAttribute("aria-valuetext") === primaryBeforeGroupDrag
+    || await handles.nth(multiIndex).getAttribute("aria-valuetext") === secondaryBeforeGroupDrag) {
+    throw new Error("拖动多选节点时没有让两个选中点一起移动。" );
+  }
+  const blankSelectionPoint = await control.evaluate(() => {
+    const stage = document.querySelector("[data-testid='editor-stage']");
+    if (!(stage instanceof HTMLElement)) return undefined;
+    const rect = stage.getBoundingClientRect();
+    const centers = [...document.querySelectorAll(".mesh-handle")].map((element) => {
+      const point = element.getBoundingClientRect();
+      return { x: point.left + point.width / 2, y: point.top + point.height / 2 };
+    });
+    for (let y = rect.top + 8; y < rect.bottom - 8; y += 8) {
+      for (let x = rect.left + 8; x < rect.right - 8; x += 8) {
+        if (document.elementFromPoint(x, y)?.closest(".mesh-selection-move-area")) continue;
+        if (centers.every((point) => Math.hypot(x - point.x, y - point.y) > 5.25)) return { x, y };
+      }
+    }
+    return undefined;
+  });
+  if (!blankSelectionPoint) throw new Error("找不到可验证取消选择的网格空白位置。");
+  const blankSelectionEvidence = await control.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    return { tag: target?.tagName, className: target?.getAttribute("class") };
+  }, blankSelectionPoint);
+  await control.mouse.click(blankSelectionPoint.x, blankSelectionPoint.y);
+  await control.waitForTimeout(180);
+  if (await control.locator(".mesh-handle.selected").count() !== 0) throw new Error(`点击多选区域外的空白没有取消选择：${JSON.stringify({ blankSelectionPoint, blankSelectionEvidence })}`);
+  const boxSelection = await visibleHandles.evaluateAll((elements, indices) => {
+    const points = indices.map((index) => elements[index]).filter(Boolean).map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+    if (points.length < 2) return undefined;
+    return {
+      start: { x: Math.min(...points.map((point) => point.x)) - 5, y: Math.min(...points.map((point) => point.y)) - 5 },
+      end: { x: Math.max(...points.map((point) => point.x)) + 5, y: Math.max(...points.map((point) => point.y)) + 5 }
+    };
+  }, [vertexIndex, multiIndex]);
+  if (!boxSelection) throw new Error("网格顶点不足，无法验证 Shift 框选。");
+  await control.keyboard.down("Shift");
+  await control.mouse.move(boxSelection.start.x, boxSelection.start.y);
+  await control.mouse.down();
+  await control.mouse.move(boxSelection.end.x, boxSelection.end.y, { steps: 4 });
+  await control.locator(".mesh-selection-box").waitFor();
+  await control.mouse.up();
+  await control.keyboard.up("Shift");
+  if (await control.locator(".mesh-selection-box").count() !== 0) throw new Error("Shift 框选松开后选择矩形没有消失。");
+  if (await control.locator(".mesh-handle.selected").count() < 2) throw new Error("Shift 拖动框选没有选中框内的多个节点。");
+  const selectedBoxIndices = await visibleHandles.evaluateAll((elements) => elements.flatMap((element, index) => element.classList.contains("selected") ? [index] : []));
+  const selectedBoxBefore = await Promise.all(selectedBoxIndices.map((index) => handles.nth(index).getAttribute("aria-valuetext")));
+  const selectedMoveArea = await control.locator(".mesh-selection-move-area").boundingBox();
+  const stageBeforeSelectionAreaDrag = await editorStage.boundingBox();
+  if (!selectedMoveArea || !stageBeforeSelectionAreaDrag) throw new Error("多选后没有形成整体移动区域。");
+  const selectionAreaCenter = {
+    x: selectedMoveArea.x + selectedMoveArea.width / 2,
+    y: selectedMoveArea.y + selectedMoveArea.height / 2
+  };
+  await control.mouse.move(selectionAreaCenter.x, selectionAreaCenter.y);
+  await control.mouse.down();
+  await control.mouse.move(selectionAreaCenter.x + 4, selectionAreaCenter.y - 3, { steps: 3 });
+  await control.mouse.up();
+  const selectedBoxAfter = await Promise.all(selectedBoxIndices.map((index) => handles.nth(index).getAttribute("aria-valuetext")));
+  if (!selectedBoxAfter.some((value, index) => value !== selectedBoxBefore[index])) throw new Error("在多选区域内部拖动没有移动选中的节点。");
+  const stageAfterSelectionAreaDrag = await editorStage.boundingBox();
+  if (!stageAfterSelectionAreaDrag || Math.hypot(stageAfterSelectionAreaDrag.x - stageBeforeSelectionAreaDrag.x, stageAfterSelectionAreaDrag.y - stageBeforeSelectionAreaDrag.y) > 1) {
+    throw new Error("在多选区域内部拖动时错误地移动了画布。");
+  }
+  await control.mouse.click(blankSelectionPoint.x, blankSelectionPoint.y);
+  await control.waitForFunction(() => document.querySelectorAll(".mesh-handle.selected").length === 0);
+  vertex = await visibleHandles.nth(vertexIndex).boundingBox();
+  if (!vertex) throw new Error("取消框选后网格顶点消失。");
+  await control.mouse.click(vertex.x + vertex.width / 2, vertex.y + vertex.height / 2);
   await control.getByRole("checkbox", { name: "带动相邻顶点（软选择）" }).check();
   const softRadius = control.getByLabel(/影响半径/);
   await softRadius.waitFor();
