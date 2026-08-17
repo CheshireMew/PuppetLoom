@@ -6,7 +6,7 @@ import type {
   RevisionComparisonResult,
   SecondaryMotionPart
 } from "@puppetloom/core";
-import { applyCalibrationOverrides, applySafetyLimits, mergeCalibrationOverrides, neutralMotionState } from "@puppetloom/core/browser";
+import { applyCalibrationOverrides, applySafetyLimits, mergeCalibrationOverrides, meshGeodesicDistances, neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import type { DesktopCalibrationResponse, EditorWorkspace as EditorWorkspaceData } from "../electron/global.js";
 import {
@@ -18,6 +18,19 @@ import {
   type DragTarget,
   type EditMode
 } from "./editor/EditorPresentation.js";
+import {
+  DynamicsInspector,
+  DynamicsLeftPanel,
+  OverviewInspector,
+  OverviewLeftPanel,
+  ParameterInspector,
+  ParameterLeftPanel,
+  PreviewInspector,
+  PreviewLeftPanel,
+  StudioNavigation,
+  type PreviewBackground,
+  type StudioSection
+} from "./editor/EditorStudioPanels.js";
 import { useEditorDraftPersistence } from "./editor/useEditorDraftPersistence.js";
 
 interface MeshDragSnapshot {
@@ -26,8 +39,8 @@ interface MeshDragSnapshot {
   points: Array<{ x: number; y: number }>;
   basePoints: Array<{ x: number; y: number }>;
   pins: number[];
+  distances: number[];
 }
-
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -78,11 +91,21 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [redoStack, setRedoStack] = useState<CalibrationOverrides[]>([]);
   const [selectedLayerId, setSelectedLayerId] = useState("");
   const [selectedVertex, setSelectedVertex] = useState<number>();
+  const [section, setSection] = useState<StudioSection>("overview");
   const [mode, setMode] = useState<EditMode>("semantic");
   const [poseId, setPoseId] = useState("neutral");
   const [autonomous, setAutonomous] = useState(false);
+  const [previewState, setPreviewState] = useState<MotionState>(() => clone(neutralMotionState));
+  const [selectedParameterId, setSelectedParameterId] = useState("param-head-yaw");
+  const [selectedBehaviorId, setSelectedBehaviorId] = useState("");
+  const [behaviorTime, setBehaviorTime] = useState(0);
+  const [behaviorPlaying, setBehaviorPlaying] = useState(false);
+  const [previewBackground, setPreviewBackground] = useState<PreviewBackground>("checker");
+  const [focusedPreview, setFocusedPreview] = useState(false);
+  const [activePreviewSample, setActivePreviewSample] = useState("neutral");
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [meshUpgrading, setMeshUpgrading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [draftStatus, setDraftStatus] = useState<"idle" | "waiting" | "saving" | "saved" | "error">("idle");
@@ -107,6 +130,12 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     setSelectedLayerId((current) => current && loaded.project.layers.some((layer) => layer.id === current)
       ? current
       : loaded.project.layers.find((layer) => layer.role === "face")?.id ?? loaded.project.layers.at(-1)?.id ?? "");
+    setSelectedParameterId((current) => loaded.project.model.parameters.some((parameter) => parameter.id === current)
+      ? current
+      : loaded.project.model.parameters[0]?.id ?? "");
+    setSelectedBehaviorId((current) => loaded.project.model.behaviors.some((behavior) => behavior.id === current)
+      ? current
+      : loaded.project.model.behaviors[0]?.id ?? "");
     if (restoreDraft && loaded.draft) {
       pendingRef.current = loaded.draft.overrides;
       setPending(loaded.draft.overrides);
@@ -139,7 +168,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       renderer.current = created;
       created.start();
       created.setPaused(true);
-      created.render(editorPoses[poseId]!.state);
+      created.render(previewState);
     }).catch((cause) => setError(messageOf(cause)));
     return () => {
       disposed = true;
@@ -153,11 +182,34 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     try {
       renderer.current.updateProject(project);
       renderer.current.setPaused(!autonomous);
-      if (!autonomous) renderer.current.render(editorPoses[poseId]!.state);
+      if (!autonomous) renderer.current.render(previewState);
     } catch (cause) {
       setError(messageOf(cause));
     }
-  }, [project, poseId, autonomous]);
+  }, [project, previewState, autonomous]);
+
+  useEffect(() => {
+    if (!behaviorPlaying || !project) return;
+    const behavior = project.model.behaviors.find((candidate) => candidate.id === selectedBehaviorId);
+    if (!behavior) return;
+    let frame = 0;
+    let previous = performance.now();
+    const tick = (now: number) => {
+      const elapsed = Math.max(0, now - previous) / 1000;
+      previous = now;
+      setBehaviorTime((current) => behavior.loop ? (current + elapsed) % behavior.duration : Math.min(behavior.duration, current + elapsed));
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [behaviorPlaying, project, selectedBehaviorId]);
+
+  useEffect(() => {
+    setPreviewState((current) => ({
+      ...current,
+      ...(selectedBehaviorId ? { behavior: { id: selectedBehaviorId, timeSeconds: behaviorTime } } : { behavior: undefined })
+    }));
+  }, [selectedBehaviorId, behaviorTime]);
 
   useEffect(() => () => {
     for (const url of comparison ? [comparison.before, comparison.after, comparison.difference] : []) URL.revokeObjectURL(url);
@@ -215,7 +267,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         selectedPoint: clone(selectedPoint),
         points: clone(selectedLayer.mesh.points),
         basePoints: clone(baseline.mesh.points),
-        pins: clone(selectedLayer.mesh.influences?.pin ?? Array(selectedLayer.mesh.points.length).fill(0))
+        pins: clone(selectedLayer.mesh.influences?.pin ?? Array(selectedLayer.mesh.points.length).fill(0)),
+        distances: meshGeodesicDistances(selectedLayer.mesh.points, selectedLayer.mesh.triangles, target.index)
       };
       setSelectedVertex(target.index);
     }
@@ -254,7 +307,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         for (let index = 0; index < active.mesh.points.length; index += 1) {
           const start = active.mesh.points[index]!;
           const base = active.mesh.basePoints[index]!;
-          const distance = Math.hypot(start.x - active.mesh.selectedPoint.x, start.y - active.mesh.selectedPoint.y);
+          const distance = active.mesh.distances[index] ?? Number.POSITIVE_INFINITY;
           if (index !== active.mesh.selected && distance > softRadius) continue;
           const falloff = index === active.mesh.selected ? 1 : (1 - smoothstep(distance / Math.max(0.001, softRadius))) ** 2;
           const movable = falloff * (1 - (active.mesh.pins[index] ?? 0));
@@ -326,6 +379,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   function setLayerProperty(patch: NonNullable<CalibrationOverrides["layers"]>[string]): void {
     if (!selectedLayer) return;
+    if (patch.meshDensity || patch.meshDetail !== undefined) setSelectedVertex(undefined);
     patchLayer(selectedLayer.id, patch);
   }
 
@@ -341,6 +395,127 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   function setVertexInfluence(channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin", value: number): void {
     if (!selectedLayer || selectedVertex === undefined) return;
     setLayerProperty({ vertexInfluences: { [channel]: { [selectedVertex]: value } } });
+  }
+
+  function setPreviewParameter(parameterId: string, value: number): void {
+    setAutonomous(false);
+    setPreviewState((current) => ({ ...current, parameters: { ...(current.parameters ?? {}), [parameterId]: value } }));
+  }
+
+  function setPreviewField(key: keyof MotionState, value: number): void {
+    setAutonomous(false);
+    setPreviewState((current) => ({ ...current, [key]: value }));
+  }
+
+  function setPreviewExpression(expressionId: string, value: number): void {
+    setAutonomous(false);
+    setPreviewState((current) => ({ ...current, expressions: { ...(current.expressions ?? {}), [expressionId]: value } }));
+  }
+
+  function setPreviewPose(yaw: number, pitch: number): void {
+    setAutonomous(false);
+    setPoseId(Object.entries(editorPoses).find(([, item]) => Math.abs(item.state.headYaw - yaw) < 0.02 && Math.abs(item.state.headPitch - pitch) < 0.02)?.[0] ?? "custom");
+    setActivePreviewSample("custom");
+    setPreviewState((current) => {
+      const parameters = { ...(current.parameters ?? {}) };
+      const yawParameter = project?.model.parameters.find((parameter) => parameter.semantic === "head-yaw");
+      const pitchParameter = project?.model.parameters.find((parameter) => parameter.semantic === "head-pitch");
+      if (yawParameter) parameters[yawParameter.id] = yaw;
+      if (pitchParameter) parameters[pitchParameter.id] = pitch;
+      return {
+        ...current,
+        headYaw: yaw,
+        headPitch: pitch,
+        bodySway: yaw * 0.5,
+        bodyPitch: pitch * 0.38,
+        gazeX: yaw * 0.45,
+        gazeY: pitch * 0.3,
+        parameters
+      };
+    });
+  }
+
+  function selectPose(id: string): void {
+    const selected = editorPoses[id];
+    if (!selected) return;
+    setPoseId(id);
+    setActivePreviewSample(id);
+    setAutonomous(false);
+    setPreviewState(clone(selected.state));
+  }
+
+  function selectPreviewSample(id: string, state: Partial<MotionState>): void {
+    setActivePreviewSample(id);
+    setPoseId(id in editorPoses ? id : "custom");
+    setAutonomous(false);
+    setBehaviorPlaying(false);
+    setPreviewState({ ...clone(neutralMotionState), ...state });
+  }
+
+  function patchPhysics(physicsId: string, patch: Partial<{ inputScale: number; outputScale: number; response: number; damping: number }>): void {
+    if (!project) return;
+    const model = clone(project.model);
+    const index = model.physics.findIndex((physics) => physics.id === physicsId);
+    if (index < 0) return;
+    model.physics[index] = { ...model.physics[index]!, ...patch };
+    commit(mergeCalibrationOverrides(pending, { model }));
+  }
+
+  function createStarterDynamics(): void {
+    if (!project) return;
+    const model = clone(project.model);
+    const bySemantic = new Map(model.parameters.flatMap((parameter) => parameter.semantic ? [[parameter.semantic, parameter.id]] : []));
+    const blink = bySemantic.get("blink");
+    const mouth = bySemantic.get("mouth-open");
+    const pitch = bySemantic.get("head-pitch");
+    const yaw = bySemantic.get("head-yaw");
+    const breath = bySemantic.get("breath");
+    if (model.expressions.length === 0) {
+      if (blink) model.expressions.push({ id: "expression-closed-eyes", name: "闭眼", parameters: { [blink]: 1 } });
+      if (mouth) model.expressions.push({ id: "expression-speaking", name: "开口", parameters: { [mouth]: 1 } });
+      const surprised = Object.fromEntries([[pitch, -0.2], [blink, 0], [mouth, 0.82]].filter((entry): entry is [string, number] => Boolean(entry[0])));
+      if (Object.keys(surprised).length > 0) model.expressions.push({ id: "expression-surprised", name: "惊讶", parameters: surprised });
+    }
+    if (model.behaviors.length === 0) {
+      const idleTracks = [
+        yaw ? { target: { kind: "parameter" as const, id: yaw }, keyframes: [{ time: 0, value: 0 }, { time: 1.5, value: 0.14 }, { time: 3, value: 0 }, { time: 4.5, value: -0.12 }, { time: 6, value: 0 }] } : undefined,
+        pitch ? { target: { kind: "parameter" as const, id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 2, value: -0.06 }, { time: 4, value: 0.05 }, { time: 6, value: 0 }] } : undefined,
+        breath ? { target: { kind: "parameter" as const, id: breath }, keyframes: [{ time: 0, value: -0.7 }, { time: 3, value: 0.7 }, { time: 6, value: -0.7 }] } : undefined,
+        blink ? { target: { kind: "parameter" as const, id: blink }, keyframes: [{ time: 0, value: 0 }, { time: 1.8, value: 0 }, { time: 1.92, value: 1, easing: "smoothstep" as const }, { time: 2.04, value: 0, easing: "smoothstep" as const }, { time: 6, value: 0 }] } : undefined
+      ].filter((track): track is NonNullable<typeof track> => Boolean(track));
+      if (idleTracks.length > 0) model.behaviors.push({ id: "behavior-idle", name: "自然待机", duration: 6, loop: true, autoplay: true, tracks: idleTracks });
+      if (pitch) model.behaviors.push({
+        id: "behavior-nod", name: "点头", duration: 1.6, loop: false,
+        tracks: [{ target: { kind: "parameter", id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 0.48, value: 0.62 }, { time: 0.92, value: -0.16 }, { time: 1.6, value: 0 }] }]
+      });
+    }
+    commit(mergeCalibrationOverrides(pending, { model }));
+    setSelectedBehaviorId(model.behaviors[0]?.id ?? "");
+    setBehaviorTime(0);
+    setNotice("已生成基础表情和行为预览；确认效果后保存更改。" );
+  }
+
+  async function upgradeLegacyMeshes(): Promise<void> {
+    setMeshUpgrading(true);
+    setError("");
+    try {
+      const replacements = await window.puppetloom.generateArtMeshes(projectDirectory);
+      const entries = Object.entries(replacements);
+      if (entries.length === 0) {
+        setNotice("没有可升级的非矩形图层；完全不透明的矩形素材会继续使用规则网格。" );
+        return;
+      }
+      const layers = Object.fromEntries(entries.map(([layerId, mesh]) => [layerId, { mesh }]));
+      commit(mergeCalibrationOverrides(pending, { layers }));
+      setSelectedVertex(undefined);
+      setMode("mesh");
+      setSection("rig");
+      setNotice(`已为 ${entries.length} 个图层生成 Alpha ArtMesh，结果已进入草稿。`);
+    } catch (cause) {
+      setError(`旧网格升级失败：${messageOf(cause)}`);
+    } finally {
+      setMeshUpgrading(false);
+    }
   }
 
   function moveSelectedLayer(direction: -1 | 1): void {
@@ -451,40 +626,41 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const selectedTuning = { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[secondaryPart] ?? {}) };
 
   return (
-    <main className="editor-shell" data-testid="editor">
+    <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
+      {focusedPreview && <button className="exit-focus-preview" onClick={() => setFocusedPreview(false)}>退出沉浸预览</button>}
       <header className="editor-header">
         <button onClick={() => void leaveEditor()}>返回主页</button>
         <div><h1>{project.name}</h1><p>revision {workspace.calibration.revision} · {project.rigLevel} · {project.layers.length} 层 · 安全系数 {project.quality.safetyScale.toFixed(2)}</p></div>
         <div className="editor-history-actions">
           <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
-          <button onClick={() => void launchViewer()}>运行角色窗口</button>
           <button disabled={undoStack.length === 0} onClick={undo}>撤销</button>
           <button disabled={redoStack.length === 0} onClick={redo}>重做</button>
           <button onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={busy}>恢复全部自动绑定</button>
+          <button className="header-save" disabled={!hasPending || busy} onClick={() => void save()}>{busy ? "正在验证…" : "保存更改"}</button>
+          <button onClick={() => void launchViewer()}>运行角色窗口</button>
         </div>
       </header>
 
+      <StudioNavigation section={section} onSection={(next) => { setSection(next); if (next !== "preview") setFocusedPreview(false); }} />
+
       <section className="editor-toolbar">
-        <div className="mode-tabs">
-          {(["semantic", "anchors", "layer", "mesh"] as EditMode[]).map((item) => <button className={mode === item ? "active" : ""} key={item} onClick={() => setMode(item)}>{item === "semantic" ? "脸部控制点" : item === "anchors" ? "身体锚点" : item === "layer" ? "图层轴心" : "网格与权重"}</button>)}
-        </div>
-        <div className="pose-tabs">
-          {Object.entries(editorPoses).map(([id, item]) => <button className={!autonomous && poseId === id ? "active" : ""} key={id} onClick={() => { setAutonomous(false); setPoseId(id); }}>{item.label}</button>)}
-          <button className={autonomous ? "active" : ""} onClick={() => setAutonomous((value) => !value)}>自主预览</button>
-        </div>
+        {section === "rig" ? <><div className="mode-tabs">{(["semantic", "anchors", "layer", "mesh"] as EditMode[]).map((item) => <button className={mode === item ? "active" : ""} key={item} onClick={() => setMode(item)}>{item === "semantic" ? "脸部控制点" : item === "anchors" ? "身体锚点" : item === "layer" ? "图层轴心" : "网格与权重"}</button>)}</div><div className="pose-tabs">{Object.entries(editorPoses).map(([id, item]) => <button className={!autonomous && poseId === id ? "active" : ""} key={id} onClick={() => selectPose(id)}>{item.label}</button>)}<button className={autonomous ? "active" : ""} onClick={() => setAutonomous((value) => !value)}>{autonomous ? "暂停动作" : "自主预览"}</button></div></>
+          : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查中立、左右、上下、闭眼和张嘴。"}</small></div><div className="pose-tabs"><button onClick={() => selectPose("neutral")}>恢复中立</button><button className={autonomous ? "active" : ""} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
       </section>
 
-      <section className="editor-workspace">
-        <EditorLayerPanel
+      <section className={`editor-workspace preview-background-${previewBackground}`}>
+        {section === "overview" ? <OverviewLeftPanel project={project} onSection={setSection} upgradingMeshes={meshUpgrading} onUpgradeMeshes={() => void upgradeLegacyMeshes()} /> : section === "rig" ? <EditorLayerPanel
           project={project}
           selectedLayerId={selectedLayerId}
           onSelect={(layerId) => { setSelectedLayerId(layerId); setSelectedVertex(undefined); }}
           onPatchLayer={patchLayer}
-        />
+        /> : section === "parameters" ? <ParameterLeftPanel project={project} selectedId={selectedParameterId} onSelect={setSelectedParameterId} /> : section === "dynamics" ? <DynamicsLeftPanel project={project} selectedBehaviorId={selectedBehaviorId} onBehavior={(id) => { setSelectedBehaviorId(id); setBehaviorTime(0); setBehaviorPlaying(false); setAutonomous(false); }} onCreateStarter={createStarterDynamics} /> : <PreviewLeftPanel activeSample={activePreviewSample} onSample={selectPreviewSample} />}
         <EditorViewportPanel
           canvas={canvas}
           project={project}
           mode={mode}
+          showOverlay={section === "rig"}
+          cleanPreview={section !== "rig"}
           selectedLayer={selectedLayer}
           selectedVertex={selectedVertex}
           softRadius={softRadius}
@@ -499,7 +675,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onComparisonMode={setComparisonMode}
           onSplitPercent={setSplitPercent}
         />
-        <EditorInspectorPanel
+        {section === "overview" ? <OverviewInspector project={project} revision={workspace.calibration.revision} sessionCount={sessions.length} /> : section === "rig" ? <EditorInspectorPanel
           project={project}
           selectedLayer={selectedLayer}
           selectedVertex={selectedVertex}
@@ -527,7 +703,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onShowEvidence={(sessionId) => void showSessionEvidence(sessionId)}
           onRestore={(revision, restoreLabel) => void restoreRevision(revision, restoreLabel)}
           onMarkEvidence={(sessionId, status) => void markEvidence(sessionId, status)}
-        />
+        /> : section === "parameters" ? <ParameterInspector project={project} state={previewState} selectedId={selectedParameterId} onParameter={setPreviewParameter} onState={setPreviewField} onPose={setPreviewPose} onExpression={setPreviewExpression} /> : section === "dynamics" ? <DynamicsInspector project={project} state={previewState} selectedBehaviorId={selectedBehaviorId} behaviorTime={behaviorTime} behaviorPlaying={behaviorPlaying} secondaryPart={secondaryPart} secondaryTuning={selectedTuning} onExpression={setPreviewExpression} onBehaviorTime={(value) => { setBehaviorTime(value); setAutonomous(false); }} onBehaviorPlaying={(value) => { setBehaviorPlaying(value); setAutonomous(false); }} onSecondaryPart={setSecondaryPart} onSecondaryTuning={setSecondaryTuning} onPhysics={patchPhysics} /> : <PreviewInspector project={project} background={previewBackground} focused={focusedPreview} autonomous={autonomous} onBackground={setPreviewBackground} onFocused={setFocusedPreview} onAutonomous={(value) => { setBehaviorPlaying(false); setAutonomous(value); }} onLaunch={() => void launchViewer()} />}
       </section>
     </main>
   );

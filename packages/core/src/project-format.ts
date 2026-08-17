@@ -6,10 +6,17 @@ import { PUPPETLOOM_PROJECT_VERSION, type PuppetLoomProject } from "./types.js";
 export function parsePuppetLoomProject(value: unknown): PuppetLoomProject {
   const parsed = puppetLoomProjectSchema.parse(value);
   if (parsed.version === PUPPETLOOM_PROJECT_VERSION && parsed.model) return parsed as PuppetLoomProject;
-  const { model: _legacyModel, ...legacy } = parsed;
+  const layers = parsed.layers.map((layer) => ({
+    ...layer,
+    mesh: {
+      ...layer.mesh,
+      topology: layer.mesh.topology ?? "grid"
+    }
+  }));
   return {
-    ...legacy,
+    ...parsed,
     version: PUPPETLOOM_PROJECT_VERSION,
-    model: createDefaultAuthoringModel()
+    layers,
+    model: parsed.model ?? createDefaultAuthoringModel()
   } as PuppetLoomProject;
 }

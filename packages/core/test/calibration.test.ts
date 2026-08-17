@@ -37,7 +37,7 @@ describe("project calibration", () => {
     const calibration = await loadCalibration(output);
     const description = await describeProject(output);
     expect(calibration).toMatchObject({ version: 2, revision: 0, overrides: {} });
-    expect(description).toMatchObject({ version: 3, calibrationRevision: 0, rigLevel: "semantic" });
+    expect(description).toMatchObject({ version: 4, calibrationRevision: 0, rigLevel: "semantic" });
     expect(description.model.parameters.some((parameter) => parameter.semantic === "head-yaw")).toBe(true);
     expect(description.layers.some((layer) => layer.mesh.pointCount > 0)).toBe(true);
     expect(description.layers.every((layer) => Number.isInteger(layer.order) && layer.visible && !layer.locked)).toBe(true);

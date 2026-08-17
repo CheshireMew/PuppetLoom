@@ -1,4 +1,4 @@
-export const PUPPETLOOM_PROJECT_VERSION = 3 as const;
+export const PUPPETLOOM_PROJECT_VERSION = 4 as const;
 
 export type RigLevel = "semantic" | "grouped" | "minimal";
 export type Side = "left" | "right" | "center";
@@ -46,9 +46,27 @@ export interface Size {
   height: number;
 }
 
+export interface ArtMeshRegion {
+  /** Outer Alpha contour in texture-local UV coordinates. */
+  outer: Point[];
+  /** Transparent contours fully enclosed by the outer contour. */
+  holes: Point[][];
+}
+
+export interface ArtMeshSource {
+  textureSize: Size;
+  alphaThreshold: number;
+  /** Desired interior edge length in source-texture pixels. */
+  detail: number;
+  regions: ArtMeshRegion[];
+}
+
 export interface MeshBinding {
-  rows: number;
-  cols: number;
+  /** Art meshes follow Alpha contours; grid meshes are legacy or rectangular fallbacks. */
+  topology: "art" | "grid";
+  rows?: number;
+  cols?: number;
+  art?: ArtMeshSource;
   points: Point[];
   uvs: Point[];
   triangles: number[];
@@ -417,8 +435,12 @@ export interface LayerCalibrationOverride {
   pivot?: Point;
   secondaryAnchors?: LayerSecondaryAnchors;
   weights?: Partial<LayerWeights>;
+  /** Complete replacement mesh, used to non-destructively upgrade legacy grids in calibration. */
+  mesh?: MeshBinding;
   meshPointDeltas?: Record<string, Point>;
   vertexInfluences?: Partial<Record<MeshInfluenceChannel, Record<string, number>>>;
+  meshDetail?: number;
+  /** Legacy rectangular-grid control retained for v1-v3 project calibration. */
   meshDensity?: { rows: number; cols: number };
 }
 
@@ -570,8 +592,8 @@ export interface LayerAlphaTopology {
 
 export interface DetailedMeshPoint {
   index: number;
-  row: number;
-  col: number;
+  row?: number;
+  col?: number;
   basePosition: Point;
   position: Point;
   delta: Point;
@@ -601,8 +623,12 @@ export interface DetailedLayerDescription {
   mouthVariant?: MouthVariant;
   alphaTopology: LayerAlphaTopology;
   mesh: {
-    rows: number;
-    cols: number;
+    topology: MeshBinding["topology"];
+    rows?: number;
+    cols?: number;
+    detail?: number;
+    regionCount?: number;
+    holeCount?: number;
     points: DetailedMeshPoint[];
     triangles: number[];
   };
@@ -646,7 +672,16 @@ export interface ProjectDescription {
     bounds: Rect;
     pivot: Point;
     secondaryAnchors?: LayerSecondaryAnchors;
-    mesh: { rows: number; cols: number; pointCount: number };
+    mesh: {
+      topology: MeshBinding["topology"];
+      rows?: number;
+      cols?: number;
+      detail?: number;
+      regionCount?: number;
+      holeCount?: number;
+      pointCount: number;
+      triangleCount: number;
+    };
     weights: LayerWeights;
   }>;
   selectedLayer?: DetailedLayerDescription;

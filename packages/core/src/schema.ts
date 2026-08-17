@@ -2,9 +2,21 @@ import { z } from "zod";
 
 const pointSchema = z.object({ x: z.number().finite(), y: z.number().finite() });
 const rectSchema = z.object({ x: z.number().finite(), y: z.number().finite(), width: z.number().positive(), height: z.number().positive() });
+const artMeshRegionSchema = z.object({
+  outer: z.array(pointSchema).min(3),
+  holes: z.array(z.array(pointSchema).min(3))
+});
+const artMeshSourceSchema = z.object({
+  textureSize: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }),
+  alphaThreshold: z.number().int().min(0).max(255),
+  detail: z.number().min(4).max(256),
+  regions: z.array(artMeshRegionSchema).min(1)
+});
 const meshSchema = z.object({
-  rows: z.number().int().min(2),
-  cols: z.number().int().min(2),
+  topology: z.enum(["art", "grid"]).optional(),
+  rows: z.number().int().min(2).optional(),
+  cols: z.number().int().min(2).optional(),
+  art: artMeshSourceSchema.optional(),
   points: z.array(pointSchema),
   uvs: z.array(pointSchema),
   triangles: z.array(z.number().int().nonnegative()),
@@ -175,7 +187,7 @@ export const authoringPatchSchema = z.object({
 });
 
 export const puppetLoomProjectSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   name: z.string().min(1),
   canvas: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }),
   source: z.object({
@@ -293,13 +305,37 @@ export const puppetLoomProjectSchema = z.object({
     if (ids.has(layer.id)) context.addIssue({ code: "custom", path: ["layers", layerIndex, "id"], message: `图层 ID 重复：${layer.id}` });
     ids.add(layer.id);
     if (!relativeAsset(layer.texture)) context.addIssue({ code: "custom", path: ["layers", layerIndex, "texture"], message: "纹理路径必须位于项目目录内。" });
-    const expectedPoints = layer.mesh.rows * layer.mesh.cols;
-    if (layer.mesh.points.length !== expectedPoints) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "points"], message: `网格点数应为 ${expectedPoints}。` });
+    const meshTopology = layer.mesh.topology ?? "grid";
+    if (project.version === 4 && !layer.mesh.topology) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "topology"], message: "v4 网格必须声明 topology。" });
+    if (meshTopology === "grid") {
+      if (layer.mesh.rows === undefined || layer.mesh.cols === undefined) {
+        context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh"], message: "规则网格必须包含 rows 和 cols。" });
+      } else {
+        const expectedPoints = layer.mesh.rows * layer.mesh.cols;
+        if (layer.mesh.points.length !== expectedPoints) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "points"], message: `网格点数应为 ${expectedPoints}。` });
+      }
+      if (layer.mesh.art) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "art"], message: "规则网格不能携带 ArtMesh 轮廓来源。" });
+    } else if (!layer.mesh.art) {
+      context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "art"], message: "Alpha ArtMesh 必须保存可重建的轮廓来源。" });
+    } else {
+      if (layer.mesh.rows !== undefined || layer.mesh.cols !== undefined) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh"], message: "Alpha ArtMesh 不使用 rows 或 cols。" });
+      const contourPoints = layer.mesh.art.regions.flatMap((region) => [region.outer, ...region.holes]).flat();
+      if (contourPoints.some((point) => point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1)) {
+        context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "art", "regions"], message: "ArtMesh 轮廓 UV 必须位于 0..1。" });
+      }
+    }
     if (layer.mesh.uvs.length !== layer.mesh.points.length) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "uvs"], message: "UV 数量必须与网格点数一致。" });
     if (layer.mesh.uvs.some((uv) => uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1)) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "uvs"], message: "UV 必须位于 0..1。" });
     if (layer.mesh.points.length > 65_535) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "points"], message: "WebGL 索引网格不能超过 65535 个点。" });
     if (layer.mesh.triangles.length % 3 !== 0) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "triangles"], message: "三角形索引数量必须是 3 的倍数。" });
     if (layer.mesh.triangles.some((index) => index >= layer.mesh.points.length || index > 65_535)) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "triangles"], message: "三角形引用了不存在或无法渲染的网格点。" });
+    for (let triangleIndex = 0; triangleIndex < layer.mesh.triangles.length; triangleIndex += 3) {
+      const indices = layer.mesh.triangles.slice(triangleIndex, triangleIndex + 3);
+      if (indices.length === 3 && new Set(indices).size !== 3) {
+        context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "triangles", triangleIndex], message: "三角形不能重复引用同一顶点。" });
+        break;
+      }
+    }
     for (const [channel, values] of Object.entries(layer.mesh.influences ?? {})) {
       if (values && values.length !== layer.mesh.points.length) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "influences", channel], message: "顶点权重数量必须与网格点数一致。" });
     }
@@ -319,8 +355,8 @@ export const puppetLoomProjectSchema = z.object({
       parentId = project.layers.find((candidate) => candidate.id === parentId)?.parentLayerId;
     }
   }
-  if (project.version === 3 && !project.model) {
-    context.addIssue({ code: "custom", path: ["model"], message: "v3 项目必须包含 authoring model。" });
+  if (project.version >= 3 && !project.model) {
+    context.addIssue({ code: "custom", path: ["model"], message: "v3 及以上项目必须包含 authoring model。" });
   }
   if (!project.model) return;
   const parameterIds = new Set<string>();
@@ -502,7 +538,9 @@ const layerCalibrationOverrideSchema = z.object({
     gaze: z.number().min(0).max(1).optional(),
     physics: z.number().min(0).max(1).optional()
   }).partial().optional(),
+  mesh: meshSchema.optional(),
   meshPointDeltas: meshPointDeltasSchema.optional(),
+  meshDetail: z.number().min(4).max(256).optional(),
   vertexInfluences: z.object({
     face: vertexInfluencePatchSchema.optional(),
     skull: vertexInfluencePatchSchema.optional(),
@@ -513,7 +551,7 @@ const layerCalibrationOverrideSchema = z.object({
     pin: vertexInfluencePatchSchema.optional()
   }).partial().optional(),
   meshDensity: z.object({ rows: z.number().int().min(2).max(64), cols: z.number().int().min(2).max(64) }).optional()
-});
+}).refine((override) => override.meshDetail === undefined || override.meshDensity === undefined, { message: "不能同时按细节尺度和行列数重建网格。" });
 
 export const calibrationOverridesSchema = z.object({
   model: authoringModelSchema.optional(),

@@ -4,6 +4,7 @@ import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import type { RecentProject, ViewerState } from "../electron/global.js";
 import { EditorWorkspace } from "./EditorWorkspace.js";
+import { WindowTitleBar } from "./WindowTitleBar.js";
 
 type ViewerAction = "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close";
 
@@ -296,6 +297,15 @@ export function App(): React.JSX.Element {
   const revision = revisionValue !== null && Number.isInteger(Number(revisionValue)) && Number(revisionValue) >= 0 ? Number(revisionValue) : undefined;
   const [editorProject, setEditorProject] = useState(params.get("editor") === "1" && project ? project : "");
   if (params.get("viewer") === "1" && project) return <Viewer projectDirectory={project} {...(revision !== undefined ? { revision } : {})} />;
-  if (editorProject) return <EditorWorkspace projectDirectory={editorProject} onBack={() => setEditorProject("")} />;
-  return <Creator onEdit={setEditorProject} />;
+  const editing = Boolean(editorProject);
+  return (
+    <div className={`desktop-window ${editing ? "is-editor" : "is-creator"}`}>
+      <WindowTitleBar title={editing ? "PuppetLoom · 绑定与校准编辑器" : "PuppetLoom"} />
+      <div className="desktop-window-body">
+        {editorProject
+          ? <EditorWorkspace projectDirectory={editorProject} onBack={() => setEditorProject("")} />
+          : <Creator onEdit={setEditorProject} />}
+      </div>
+    </div>
+  );
 }

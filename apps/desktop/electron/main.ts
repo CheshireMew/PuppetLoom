@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadProject, loadProjectRevision } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen } from "electron";
-import type { ViewerState } from "./global.js";
+import type { ViewerState, WindowShellAction, WindowShellState } from "./global.js";
 import { CalibrationIpcService } from "./calibration-ipc.js";
 import { ProjectIpcService } from "./project-ipc.js";
 
@@ -25,6 +25,7 @@ const CONTROL_WINDOW_WIDTH = 1440;
 const CONTROL_WINDOW_HEIGHT = 900;
 const CONTROL_WINDOW_MIN_WIDTH = 1100;
 const CONTROL_WINDOW_MIN_HEIGHT = 700;
+const CONTROL_WINDOW_SHELL = { strategy: "integrated", frame: false } as const;
 
 function runtimeLog(event: string, details: Record<string, unknown> = {}): void {
   if (!runtimeLogPath) return;
@@ -95,6 +96,42 @@ function launchFromAdditionalData(value: unknown): { project?: string; edit: boo
 
 function ownerWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | undefined {
   return BrowserWindow.fromWebContents(event.sender) ?? undefined;
+}
+
+function windowShellState(window: BrowserWindow): WindowShellState {
+  return {
+    ...CONTROL_WINDOW_SHELL,
+    maximized: window.isMaximized(),
+    minimized: window.isMinimized(),
+    fullScreen: window.isFullScreen(),
+    focused: window.isFocused(),
+    resizable: window.isResizable(),
+    maximizable: window.isMaximizable(),
+    minimizable: window.isMinimizable(),
+    closable: window.isClosable(),
+    outerBounds: window.getBounds(),
+    contentBounds: window.getContentBounds()
+  };
+}
+
+function publishWindowShellState(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return;
+  window.webContents.send("window:shell-state", windowShellState(window));
+}
+
+function registerControlWindowShell(window: BrowserWindow): void {
+  const publish = () => publishWindowShellState(window);
+  window.webContents.on("did-finish-load", publish);
+  window.on("maximize", publish);
+  window.on("unmaximize", publish);
+  window.on("minimize", publish);
+  window.on("restore", publish);
+  window.on("enter-full-screen", publish);
+  window.on("leave-full-screen", publish);
+  window.on("focus", publish);
+  window.on("blur", publish);
+  window.on("resize", publish);
+  window.on("move", publish);
 }
 
 function stateFor(window: BrowserWindow): ViewerState {
@@ -241,11 +278,18 @@ function createControlWindow(projectDirectory?: string, editor = false): Browser
     height: CONTROL_WINDOW_HEIGHT,
     minWidth: CONTROL_WINDOW_MIN_WIDTH,
     minHeight: CONTROL_WINDOW_MIN_HEIGHT,
+    frame: CONTROL_WINDOW_SHELL.frame,
+    resizable: true,
+    maximizable: true,
+    minimizable: true,
+    closable: true,
+    autoHideMenuBar: true,
     backgroundColor: "#11131a",
     title: editor ? "PuppetLoom 编辑器" : "PuppetLoom",
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
   });
   const query = editor && projectDirectory ? { editor: "1", project: resolve(projectDirectory) } : undefined;
+  registerControlWindowShell(window);
   if (editor && projectDirectory) editorWindows.set(window.id, resolve(projectDirectory));
   window.on("close", (event) => {
     if (!editorWindows.has(window.id) || editorCloseReady.has(window.id) || window.webContents.isDestroyed()) return;
@@ -317,11 +361,33 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       window.setMinimumSize(CONTROL_WINDOW_MIN_WIDTH, CONTROL_WINDOW_MIN_HEIGHT);
       const [width = CONTROL_WINDOW_MIN_WIDTH, height = CONTROL_WINDOW_MIN_HEIGHT] = window.getSize();
       if (width < 1320 || height < 820) window.setSize(Math.max(width, CONTROL_WINDOW_WIDTH), Math.max(height, CONTROL_WINDOW_HEIGHT), true);
+      window.setTitle("PuppetLoom 编辑器");
     } else {
       editorWindows.delete(window.id);
       window.setMinimumSize(CONTROL_WINDOW_MIN_WIDTH, CONTROL_WINDOW_MIN_HEIGHT);
+      window.setTitle("PuppetLoom");
     }
+    publishWindowShellState(window);
     return true;
+  });
+  ipcMain.handle("window:shell-state", (event) => {
+    const window = ownerWindow(event);
+    if (!window || viewerProjects.has(window.id)) throw new Error("当前窗口不使用应用标题栏。" );
+    return windowShellState(window);
+  });
+  ipcMain.handle("window:shell-action", (event, action: WindowShellAction) => {
+    const window = ownerWindow(event);
+    if (!window || viewerProjects.has(window.id)) throw new Error("当前窗口不使用应用标题栏。" );
+    if (action === "minimize") window.minimize();
+    else if (action === "toggle-maximize") {
+      if (window.isMaximized()) window.unmaximize();
+      else window.maximize();
+    } else if (action === "close") {
+      window.close();
+      return null;
+    } else throw new Error(`未知窗口操作：${String(action)}`);
+    publishWindowShellState(window);
+    return windowShellState(window);
   });
   ipcMain.handle("editor:confirm-close", async (event) => {
     const window = ownerWindow(event);

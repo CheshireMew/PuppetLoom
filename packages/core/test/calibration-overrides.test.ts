@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyCalibrationOverrides, mergeCalibrationOverrides } from "../src/calibration.js";
+import { buildArtMesh } from "../src/art-mesh.js";
 import { makeGridMesh } from "../src/rig.js";
 import type { LayerBinding, PuppetLoomProject } from "../src/types.js";
 
@@ -72,6 +73,22 @@ describe("calibration override contract", () => {
     expect(merged.layers?.child.meshPointDeltas).toBeUndefined();
     expect(merged.layers?.child.vertexInfluences).toBeUndefined();
     expect(() => applyCalibrationOverrides(project(), merged)).not.toThrow();
+  });
+
+  it("stores a generated ArtMesh as a non-destructive legacy-grid upgrade", () => {
+    const replacement = buildArtMesh(
+      { x: 0.2, y: 0.2, width: 0.4, height: 0.4 },
+      { textureSize: { width: 100, height: 100 }, alphaThreshold: 8, detail: 40, regions: [{ outer: [{ x: 0.5, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], holes: [] }] }
+    );
+    const merged = mergeCalibrationOverrides(
+      { layers: { child: { meshDensity: { rows: 5, cols: 5 }, meshPointDeltas: { "0": { x: 0.01, y: 0 } } } } },
+      { layers: { child: { mesh: replacement } } }
+    );
+    expect(merged.layers?.child.meshDensity).toBeUndefined();
+    expect(merged.layers?.child.meshPointDeltas).toBeUndefined();
+    const upgraded = applyCalibrationOverrides(project(), merged).layers.find((entry) => entry.id === "child")!.mesh;
+    expect(upgraded.topology).toBe("art");
+    expect(upgraded.points).toEqual(replacement.points);
   });
 
   it("stores independent face and skull control-cage influence per vertex", () => {

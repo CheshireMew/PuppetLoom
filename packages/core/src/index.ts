@@ -1,4 +1,5 @@
 export * from "./assets.js";
+export * from "./art-mesh.js";
 export * from "./authoring.js";
 export * from "./calibration.js";
 export * from "./classify.js";
@@ -9,6 +10,7 @@ export * from "./cubism-types.js";
 export * from "./deform.js";
 export * from "./errors.js";
 export * from "./math.js";
+export * from "./mesh.js";
 export * from "./migration.js";
 export * from "./model.js";
 export * from "./offline-render.js";

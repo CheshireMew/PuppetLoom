@@ -1,12 +1,64 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { PUPPETLOOM_PROJECT_VERSION } from "@puppetloom/core";
 import { _electron as electron } from "playwright";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 
 const root = resolve(".");
+
+function assertIntegratedShell(state, label) {
+  const horizontalNonClient = state.outerBounds.width - state.contentBounds.width;
+  const verticalNonClient = state.outerBounds.height - state.contentBounds.height;
+  if (state.strategy !== "integrated" || state.frame !== false) throw new Error(`${label} 没有声明一体化无边框外壳：${JSON.stringify(state)}`);
+  if (!state.resizable || !state.maximizable || !state.minimizable || !state.closable) throw new Error(`${label} 缺少完整原生窗口能力：${JSON.stringify(state)}`);
+  const titlebarRemainder = verticalNonClient - horizontalNonClient;
+  if (horizontalNonClient < 0 || verticalNonClient < 0 || horizontalNonClient > 16 || Math.abs(titlebarRemainder) > 2) throw new Error(`${label} 仍存在未解释的原生标题栏或非客户区：${JSON.stringify({ horizontalNonClient, verticalNonClient, titlebarRemainder, state })}`);
+}
+
+async function captureNativeWindow(electronApp, browserWindow, path) {
+  const windowId = await browserWindow.evaluate((window) => window.id);
+  const capture = await electronApp.evaluate(async ({ BrowserWindow, desktopCapturer, screen }, id) => {
+    const window = BrowserWindow.fromId(id);
+    if (!window) throw new Error(`找不到 BrowserWindow ${id}`);
+    const bounds = window.getBounds();
+    const contentBounds = window.getContentBounds();
+    const scaleFactor = screen.getDisplayMatching(bounds).scaleFactor;
+    const sourceId = window.getMediaSourceId();
+    const sources = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: {
+        width: Math.max(1, Math.round(bounds.width * scaleFactor)),
+        height: Math.max(1, Math.round(bounds.height * scaleFactor))
+      },
+      fetchWindowIcons: false
+    });
+    const source = sources.find((candidate) => candidate.id === sourceId);
+    if (!source || source.thumbnail.isEmpty()) throw new Error(`Windows 整窗捕获没有返回目标窗口 ${sourceId}`);
+    return {
+      dataUrl: source.thumbnail.toDataURL(),
+      sourceId,
+      bounds,
+      contentBounds,
+      scaleFactor,
+      pixelSize: source.thumbnail.getSize()
+    };
+  }, windowId);
+  const encoded = capture.dataUrl.split(",")[1];
+  if (!encoded) throw new Error(`Windows 整窗捕获没有 PNG 数据：${capture.sourceId}`);
+  await writeFile(path, Buffer.from(encoded, "base64"));
+  const { dataUrl: _dataUrl, ...evidence } = capture;
+  return evidence;
+}
+
 await executeManagedRun({ category: "electron-e2e", producer: "scripts/run-electron-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "截图、草稿和窗口状态共同组成一次独立桌面用户链证据。" } }, async (artifactRun) => {
 const output = artifactRun.path("project");
-const editorScreenshot = artifactRun.path("editor.png");
+const launcherContentScreenshot = artifactRun.path("launcher-content.png");
+const launcherNativeScreenshot = artifactRun.path("launcher-native.png");
+const editorContentScreenshot = artifactRun.path("editor-content.png");
+const editorNativeScreenshot = artifactRun.path("editor-native.png");
+const artMeshScreenshot = artifactRun.path("editor-art-mesh.png");
+const viewerNativeScreenshot = artifactRun.path("viewer-native.png");
+const windowShellEvidencePath = artifactRun.path("window-shell-evidence.json");
 
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js")],
@@ -17,23 +69,70 @@ const electronApp = await electron.launch({
 try {
   const control = await electronApp.firstWindow();
   await control.getByTestId("creator").waitFor();
+  const titlebar = control.getByTestId("window-titlebar");
+  await titlebar.waitFor();
+  if (await titlebar.getAttribute("data-window-shell") !== "integrated" || await titlebar.getAttribute("data-window-frame") !== "false") throw new Error("启动器没有消费一体化外壳状态。" );
   const launcherBrowserWindow = await electronApp.browserWindow(control);
   const launcherWindowSize = await launcherBrowserWindow.evaluate((window) => window.getSize());
   if (launcherWindowSize[0] !== 1440 || launcherWindowSize[1] !== 900) throw new Error(`启动界面不是完整工作区尺寸：${JSON.stringify(launcherWindowSize)}`);
+  const launcherShellBefore = await control.evaluate(() => window.puppetloom.windowShellState());
+  assertIntegratedShell(launcherShellBefore, "启动器");
+
+  const dragRegion = await control.locator(".window-titlebar-drag").boundingBox();
+  if (!dragRegion) throw new Error("启动器缺少可命中的标题栏拖动区。" );
+  const dragStart = { x: dragRegion.x + Math.min(240, dragRegion.width * 0.45), y: dragRegion.y + dragRegion.height / 2 };
+  await control.mouse.move(dragStart.x, dragStart.y);
+  await control.mouse.down();
+  await control.mouse.move(dragStart.x + 64, dragStart.y + 42, { steps: 6 });
+  await control.mouse.up();
+  await control.waitForFunction(async ({ x, y }) => {
+    const state = await window.puppetloom.windowShellState();
+    return Math.abs(state.outerBounds.x - x) > 24 || Math.abs(state.outerBounds.y - y) > 24;
+  }, { x: launcherShellBefore.outerBounds.x, y: launcherShellBefore.outerBounds.y });
+  const movedShell = await control.evaluate(() => window.puppetloom.windowShellState());
+
+  await control.getByRole("button", { name: "最大化窗口" }).click();
+  await control.waitForFunction(async () => (await window.puppetloom.windowShellState()).maximized);
+  const maximizedShell = await control.evaluate(() => window.puppetloom.windowShellState());
+  assertIntegratedShell(maximizedShell, "最大化启动器");
+  await control.getByRole("button", { name: "还原窗口" }).click();
+  await control.waitForFunction(async () => !(await window.puppetloom.windowShellState()).maximized);
+  const restoredShell = await control.evaluate(() => window.puppetloom.windowShellState());
+  if (Math.abs(restoredShell.outerBounds.x - movedShell.outerBounds.x) > 2 || Math.abs(restoredShell.outerBounds.y - movedShell.outerBounds.y) > 2 || restoredShell.outerBounds.width !== movedShell.outerBounds.width || restoredShell.outerBounds.height !== movedShell.outerBounds.height) {
+    throw new Error(`最大化往返没有恢复用户放置的窗口：${JSON.stringify({ movedShell, restoredShell })}`);
+  }
+  await control.getByRole("button", { name: "最小化窗口" }).click();
+  await launcherBrowserWindow.evaluate((window) => {
+    if (!window.isMinimized()) throw new Error("最小化按钮没有调用原生窗口 API。" );
+    window.restore();
+    window.show();
+    window.focus();
+  });
+  await control.waitForFunction(async () => !(await window.puppetloom.windowShellState()).minimized);
+  await control.evaluate(() => new Promise((resolvePaint) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolvePaint));
+  }));
+  const launcherNativeEvidence = await captureNativeWindow(electronApp, launcherBrowserWindow, launcherNativeScreenshot);
+  await control.screenshot({ path: launcherContentScreenshot });
   const emptyRecentCard = await control.getByTestId("recent-projects").boundingBox();
   const initialViewportHeight = await control.evaluate(() => window.innerHeight);
   if (!emptyRecentCard || emptyRecentCard.y < 0 || emptyRecentCard.y + emptyRecentCard.height > initialViewportHeight) throw new Error("空的最近项目卡片没有出现在启动首屏。");
   const createResult = await control.evaluate(async ({ input, outputDirectory }) => {
     return window.puppetloom.create({ input, output: outputDirectory, seed: 42 });
   }, { input: resolve("test/fixtures/semantic.psd"), outputDirectory: output });
-  if (!createResult.verify.valid || createResult.report.rigLevel !== "semantic") throw new Error("桌面创建链未返回有效 semantic 项目。" );
+  if (!createResult.verify.valid) throw new Error(`桌面创建链没有返回有效项目：${JSON.stringify(createResult)}`);
+  const creationRigRegression = createResult.report.rigLevel === "semantic"
+    ? undefined
+    : `相同 semantic fixture 预期 semantic，实际为 ${createResult.report.rigLevel}`;
   const recent = await control.evaluate(() => window.puppetloom.recentProjects());
   if (!recent.some((entry) => entry.directory.toLocaleLowerCase() === output.toLocaleLowerCase())) throw new Error("创建后的项目没有进入最近项目列表。" );
 
   const workspace = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
-  if (workspace.calibration.revision !== 0 || workspace.project.version !== 3) throw new Error(`桌面编辑工作区没有读取 v3 基线：${JSON.stringify(workspace.calibration)}`);
+  if (workspace.calibration.revision !== 0 || workspace.project.version !== PUPPETLOOM_PROJECT_VERSION) throw new Error(`桌面编辑工作区没有读取当前 v${PUPPETLOOM_PROJECT_VERSION} 基线：${JSON.stringify({ calibration: workspace.calibration, projectVersion: workspace.project.version })}`);
   const face = workspace.project.layers.find((layer) => layer.role === "face");
+  const frontHair = workspace.project.layers.find((layer) => layer.role === "frontHair");
   if (!face) throw new Error("semantic 测试项目没有脸部图层。" );
+  if (!frontHair || frontHair.mesh.topology !== "art") throw new Error("semantic 测试项目没有生成前发 Alpha ArtMesh。" );
 
   // Fixture setup uses IPC, but the product journey starts from the same persisted recent-project entry a user sees after restart.
   await control.reload();
@@ -45,11 +144,14 @@ try {
   if (!populatedRecentCard || populatedRecentCard.y < 0 || populatedRecentCard.y + populatedRecentCard.height > populatedViewportHeight) throw new Error("有内容的最近项目卡片没有出现在启动首屏。");
   await recentProject.click();
   await control.getByTestId("editor").waitFor();
+  await control.getByText("PuppetLoom · 绑定与校准编辑器", { exact: true }).waitFor();
   const controlWindow = await electronApp.browserWindow(control);
   await control.waitForFunction(() => window.innerWidth >= 1300 && window.innerHeight >= 800);
   const editorWindowSize = await controlWindow.evaluate((window) => window.getSize());
   if (editorWindowSize[0] < 1300 || editorWindowSize[1] < 800) throw new Error(`编辑器窗口没有扩展到可操作尺寸：${JSON.stringify(editorWindowSize)}`);
   if (editorWindowSize[0] !== launcherWindowSize[0] || editorWindowSize[1] !== launcherWindowSize[1]) throw new Error(`启动界面与完整工作区尺寸不一致：${JSON.stringify({ launcherWindowSize, editorWindowSize })}`);
+  const editorShell = await control.evaluate(() => window.puppetloom.windowShellState());
+  assertIntegratedShell(editorShell, "编辑器");
   await control.waitForFunction(() => {
     const canvas = document.querySelector(".editor-canvas");
     if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) return false;
@@ -102,6 +204,9 @@ try {
   }
   await control.getByRole("button", { name: "适配" }).click();
   await control.waitForFunction((x) => Math.abs((document.querySelector("[data-testid='editor-stage']")?.getBoundingClientRect().x ?? 0) - x) < 2, stageBeforeNavigation.x);
+  const structureWorkspaceButton = control.getByRole("button", { name: /02 结构与网格/ });
+  await structureWorkspaceButton.click();
+  await control.locator(".layer-list").waitFor();
   const lockLayer = control.getByRole("button", { name: `${face.sourceName} 锁定` });
   await lockLayer.click();
   await control.getByRole("button", { name: `${face.sourceName} 解锁` }).click();
@@ -137,6 +242,7 @@ try {
   await control.mouse.move(vertex.x + vertex.width / 2 + 3, vertex.y + vertex.height / 2, { steps: 3 });
   await control.mouse.up();
 
+  await control.getByRole("button", { name: "动作", exact: true }).click();
   const secondaryAmplitude = control.locator('.save-panel .range-row input[type="range"]').nth(6);
   await secondaryAmplitude.evaluate((element) => {
     const input = element;
@@ -145,7 +251,9 @@ try {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  await control.getByPlaceholder("例如：固定耳根并调整右眼外角").fill("软选择网格与前发响应校准");
+  const calibrationLabel = control.getByPlaceholder("例如：固定耳根并调整右眼外角");
+  await calibrationLabel.scrollIntoViewIfNeeded();
+  await calibrationLabel.fill("软选择网格与前发响应校准");
 
   const saveButton = control.getByRole("button", { name: "保存校准" });
   await saveButton.waitFor({ state: "attached" });
@@ -163,6 +271,9 @@ try {
   await control.getByTestId("creator").waitFor();
   await control.locator(".recent-projects button").filter({ hasText: output }).click();
   await control.getByTestId("editor").waitFor();
+  await structureWorkspaceButton.click();
+  await control.locator(".layer-list").waitFor();
+  await control.getByRole("button", { name: "动作", exact: true }).click();
   await control.getByText(/已恢复 .*自动保存的草稿/).waitFor();
   if (await saveButton.isDisabled()) throw new Error("恢复草稿后保存校准仍不可用。" );
 
@@ -200,7 +311,19 @@ try {
   }
   await control.getByText("草稿已保存", { exact: true }).waitFor({ timeout: 10_000 });
   if (await control.locator(".save-panel .error").count()) throw new Error(`保存完成后编辑器仍显示错误：${await control.locator(".save-panel .error").innerText()}`);
-  await control.screenshot({ path: editorScreenshot, fullPage: true });
+  await control.evaluate(() => new Promise((resolvePaint) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolvePaint));
+  }));
+  const editorNativeEvidence = await captureNativeWindow(electronApp, controlWindow, editorNativeScreenshot);
+  await control.screenshot({ path: editorContentScreenshot, fullPage: true });
+  await control.locator(".layer-select").filter({ hasText: frontHair.sourceName }).click();
+  await control.getByRole("button", { name: "网格与权重" }).click();
+  const artMeshHandles = control.locator(".mesh-handle");
+  await artMeshHandles.first().waitFor();
+  const artMeshHandleCount = await artMeshHandles.count();
+  if (artMeshHandleCount < 12) throw new Error(`前发 ArtMesh 的轮廓密度不足以进行局部编辑：${artMeshHandleCount} 个顶点。`);
+  await control.screenshot({ path: artMeshScreenshot });
+  await control.getByRole("button", { name: "版本", exact: true }).click();
   await control.locator(".session-panel article").first().getByRole("button", { name: "确认" }).click();
   await control.waitForFunction(async (projectDirectory) => (await window.puppetloom.readEditorWorkspace(projectDirectory)).sessions.at(-1)?.evidenceStatus === "accepted", output);
 
@@ -236,10 +359,13 @@ try {
     top: window.isAlwaysOnTop(),
     resizable: window.isResizable(),
     size: window.getSize(),
-    visible: window.isVisible()
+    visible: window.isVisible(),
+    outerBounds: window.getBounds(),
+    contentBounds: window.getContentBounds()
   }));
   const aspect = nativeState.size[0] / nativeState.size[1];
   if (!nativeState.top || !nativeState.visible || Math.abs(aspect - 1) > 0.01) throw new Error(`透明窗口状态不符合要求：${JSON.stringify(nativeState)}`);
+  const viewerNativeEvidence = await captureNativeWindow(electronApp, browserWindow, viewerNativeScreenshot);
 
   const visiblePixelRatio = () => {
     const canvas = document.querySelector("canvas");
@@ -314,7 +440,9 @@ try {
   const resumed = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pause"), { id: viewerId });
   if (resumed?.paused) throw new Error("桌面端未能恢复自主运动。" );
 
-  await control.getByPlaceholder("例如：固定耳根并调整右眼外角").fill("直接关窗草稿复验");
+  await control.getByRole("button", { name: "动作", exact: true }).click();
+  await calibrationLabel.scrollIntoViewIfNeeded();
+  await calibrationLabel.fill("直接关窗草稿复验");
   const closeDraftAmplitude = control.locator('.save-panel .range-row input[type="range"]').nth(6);
   await closeDraftAmplitude.evaluate((element) => {
     const input = element;
@@ -323,16 +451,29 @@ try {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  const controlBrowserWindow = await electronApp.browserWindow(control);
   const controlClosed = control.waitForEvent("close");
-  await controlBrowserWindow.evaluate((window) => window.close());
+  await control.getByRole("button", { name: "关闭窗口" }).click();
   await controlClosed;
   const closeDraft = JSON.parse(await readFile(resolve(output, "calibration", "draft.json"), "utf8"));
   if (closeDraft.label !== "直接关窗草稿复验" || closeDraft.overrides?.runtime?.secondaryMotionTuning?.frontHair?.amplitude !== 1.12) {
     throw new Error(`直接关窗前没有完整刷新草稿：${JSON.stringify(closeDraft)}`);
   }
 
-  process.stdout.write(`${JSON.stringify({ ok: true, project: output, editorScreenshot, viewerId, nativeState }, null, 2)}\n`);
+  const result = {
+    ok: true,
+    project: output,
+    evidence: {
+      launcher: { contentOnly: launcherContentScreenshot, nativeWindow: launcherNativeScreenshot, shell: restoredShell, capture: launcherNativeEvidence },
+      editor: { contentOnly: editorContentScreenshot, artMesh: artMeshScreenshot, nativeWindow: editorNativeScreenshot, shell: editorShell, capture: editorNativeEvidence },
+      viewer: { nativeWindow: viewerNativeScreenshot, state: nativeState, capture: viewerNativeEvidence }
+    },
+    viewerId
+  };
+  await writeFile(windowShellEvidencePath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+
+  if (creationRigRegression) throw new Error(`窗口与编辑器用户链已完成，但保留独立 core 回归：${creationRigRegression}；窗口证据：${windowShellEvidencePath}`);
+
+  process.stdout.write(`${JSON.stringify({ ...result, windowShellEvidence: windowShellEvidencePath }, null, 2)}\n`);
 } finally {
   await electronApp.close();
 }

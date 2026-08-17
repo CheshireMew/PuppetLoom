@@ -36,6 +36,23 @@ export interface ViewerState {
   scale: number;
 }
 
+export type WindowShellAction = "minimize" | "toggle-maximize" | "close";
+
+export interface WindowShellState {
+  strategy: "integrated";
+  frame: false;
+  maximized: boolean;
+  minimized: boolean;
+  fullScreen: boolean;
+  focused: boolean;
+  resizable: boolean;
+  maximizable: boolean;
+  minimizable: boolean;
+  closable: boolean;
+  outerBounds: { x: number; y: number; width: number; height: number };
+  contentBounds: { x: number; y: number; width: number; height: number };
+}
+
 export interface EditorWorkspace {
   projectDirectory: string;
   baseProject: PuppetLoomProject;
@@ -66,6 +83,7 @@ export interface PuppetLoomDesktopApi {
   recentProjects(): Promise<RecentProject[]>;
   readProject(projectDirectory: string, revision?: number): Promise<PuppetLoomProject>;
   readEditorWorkspace(projectDirectory: string): Promise<EditorWorkspace>;
+  generateArtMeshes(projectDirectory: string): Promise<Record<string, LayerBinding["mesh"]>>;
   saveCalibrationDraft(projectDirectory: string, baseRevision: number, overrides: CalibrationPatch["overrides"], label?: string): Promise<CalibrationDraftDocument>;
   discardCalibrationDraft(projectDirectory: string): Promise<boolean>;
   saveCalibration(projectDirectory: string, patch: CalibrationPatch): Promise<DesktopCalibrationResponse>;
@@ -73,6 +91,9 @@ export interface PuppetLoomDesktopApi {
   setEvidenceStatus(projectDirectory: string, sessionId: string, status: "accepted" | "rejected" | "unreviewed"): Promise<CalibrationSessionDocument>;
   calibrationEvidence(projectDirectory: string, sessionId: string): Promise<RevisionComparisonResult>;
   setEditorMode(enabled: boolean, projectDirectory?: string): Promise<boolean>;
+  windowShellState(): Promise<WindowShellState>;
+  windowShellAction(action: WindowShellAction): Promise<WindowShellState | null>;
+  onWindowShellState(listener: (state: WindowShellState) => void): () => void;
   confirmEditorClose(): Promise<boolean>;
   onPrepareEditorClose(listener: () => void | Promise<void>): () => void;
   readAsset(projectDirectory: string, layer: LayerBinding): Promise<Blob>;

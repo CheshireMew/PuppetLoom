@@ -27,6 +27,15 @@ AutoLive2d is not vendored as an application. PuppetLoom does not include its Cu
 
 The MIT license text is reproduced in `docs/licenses/ag-psd-MIT.txt`.
 
+## poly2tri.js
+
+- Project: `r3mi/poly2tri.js`
+- Use: constrained Delaunay triangulation of Alpha contours, holes, and interior ArtMesh sample points
+- License: BSD 3-Clause
+- Copyright: Copyright (c) 2009-2014, Poly2Tri Contributors
+
+The BSD 3-Clause license text is reproduced in `docs/licenses/poly2tri-BSD-3-Clause.txt`.
+
 ## Live2D Cubism
 
 - Project and documentation: Live2D Cubism Editor, Cubism SDK manuals, External Application Integration API, and `Live2D/CubismWebSamples`

@@ -1,6 +1,8 @@
 import { rectCenter, rectUnion, roundPoint, roundRect } from "./math.js";
 import { suggestedRigLevel, type ImportedLayer, type ImportedPsd } from "./psd.js";
 import { buildSemanticControlCage } from "./semantic-cage.js";
+import { makeAdaptiveMesh } from "./art-mesh.js";
+import { makeGridMesh } from "./mesh.js";
 import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 import { createDefaultAuthoringModel } from "./model.js";
 import type {
@@ -39,6 +41,8 @@ const fineRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClos
 const hairRoles = new Set<SemanticRole>(["backHair", "frontHair", "sideHair"]);
 const eyeSocketRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClosed"]);
 
+export { makeGridMesh } from "./mesh.js";
+
 function normalizedRect(rect: Rect, width: number, height: number): Rect {
   return roundRect({ x: rect.x / width, y: rect.y / height, width: rect.width / width, height: rect.height / height });
 }
@@ -55,43 +59,21 @@ function meshDensity(layer: ImportedLayer): { rows: number; cols: number } {
   return { rows, cols };
 }
 
-export function makeGridMesh(bounds: Rect, rows: number, cols: number): MeshBinding {
-  const points: Point[] = [];
-  const uvs: Point[] = [];
-  const triangles: number[] = [];
-  for (let row = 0; row < rows; row += 1) {
-    const v = rows <= 1 ? 0 : row / (rows - 1);
-    for (let col = 0; col < cols; col += 1) {
-      const u = cols <= 1 ? 0 : col / (cols - 1);
-      points.push(roundPoint({ x: bounds.x + bounds.width * u, y: bounds.y + bounds.height * v }));
-      uvs.push({ x: u, y: v });
-    }
-  }
-  for (let row = 0; row < rows - 1; row += 1) {
-    for (let col = 0; col < cols - 1; col += 1) {
-      const topLeft = row * cols + col;
-      const topRight = topLeft + 1;
-      const bottomLeft = (row + 1) * cols + col;
-      const bottomRight = bottomLeft + 1;
-      triangles.push(topLeft, bottomLeft, topRight, topRight, bottomLeft, bottomRight);
-    }
-  }
-  return {
-    rows,
-    cols,
-    points,
-    uvs,
-    triangles,
-    influences: {
-      face: Array(points.length).fill(1),
-      skull: Array(points.length).fill(1),
-      head: Array(points.length).fill(1),
-      body: Array(points.length).fill(1),
-      gaze: Array(points.length).fill(1),
-      physics: Array(points.length).fill(1),
-      pin: Array(points.length).fill(0)
-    }
-  };
+export function artMeshDetailForRole(role: SemanticRole): number {
+  if (fineRoles.has(role)) return 8;
+  // Long hair contours need fewer, better-shaped triangles than tiny facial
+  // features. A denser outline creates narrow boundary slivers that can fold
+  // under full head yaw even when the visible deformation remains smooth.
+  if (role === "frontHair" || role === "backHair" || role === "sideHair") return 12;
+  if (role === "face") return 12;
+  if (role === "ear" || role === "headwear") return 12;
+  if (role === "tail" || role === "bottomWear") return 14;
+  if (role === "topWear" || role === "arm" || role === "leg") return 18;
+  return 20;
+}
+
+function meshDetail(layer: ImportedLayer): number {
+  return artMeshDetailForRole(layer.role);
 }
 
 function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], anchors: AnchorGraph, secondaryAnchors?: LayerSecondaryAnchors): Point {
@@ -400,7 +382,13 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       texture: `textures/${layer.id}.png`,
       pivot: pivotFor(layer.role, bounds, layer.side, anchors, secondaryAnchors),
       ...(secondaryAnchors ? { secondaryAnchors } : {}),
-      mesh: makeGridMesh(bounds, density.rows, density.cols),
+      mesh: makeAdaptiveMesh({
+        bounds,
+        pixels: layer.pixels,
+        detail: meshDetail(layer),
+        fallbackRows: density.rows,
+        fallbackCols: density.cols
+      }),
       weights,
       ...(clipLayerId ? { clipLayerId } : {}),
       ...(layer.role === "mouth" ? { mouthVariant: "closed" as const } : {}),

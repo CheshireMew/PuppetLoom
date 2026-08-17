@@ -97,8 +97,9 @@ describe("rig attachment pivots", () => {
       frontHairTipRight: { x: 0.564, y: 0.339 }
     });
     expect(frontHair?.pivot).toEqual(frontHair?.secondaryAnchors?.frontHairRoot);
-    expect(frontHair?.mesh.rows).toBeGreaterThanOrEqual(18);
-    expect(frontHair?.mesh.cols).toBeGreaterThanOrEqual(12);
+    expect(frontHair?.mesh.topology).toBe("art");
+    expect(frontHair?.mesh.art?.detail).toBe(12);
+    expect(frontHair?.mesh.points.length).toBeGreaterThan(40);
     expect(project.layers.find((layer) => layer.role === "topWear")?.pivot.y).toBeCloseTo(0.5396, 6);
     expect(project.layers.find((layer) => layer.role === "bottomWear")?.pivot.y).toBeCloseTo(0.686, 6);
   });

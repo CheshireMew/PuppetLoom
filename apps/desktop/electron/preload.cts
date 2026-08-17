@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("puppetloom", {
   recentProjects: () => ipcRenderer.invoke("project:recent"),
   readProject: (projectDirectory: string, revision?: number) => ipcRenderer.invoke("project:read", projectDirectory, revision),
   readEditorWorkspace: (projectDirectory: string) => ipcRenderer.invoke("editor:read", projectDirectory),
+  generateArtMeshes: (projectDirectory: string) => ipcRenderer.invoke("editor:generate-art-meshes", projectDirectory),
   saveCalibrationDraft: (projectDirectory: string, baseRevision: number, overrides: unknown, label?: string) => ipcRenderer.invoke("editor:save-draft", projectDirectory, baseRevision, overrides, label),
   discardCalibrationDraft: (projectDirectory: string) => ipcRenderer.invoke("editor:discard-draft", projectDirectory),
   saveCalibration: (projectDirectory: string, patch: unknown) => ipcRenderer.invoke("editor:save", projectDirectory, patch),
@@ -18,6 +19,13 @@ contextBridge.exposeInMainWorld("puppetloom", {
   setEvidenceStatus: (projectDirectory: string, sessionId: string, status: string) => ipcRenderer.invoke("editor:evidence", projectDirectory, sessionId, status),
   calibrationEvidence: (projectDirectory: string, sessionId: string) => ipcRenderer.invoke("editor:comparison", projectDirectory, sessionId),
   setEditorMode: (enabled: boolean, projectDirectory?: string) => ipcRenderer.invoke("window:editor-mode", enabled, projectDirectory),
+  windowShellState: () => ipcRenderer.invoke("window:shell-state"),
+  windowShellAction: (action: string) => ipcRenderer.invoke("window:shell-action", action),
+  onWindowShellState: (listener: (state: unknown) => void) => {
+    const handler = (_event: unknown, state: unknown) => listener(state);
+    ipcRenderer.on("window:shell-state", handler);
+    return () => ipcRenderer.removeListener("window:shell-state", handler);
+  },
   confirmEditorClose: () => ipcRenderer.invoke("editor:confirm-close"),
   onPrepareEditorClose: (listener: () => void | Promise<void>) => {
     const handler = () => { void listener(); };

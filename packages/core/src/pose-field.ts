@@ -81,6 +81,50 @@ interface Barycentric {
   c: number;
 }
 
+interface PoseEvaluationCache {
+  field: CoherentPoseField;
+  cage: SemanticControlCage;
+  yawAngle: number;
+  pitchAngle: number;
+  yaw: number;
+  pitch: number;
+  projectedFace: Map<SemanticCagePointId, Point>;
+  projectedSkull: Map<SemanticCagePointId, Point>;
+  surfacePivots: WeakMap<LayerBinding, Point>;
+  cagePivots: WeakMap<LayerBinding, Point>;
+}
+
+let poseEvaluationCache: PoseEvaluationCache | undefined;
+let angleCache: { yawAngle: number; pitchAngle: number; cosYaw: number; sinYaw: number; cosPitch: number; sinPitch: number } | undefined;
+
+function evaluationCacheFor(
+  field: CoherentPoseField,
+  cage: SemanticControlCage,
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number,
+  pitch: number
+): PoseEvaluationCache {
+  const cached = poseEvaluationCache;
+  if (
+    cached && cached.field === field && cached.cage === cage && cached.yawAngle === yawAngle &&
+    cached.pitchAngle === pitchAngle && cached.yaw === yaw && cached.pitch === pitch
+  ) return cached;
+  poseEvaluationCache = {
+    field,
+    cage,
+    yawAngle,
+    pitchAngle,
+    yaw,
+    pitch,
+    projectedFace: new Map(),
+    projectedSkull: new Map(),
+    surfacePivots: new WeakMap(),
+    cagePivots: new WeakMap()
+  };
+  return poseEvaluationCache;
+}
+
 function surfaceFor(field: CoherentPoseField, role: SemanticRole): Surface {
   if (
     field.kind === "head-surfaces-v2" &&
@@ -103,12 +147,19 @@ function projectedCoordinate(
   pitchAngle: number,
   perspective: number
 ): Point {
-  const cosYaw = Math.cos(yawAngle);
-  const sinYaw = Math.sin(yawAngle);
+  if (!angleCache || angleCache.yawAngle !== yawAngle || angleCache.pitchAngle !== pitchAngle) {
+    angleCache = {
+      yawAngle,
+      pitchAngle,
+      cosYaw: Math.cos(yawAngle),
+      sinYaw: Math.sin(yawAngle),
+      cosPitch: Math.cos(pitchAngle),
+      sinPitch: Math.sin(pitchAngle)
+    };
+  }
+  const { cosYaw, sinYaw, cosPitch, sinPitch } = angleCache;
   const yawX = nx * cosYaw + z * sinYaw;
   const yawZ = -nx * sinYaw + z * cosYaw;
-  const cosPitch = Math.cos(pitchAngle);
-  const sinPitch = Math.sin(pitchAngle);
   // Compose the two authored 2D pose fields without feeding yaw depth into
   // pitch. Using yawZ here made a diagonal pose bend the eye line and jaw as
   // if the face were twisted, even though the intended motion is a clean turn
@@ -213,6 +264,15 @@ function mappedBySemanticCage(
   yaw: number,
   pitch: number
 ): Point {
+  const cache = evaluationCacheFor(field, cage, yawAngle, pitchAngle, yaw, pitch);
+  const projected = region === "face" ? cache.projectedFace : cache.projectedSkull;
+  const targetFor = (id: SemanticCagePointId): Point => {
+    const existing = projected.get(id);
+    if (existing) return existing;
+    const target = projectedCagePoint(field, cage, id, region, yawAngle, pitchAngle, yaw, pitch);
+    projected.set(id, target);
+    return target;
+  };
   const triangles = region === "face" ? cage.faceTriangles : cage.skullTriangles;
   for (const [aId, bId, cId] of triangles) {
     const a = cage.points[aId].position;
@@ -220,9 +280,9 @@ function mappedBySemanticCage(
     const c = cage.points[cId].position;
     const weights = barycentric(base, a, b, c);
     if (!weights || Math.min(weights.a, weights.b, weights.c) < -0.015) continue;
-    const targetA = projectedCagePoint(field, cage, aId, region, yawAngle, pitchAngle, yaw, pitch);
-    const targetB = projectedCagePoint(field, cage, bId, region, yawAngle, pitchAngle, yaw, pitch);
-    const targetC = projectedCagePoint(field, cage, cId, region, yawAngle, pitchAngle, yaw, pitch);
+    const targetA = targetFor(aId);
+    const targetB = targetFor(bId);
+    const targetC = targetFor(cId);
     return {
       x: targetA.x * weights.a + targetB.x * weights.b + targetC.x * weights.c,
       y: targetA.y * weights.a + targetB.y * weights.b + targetC.y * weights.c
@@ -237,9 +297,9 @@ function mappedBySemanticCage(
   for (const id of ids) {
     const source = cage.points[id];
     const distanceSquared = (base.x - source.position.x) ** 2 + (base.y - source.position.y) ** 2;
-    if (distanceSquared < 1e-12) return projectedCagePoint(field, cage, id, region, yawAngle, pitchAngle, yaw, pitch);
+    if (distanceSquared < 1e-12) return targetFor(id);
     const weight = source.confidence / (distanceSquared + softening);
-    const target = projectedCagePoint(field, cage, id, region, yawAngle, pitchAngle, yaw, pitch);
+    const target = targetFor(id);
     dx += (target.x - source.position.x) * weight;
     dy += (target.y - source.position.y) * weight;
     total += weight;
@@ -561,7 +621,12 @@ export function applyCoherentPoseField(
   const pitchAngle = clamp(pitch, -1, 1) * field.maxPitchRadians;
   if (Math.abs(yawAngle) < 1e-9 && Math.abs(pitchAngle) < 1e-9) return { ...base };
   const surfacePosed = projectSurface(field, layer, base, yawAngle, pitchAngle);
-  const surfacePivot = projectSurface(field, layer, layer.pivot, yawAngle, pitchAngle);
+  const cache = semanticCage ? evaluationCacheFor(field, semanticCage, yawAngle, pitchAngle, yaw, pitch) : undefined;
+  let surfacePivot = cache?.surfacePivots.get(layer);
+  if (!surfacePivot) {
+    surfacePivot = projectSurface(field, layer, layer.pivot, yawAngle, pitchAngle);
+    cache?.surfacePivots.set(layer, surfacePivot);
+  }
   const region = semanticCage?.roleGroups.skull.includes(layer.role)
     ? "skull"
     : semanticCage?.roleGroups.face.includes(layer.role)
@@ -572,9 +637,11 @@ export function applyCoherentPoseField(
   const cagePosed = semanticCage && region
     ? mappedBySemanticCage(field, semanticCage, base, region, yawAngle, pitchAngle, yaw, pitch)
     : surfacePosed;
-  const cagePivot = semanticCage && region
-    ? mappedBySemanticCage(field, semanticCage, layer.pivot, region, yawAngle, pitchAngle, yaw, pitch)
-    : surfacePivot;
+  let cagePivot = semanticCage && region ? cache?.cagePivots.get(layer) : surfacePivot;
+  if (!cagePivot) {
+    cagePivot = mappedBySemanticCage(field, semanticCage!, layer.pivot, region!, yawAngle, pitchAngle, yaw, pitch);
+    cache?.cagePivots.set(layer, cagePivot);
+  }
   let posed = {
     x: surfacePosed.x + (cagePosed.x - surfacePosed.x) * cageBlend,
     y: surfacePosed.y + (cagePosed.y - surfacePosed.y) * cageBlend

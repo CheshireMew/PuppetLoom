@@ -1,5 +1,7 @@
 import { calibrationOverridesSchema } from "./schema.js";
 import { parsePuppetLoomProject } from "./project-format.js";
+import { remeshArtMesh } from "./art-mesh.js";
+import { makeGridMesh, reprojectMeshInfluences } from "./mesh.js";
 import type {
   CalibrationOverrides,
   CalibrationPatch,
@@ -22,10 +24,13 @@ function mergeIndexed<T>(base: Record<string, T> | undefined, patch: Record<stri
 }
 
 function mergeLayerOverride(base: LayerCalibrationOverride | undefined, patch: LayerCalibrationOverride): LayerCalibrationOverride {
-  const densityChanged = patch.meshDensity !== undefined
-    && (patch.meshDensity.rows !== base?.meshDensity?.rows || patch.meshDensity.cols !== base?.meshDensity?.cols);
-  const mergeBase = densityChanged && base
-    ? Object.fromEntries(Object.entries(base).filter(([key]) => key !== "meshPointDeltas" && key !== "vertexInfluences")) as LayerCalibrationOverride
+  const meshChanged = patch.mesh !== undefined || (patch.meshDensity !== undefined
+    && (patch.meshDensity.rows !== base?.meshDensity?.rows || patch.meshDensity.cols !== base?.meshDensity?.cols))
+    || (patch.meshDetail !== undefined && patch.meshDetail !== base?.meshDetail);
+  const mergeBase = meshChanged && base
+    ? Object.fromEntries(Object.entries(base).filter(([key]) => key !== "meshPointDeltas"
+      && key !== "vertexInfluences"
+      && (!patch.mesh || (key !== "meshDensity" && key !== "meshDetail")))) as LayerCalibrationOverride
     : base;
   const vertexChannels = new Set<MeshInfluenceChannel>([
     ...Object.keys(mergeBase?.vertexInfluences ?? {}) as MeshInfluenceChannel[],
@@ -105,46 +110,11 @@ function assertNormalized(point: Point, label: string): void {
   if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) throw new Error(`${label} 必须位于项目画布的 0..1 范围内。`);
 }
 
-function bilinear(values: number[] | undefined, rows: number, cols: number, u: number, v: number, fallback: number): number {
-  if (!values || values.length !== rows * cols) return fallback;
-  const x = u * (cols - 1);
-  const y = v * (rows - 1);
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const x1 = Math.min(cols - 1, x0 + 1);
-  const y1 = Math.min(rows - 1, y0 + 1);
-  const tx = x - x0;
-  const ty = y - y0;
-  const at = (row: number, col: number) => values[row * cols + col] ?? fallback;
-  const top = at(y0, x0) * (1 - tx) + at(y0, x1) * tx;
-  const bottom = at(y1, x0) * (1 - tx) + at(y1, x1) * tx;
-  return top * (1 - ty) + bottom * ty;
-}
-
 function meshAtDensity(layer: LayerBinding, rows: number, cols: number): MeshBinding {
-  const points: Point[] = [];
-  const uvs: Point[] = [];
-  const triangles: number[] = [];
-  for (let row = 0; row < rows; row += 1) {
-    const v = row / (rows - 1);
-    for (let col = 0; col < cols; col += 1) {
-      const u = col / (cols - 1);
-      points.push({ x: layer.bounds.x + layer.bounds.width * u, y: layer.bounds.y + layer.bounds.height * v });
-      uvs.push({ x: u, y: v });
-    }
-  }
-  for (let row = 0; row < rows - 1; row += 1) {
-    for (let col = 0; col < cols - 1; col += 1) {
-      const topLeft = row * cols + col;
-      const bottomLeft = (row + 1) * cols + col;
-      triangles.push(topLeft, bottomLeft, topLeft + 1, topLeft + 1, bottomLeft, bottomLeft + 1);
-    }
-  }
-  const influences = Object.fromEntries((["face", "skull", "head", "body", "gaze", "physics", "pin"] as const).map((channel) => {
-    const fallback = channel === "pin" ? 0 : 1;
-    return [channel, uvs.map(({ x, y }) => bilinear(layer.mesh.influences?.[channel], layer.mesh.rows, layer.mesh.cols, x, y, fallback))];
-  }));
-  return { rows, cols, points, uvs, triangles, influences };
+  if (layer.mesh.topology !== "grid") throw new Error(`${layer.sourceName} 使用 Alpha ArtMesh，不能按行列重建。`);
+  const rebuilt = makeGridMesh(layer.bounds, rows, cols);
+  rebuilt.influences = reprojectMeshInfluences(layer.mesh, rebuilt);
+  return rebuilt;
 }
 
 function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverride): LayerBinding {
@@ -168,7 +138,9 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
     next.secondaryAnchors = { ...(next.secondaryAnchors ?? {}), ...clone(override.secondaryAnchors) };
   }
   if (override.weights) next.weights = { ...next.weights, ...override.weights };
+  if (override.mesh) next.mesh = clone(override.mesh);
   if (override.meshDensity) next.mesh = meshAtDensity(next, override.meshDensity.rows, override.meshDensity.cols);
+  if (override.meshDetail !== undefined) next.mesh = remeshArtMesh(next.mesh, next.bounds, override.meshDetail);
   for (const [rawIndex, delta] of Object.entries(override.meshPointDeltas ?? {})) {
     const index = Number(rawIndex);
     const base = next.mesh.points[index];

@@ -200,8 +200,7 @@ function vertexInfluence(layer: LayerBinding, channel: "face" | "skull" | "head"
   return clamp(layer.mesh.influences?.[channel]?.[index] ?? fallback, 0, 1);
 }
 
-export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
-  state = resolveMotionState(project, state);
+function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
   const envelope = project.runtime.envelope;
   const faceWidth = Math.max(0.08, Math.abs((project.anchors.cheekLeft?.x ?? 0.6) - (project.anchors.cheekRight?.x ?? 0.4)) / 0.64);
   const faceHeight = Math.max(0.1, Math.abs((project.anchors.chin?.y ?? 0.5) - (project.anchors.forehead?.y ?? 0.25)) / 0.78);
@@ -376,10 +375,14 @@ export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, bas
   return point;
 }
 
+export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
+  return deformResolvedPoint(project, layer, base, resolveMotionState(project, state), vertexIndex);
+}
+
 export function deformedPoints(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): Point[] {
   const resolvedState = resolveMotionState(project, state);
   const authored = evaluateLayerAuthoring(project, layer, resolvedState);
-  return authored.points.map((point, index) => deformPoint(project, layer, point, resolvedState, index));
+  return authored.points.map((point, index) => deformResolvedPoint(project, layer, point, resolvedState, index));
 }
 
 export const neutralMotionState: MotionState = {

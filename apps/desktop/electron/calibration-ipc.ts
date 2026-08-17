@@ -2,18 +2,23 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   clearCalibrationDraft,
+  artMeshDetailForRole,
   compareProjectRevisions,
   listCalibrationSessions,
   loadBaseProject,
   loadCalibration,
   loadCalibrationDraft,
+  loadProjectTextureSources,
   loadProject,
+  makeAdaptiveMesh,
+  remeshArtMesh,
+  reprojectMeshInfluences,
   restoreCalibrationRevision,
   saveCalibrationDraft,
   saveCalibrationPatch,
   setCalibrationEvidenceStatus
 } from "@puppetloom/core";
-import type { CalibrationOverrides, CalibrationPatch, RevisionComparisonResult } from "@puppetloom/core";
+import type { CalibrationOverrides, CalibrationPatch, MeshBinding, RevisionComparisonResult } from "@puppetloom/core";
 import { ipcMain } from "electron";
 
 export class CalibrationIpcService {
@@ -59,6 +64,29 @@ export class CalibrationIpcService {
         sessions: await listCalibrationSessions(projectDirectory),
         draft: await loadCalibrationDraft(projectDirectory)
       };
+    });
+    ipcMain.handle("editor:generate-art-meshes", async (_event, directory: string) => {
+      const projectDirectory = resolve(directory);
+      const project = await loadProject(projectDirectory);
+      const sources = await loadProjectTextureSources(projectDirectory, project);
+      const replacements: Record<string, MeshBinding> = {};
+      for (const layer of project.layers) {
+        const detail = artMeshDetailForRole(layer.role);
+        const pixels = sources.get(layer.id);
+        const mesh = layer.mesh.topology === "art" && layer.mesh.art
+          ? remeshArtMesh(layer.mesh, layer.bounds, detail)
+          : pixels ? makeAdaptiveMesh({
+            bounds: layer.bounds,
+            pixels,
+            detail,
+            fallbackRows: layer.mesh.rows ?? 8,
+            fallbackCols: layer.mesh.cols ?? 8
+          }) : layer.mesh;
+        if (mesh.topology !== "art") continue;
+        mesh.influences = reprojectMeshInfluences(layer.mesh, mesh);
+        replacements[layer.id] = mesh;
+      }
+      return replacements;
     });
     ipcMain.handle("editor:save-draft", (_event, directory: string, baseRevision: number, overrides: CalibrationOverrides, label?: string) => {
       const projectDirectory = resolve(directory);

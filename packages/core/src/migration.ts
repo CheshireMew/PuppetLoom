@@ -28,6 +28,17 @@ function sameRect(left: Rect, right: Rect): boolean {
   return close(left.x, right.x) && close(left.y, right.y) && close(left.width, right.width) && close(left.height, right.height);
 }
 
+function sameMeshLayout(left: LayerBinding["mesh"], right: LayerBinding["mesh"]): boolean {
+  return left.topology === right.topology
+    && left.uvs.length === right.uvs.length
+    && left.triangles.length === right.triangles.length
+    && left.uvs.every((point, index) => {
+      const candidate = right.uvs[index];
+      return candidate !== undefined && close(point.x, candidate.x) && close(point.y, candidate.y);
+    })
+    && left.triangles.every((vertex, index) => vertex === right.triangles[index]);
+}
+
 async function fileSha256(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
 }
@@ -52,7 +63,7 @@ function remapParent(
 
 function conservativeOverride(override: LayerCalibrationOverride): LayerCalibrationOverride {
   const next: LayerCalibrationOverride = {};
-  for (const key of ["role", "side", "parentGroup", "parentLayerId", "order", "visible", "locked", "weights", "meshDensity"] as const) {
+  for (const key of ["role", "side", "parentGroup", "parentLayerId", "order", "visible", "locked", "weights"] as const) {
     if (override[key] !== undefined) Object.assign(next, { [key]: clone(override[key]) });
   }
   return next;
@@ -93,8 +104,7 @@ export async function migrateProject(options: MigrationOptions): Promise<Migrati
       idMapping.set(sourceLayer.id, target.id);
       const exact = sameCanvas
         && sameRect(sourceLayer.bounds, target.bounds)
-        && sourceLayer.mesh.rows === target.mesh.rows
-        && sourceLayer.mesh.cols === target.mesh.cols
+        && sameMeshLayout(sourceLayer.mesh, target.mesh)
         && await fileSha256(join(sourceDirectory, sourceLayer.texture)) === await fileSha256(join(outputDirectory, target.texture));
       statuses.set(sourceLayer.id, exact ? "exact" : "geometry-changed");
     } else statuses.set(sourceLayer.id, candidates.length === 0 ? "missing" : "ambiguous");

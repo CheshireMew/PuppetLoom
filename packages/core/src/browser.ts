@@ -2,6 +2,7 @@ export * from "./deform.js";
 export * from "./authoring.js";
 export * from "./calibration.js";
 export * from "./math.js";
+export * from "./mesh.js";
 export * from "./model.js";
 export * from "./pose-field.js";
 export * from "./render-contract.js";

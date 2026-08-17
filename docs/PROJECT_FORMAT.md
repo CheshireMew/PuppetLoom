@@ -1,12 +1,12 @@
 # PuppetLoom 项目格式
 
-项目是普通目录。`puppetloom.json` 的顶层 `version` 当前为 `3`；读取器仍兼容版本 1 和 2，并在内存中补齐 v3 的标准参数模型，不会为了读取旧项目而改写文件。旧文件的原始 SHA-256 继续作为校准基线，因此迁移不会使既有校准历史失联。读取器用严格结构验证必要字段，但不依赖输出目录名。
+项目是普通目录。`puppetloom.json` 的顶层 `version` 当前为 `4`；读取器仍兼容版本 1、2 和 3，并在内存中补齐标准参数模型与显式网格拓扑，不会为了读取旧项目而改写文件。旧文件的原始 SHA-256 继续作为校准基线，因此迁移不会使既有校准历史失联。读取器用严格结构验证必要字段，但不依赖输出目录名。
 
 ## 顶层字段
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 项目格式版本，当前为 `3` |
+| `version` | 项目格式版本，当前为 `4` |
 | `name` | 创建时指定的名称，默认使用 PSD 文件名 |
 | `canvas` | 原 PSD 画布像素尺寸 |
 | `source` | 原文件名、PSD SHA-256、相对路径，以及可选参考图路径和哈希 |
@@ -32,7 +32,7 @@
 
 `model.bindings` 把一个或两个参数绑定到图层或变形器。每个绑定使用一维线性或二维双线性关键形态网格，可保存稀疏图层顶点增量、网格变形器控制点增量、平移/旋转/缩放、透明度倍数和绘制顺序偏移。双参数绑定必须给出完整矩形坐标网格；点索引、参数范围和目标引用在 JSON 边界统一验证。
 
-`model.deformers` 支持旋转变形器和规则控制网变形器。图层通过 `deformerId` 挂到一个直接父变形器，变形器可通过 `parentId` 继续组成无环层级；求值顺序为图层关键形态、子变形器、父变形器，最后叠加旧项目已有的安全自动姿态。这样 v1/v2 项目迁移后保持原动作，新 authoring 结果又能进入同一 WebGL 与离线证据链。
+`model.deformers` 支持旋转变形器和规则控制网变形器。图层通过 `deformerId` 挂到一个直接父变形器，变形器可通过 `parentId` 继续组成无环层级；求值顺序为图层关键形态、子变形器、父变形器，最后叠加旧项目已有的安全自动姿态。这样 v1/v2/v3 项目迁移后保持原动作，新 authoring 结果又能进入同一 WebGL 与离线证据链。
 
 `model.expressions` 是命名参数预设；`model.behaviors` 用参数或表情轨道、严格递增的时间关键帧、循环和可选自动播放组织状态变化；`model.physics` 用输入/输出参数、响应、阻尼和缩放建立无环参数物理。实时控制器以固定顺序推进物理，离线 authoring 证据可按 `settleSeconds` 预运行同一物理后再截图。
 
@@ -43,7 +43,7 @@
 - 可稳定引用的 `id`、原名称 `sourceName` 和完整分组路径 `sourcePath`；
 - 语义 `role`、左右侧 `side`、原顺序 `order`、`opacity` 和 `blendMode`；
 - 标准化 `bounds` 与相对纹理路径 `texture`；
-- 变形中心 `pivot`、规则网格顶点/UV/三角形，以及可选的局部固定点 `secondaryAnchors`；
+- 变形中心 `pivot`、渲染网格顶点/UV/三角形，以及可选的局部固定点 `secondaryAnchors`；`mesh.topology` 为 `art` 时，`mesh.art` 还保存纹理尺寸、Alpha 阈值、细节尺度和由外轮廓/孔洞组成的可重建区域；`grid` 仅保留 `rows/cols`；
 - 可选的逐顶点 `mesh.influences`：`face`、`skull`、`head`、`body`、`gaze`、`physics` 和 `pin`。前两项分别调节语义脸部控制笼和头骨控制笼，随后四项调节整体头部、身体、视线和次级运动，`pin` 用于固定根部或必须保持连接的位置；
 - 头部、身体、视线和惯性的作用权重；
 - 所属头部或身体组、可选父图层 `parentLayerId`、可选 authoring 变形器 `deformerId`、可选的编辑锁定与运行可见性、虹膜可选的 `clipLayerId`，以及嘴部可选的 `mouthVariant`（`closed`、`slight` 或 `open`）。父图层和变形器层级不能指向自身、缺失节点或形成循环；运行绘制使用参数求值后的顺序和可见性。
@@ -75,7 +75,7 @@
 - `headSessionId` 是当前可达历史的唯一头指针；版本 1 旧项目没有该字段；
 - `overrides` 保存改变过的锚点、语义点、图层属性、稀疏网格位移、逐顶点作用权重和运行参数；AI authoring 修订在同一覆盖中保存完整当前 `model`，避免另建一套历史真源。
 
-未提交修改在 `calibration/draft.json` 中原子覆盖保存，并绑定基础项目哈希和当前 revision。正式校准提交后旧草稿会因 `baseRevision` 不匹配而自动失效，不需要在提交点之后再写第二份状态；用户明确放弃时才把草稿覆盖为空，始终不删除文件。改变网格密度会从中立网格重新生成顶点、双线性重采样全部作用权重，并主动退出旧顶点索引，避免把旧顶点修改误套到新网格。
+未提交修改在 `calibration/draft.json` 中原子覆盖保存，并绑定基础项目哈希和当前 revision。正式校准提交后旧草稿会因 `baseRevision` 不匹配而自动失效，不需要在提交点之后再写第二份状态；用户明确放弃时才把草稿覆盖为空，始终不删除文件。图层覆盖既可保存稀疏 `meshPointDeltas`，也可保存经过完整 `meshSchema` 校验的替换 `mesh`；后者用于从项目现有 PNG Alpha 非破坏式升级旧规则网格。改变 ArtMesh 细节尺度会从已保存的 Alpha 轮廓重新约束三角剖分，并按 UV 从旧三角形重投影全部作用权重；旧规则网格改变行列数时使用同一通用投影。两种重建都会主动退出旧顶点索引，避免把旧顶点修改误套到新网格。
 
 每个校准补丁必须包含调用者看到的 `baseRevision`。保存先取得 `calibration/write.lock`，重读当前版本，写入 `reports/calibration/<operation-id>/operation.json` 的 pending 状态，再生成完整证据和会话；只有全部成功后才原子切换 `calibration/current.json`。租约释放和失效租约都移动到 `calibration/locks/`，不删除。中断恢复只根据头指针把 pending 标为 succeeded 或 interrupted，不自动重放。每次保存都会创建 `calibration/sessions/<session-id>.json`，其中包含父会话、前后修订、补丁、修改前后覆盖、项目指纹和 `unreviewed/accepted/rejected` 证据状态。恢复旧修订也走同一事务并创建新修订。
 

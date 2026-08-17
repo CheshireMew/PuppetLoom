@@ -60,7 +60,7 @@ for (const layer of project.layers.filter((candidate) => inspectedRoles.has(cand
   layers.push({
     id: layer.id,
     role: layer.role,
-    mesh: `${layer.mesh.cols}x${layer.mesh.rows}`,
+    mesh: layer.mesh.topology === "art" ? `art@${layer.mesh.art?.detail ?? "?"}px` : `${layer.mesh.cols}x${layer.mesh.rows}`,
     physicsWeight: layer.weights.physics,
     anchorP20Pixels: Number((sorted[Math.floor((sorted.length - 1) * 0.2)] ?? 0).toFixed(3)),
     maximumPixels: Number((sorted.at(-1) ?? 0).toFixed(3)),

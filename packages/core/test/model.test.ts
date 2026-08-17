@@ -105,9 +105,14 @@ describe("AI authoring model", () => {
     const current = project();
     const { model: _model, ...legacy } = current;
     const migrated = parsePuppetLoomProject({ ...legacy, version: 2 });
-    expect(migrated.version).toBe(3);
+    expect(migrated.version).toBe(4);
     expect(migrated.model.parameters.find((parameter) => parameter.semantic === "head-yaw")).toBeDefined();
-    expect(migrated.layers).toEqual(current.layers);
+    expect(migrated.layers).toEqual(current.layers.map((layer) => ({ ...layer, mesh: { ...layer.mesh, topology: "grid" } })));
+
+    const authoredV3 = parsePuppetLoomProject(current);
+    expect(authoredV3.version).toBe(4);
+    expect(authoredV3.model).toEqual(current.model);
+    expect(authoredV3.layers[0]?.mesh.topology).toBe("grid");
   });
 
   it("rejects missing targets and incomplete two-axis grids at the JSON boundary", () => {

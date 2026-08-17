@@ -12,7 +12,7 @@ describe("project publication and verification boundary", () => {
     expect(result.outputDirectory).toBe(output);
     expect((await verifyProject(output)).valid).toBe(true);
     const document = JSON.parse(await readFile(resolve(output, "puppetloom.json"), "utf8")) as { version: number; model?: { parameters: unknown[]; expressions: unknown[]; physics: unknown[]; behaviors: unknown[] } };
-    expect(document.version).toBe(3);
+    expect(document.version).toBe(4);
     expect(document.model).toMatchObject({ expressions: [], physics: [], behaviors: [] });
     expect(document.model!.parameters.length).toBeGreaterThan(0);
     const operations = await readdir(resolve(output, "reports", "operations"));

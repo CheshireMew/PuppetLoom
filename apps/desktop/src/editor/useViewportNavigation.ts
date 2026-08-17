@@ -97,10 +97,10 @@ export function useViewportNavigation(aspectRatio: number): {
     setTransform({ zoom: 1, x: 0, y: 0 });
   }, []);
 
-  const zoomAt = useCallback((requestedZoom: number, clientX?: number, clientY?: number) => {
+  const zoomBy = useCallback((factor: number, clientX?: number, clientY?: number) => {
     setTransform((current) => {
       const viewport = viewportRef.current;
-      const zoom = clamp(requestedZoom, MIN_ZOOM, MAX_ZOOM);
+      const zoom = clamp(current.zoom * factor, MIN_ZOOM, MAX_ZOOM);
       if (!viewport || zoom === current.zoom) return current;
       const rect = viewport.getBoundingClientRect();
       const anchorX = (clientX ?? rect.left + rect.width / 2) - (rect.left + rect.width / 2);
@@ -115,12 +115,12 @@ export function useViewportNavigation(aspectRatio: number): {
   }, [clampTransform]);
 
   const zoomIn = useCallback(() => {
-    setTransform((current) => clampTransform({ ...current, zoom: clamp(current.zoom * 1.25, MIN_ZOOM, MAX_ZOOM) }));
-  }, [clampTransform]);
+    zoomBy(1.25);
+  }, [zoomBy]);
 
   const zoomOut = useCallback(() => {
-    setTransform((current) => clampTransform({ ...current, zoom: clamp(current.zoom / 1.25, MIN_ZOOM, MAX_ZOOM) }));
-  }, [clampTransform]);
+    zoomBy(1 / 1.25);
+  }, [zoomBy]);
 
   useEffect(() => {
     function keyDown(event: KeyboardEvent): void {
@@ -175,8 +175,8 @@ export function useViewportNavigation(aspectRatio: number): {
   const onWheel = useCallback<React.WheelEventHandler<HTMLDivElement>>((event) => {
     event.preventDefault();
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.currentTarget.clientHeight : 1;
-    zoomAt(transform.zoom * Math.exp(-event.deltaY * unit * 0.0015), event.clientX, event.clientY);
-  }, [transform.zoom, zoomAt]);
+    zoomBy(Math.exp(-event.deltaY * unit * 0.0015), event.clientX, event.clientY);
+  }, [zoomBy]);
 
   const onPointerDownCapture = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     const forcedPan = event.button === 1 || event.button === 0 && spaceDown.current;
