@@ -1,0 +1,4 @@
+interface:
+  display_name: "Live2D Puppet"
+  short_description: "让 Agent 用 PuppetLoom 制作、检查和校准角色"
+  default_prompt: "Use $live2d-puppet as an external Codex workflow: operate PuppetLoom through its CLI, run agent plan/apply for the whole model or the requested part, inspect every exact-revision comparison and motion artifact, and use the official Cubism bridge only when requested."

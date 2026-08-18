@@ -26,6 +26,7 @@ import {
   validatePose
 } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
+import { ArrowLeft, ExternalLink, Minimize2, Pause, Play, Redo2, RotateCcw, Save, Undo2 } from "lucide-react";
 import type { DesktopCalibrationResponse, EditorWorkspace as EditorWorkspaceData } from "../electron/global.js";
 import {
   EditorInspectorPanel,
@@ -829,7 +830,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     }
   }
 
-  if (!workspace || !project) return <main className="editor-loading"><button onClick={onBack}>返回</button><p>{error || "正在加载编辑器…"}</p></main>;
+  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />返回</button><p>{error || "正在加载编辑器…"}</p></main>;
 
   const sessions = [...workspace.sessions].reverse();
   const selectedTuning = { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[secondaryPart] ?? {}) };
@@ -842,17 +843,17 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   return (
     <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
-      {focusedPreview && <button className="exit-focus-preview" onClick={() => setFocusedPreview(false)}>退出沉浸预览</button>}
+      {focusedPreview && <button className="exit-focus-preview icon-only" aria-label="退出沉浸预览" title="退出沉浸预览" onClick={() => setFocusedPreview(false)}><Minimize2 aria-hidden="true" /></button>}
       <header className="editor-header">
-        <button onClick={() => void leaveEditor()}>返回主页</button>
+        <button className="with-icon" onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" />返回主页</button>
         <div><h1>{project.name}</h1><p>revision {workspace.calibration.revision} · {project.rigLevel} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
         <div className="editor-history-actions">
           <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
-          <button aria-keyshortcuts="Control+Z Meta+Z" disabled={undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）">撤销</button>
-          <button aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）">重做</button>
-          <button onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={busy}>恢复全部自动绑定</button>
-          <button className="header-save" disabled={!hasPending || busy} onClick={() => void save()}>{busy ? "正在验证…" : "保存更改"}</button>
-          <button onClick={() => void launchViewer()}>运行角色窗口</button>
+          <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
+          <button className="with-icon" onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={busy}><RotateCcw aria-hidden="true" />恢复全部自动绑定</button>
+          <button className="header-save with-icon" disabled={!hasPending || busy} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存更改"}</button>
+          <button className="with-icon" onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行角色窗口</button>
         </div>
       </header>
 
@@ -878,8 +879,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           const corrected = id === "neutral" ? neutralCorrectionCount > 0 : (correctedSamples.get(key) ?? 0) > 0;
           const check = poseChecks[id];
           return <button className={`${!autonomous && poseId === id ? "active" : ""} ${check?.passed === false ? "pose-warning" : ""}`} title={`${item.label}${corrected ? "已有人工微调" : "尚未微调"}${check?.passed === false ? `；${check.issues[0]?.message ?? "安全检查未通过"}` : ""}`} key={id} onClick={() => selectPose(id)}>{item.label}{corrected ? " ·" : ""}{check?.passed === false ? " !" : ""}</button>;
-        })}<button className={autonomous ? "active" : ""} onClick={() => setAutonomous((value) => !value)}>{autonomous ? "暂停动作" : "自主预览"}</button></div></>
-          : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查中立、左右、上下、闭眼和张嘴。"}</small></div><div className="pose-tabs"><button onClick={() => selectPose("neutral")}>恢复中立</button><button className={autonomous ? "active" : ""} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
+        })}<button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => setAutonomous((value) => !value)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停动作" : "自主预览"}</button></div></>
+          : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查中立、左右、上下、闭眼和张嘴。"}</small></div><div className="pose-tabs"><button className="with-icon" onClick={() => selectPose("neutral")}><RotateCcw aria-hidden="true" />恢复中立</button><button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
       </section>
 
       <section className={`editor-workspace preview-background-${previewBackground}`}>

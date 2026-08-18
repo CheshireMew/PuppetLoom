@@ -42,6 +42,107 @@ describe("CLI contract", () => {
     expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, exitCode: 3 });
   });
 
+  it("returns machine-readable exit 2 for an invalid Agent scope", async () => {
+    const result = await cli(["agent", "plan", "--project", cliProject, "--scope", "hair-ish", "--json"]);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      ok: false,
+      exitCode: 2,
+      error: expect.stringContaining("不支持的 Agent 范围")
+    });
+  });
+
+  it("returns machine-readable exit 2 when an Agent command misses a required option", async () => {
+    const result = await cli(["agent", "plan", "--scope", "whole", "--json"]);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      ok: false,
+      exitCode: 2,
+      error: expect.stringContaining("--project")
+    });
+  });
+
+  it("lets an external Agent generate, edit and validate a revision-pinned rig specification", async () => {
+    const generated = await cli(["agent", "specification", "--project", cliProject, "--scope", "frontHair", "--json"]);
+    expect(generated.code).toBe(0);
+    const specification = JSON.parse(generated.stdout) as {
+      kind: string;
+      baseRevision: number;
+      goal: string;
+      parts: Array<{ part: string; rationale: string[]; intent: { amplitude: number; deformationScale: number } }>;
+    };
+    expect(specification).toMatchObject({ kind: "puppetloom-rig-spec", scope: "selected", baseRevision: 0, parts: [{ part: "frontHair" }] });
+    const files = artifactPath(`cli-agent-spec-${process.pid}-${Date.now()}`);
+    await mkdir(files, { recursive: true });
+    const rawTemplatePath = resolve(files, "unreviewed-template.json");
+    await writeFile(rawTemplatePath, JSON.stringify(specification));
+    const rawTemplatePlan = await cli(["agent", "plan", "--project", cliProject, "--spec", rawTemplatePath, "--json"]);
+    expect(rawTemplatePlan.code).toBe(2);
+    expect(JSON.parse(rawTemplatePlan.stderr).error).toContain("未审查模板");
+
+    specification.goal = "外部 Agent 看图后决定让前发更克制";
+    specification.parts[0]!.rationale = ["连续转头证据中发梢摆幅偏大。"];
+    specification.parts[0]!.intent.amplitude = 0.65;
+    specification.parts[0]!.intent.deformationScale = 0.7;
+    const path = resolve(files, "rig-spec.json");
+    await writeFile(path, JSON.stringify(specification));
+    const planned = await cli(["agent", "plan", "--project", cliProject, "--spec", path, "--json"]);
+    expect(planned.code).toBe(0);
+    expect(JSON.parse(planned.stdout)).toMatchObject({
+      inputMode: "structured-specification",
+      instruction: specification.goal,
+      specification: { parts: [{ intent: { amplitude: 0.65, deformationScale: 0.7 } }] }
+    });
+
+    const mixed = await cli(["agent", "plan", "--project", cliProject, "--spec", path, "--scope", "frontHair", "--json"]);
+    expect(mixed.code).toBe(2);
+    expect(JSON.parse(mixed.stderr).error).toContain("不能再传");
+  }, 120_000);
+
+  it("keeps every whole-model responsibility visible and blocks omitted available parts", async () => {
+    const generated = await cli(["agent", "specification", "--project", cliProject, "--scope", "whole", "--json"]);
+    expect(generated.code).toBe(0);
+    const specification = JSON.parse(generated.stdout) as {
+      scope: "whole";
+      goal: string;
+      parts: Array<{ part: string; rationale: string[] }>;
+    };
+    expect(specification.scope).toBe("whole");
+    expect(specification.parts.length).toBeGreaterThan(0);
+    specification.goal = "外部 Agent 已查看整模基线，并逐项确认现有部位的制作意图";
+    for (const part of specification.parts) part.rationale = [`已检查 ${part.part} 的基线和连续运动，需要按本规格制作。`];
+
+    const files = artifactPath(`cli-whole-spec-${process.pid}-${Date.now()}`);
+    await mkdir(files, { recursive: true });
+    const path = resolve(files, "whole-rig-spec.json");
+    await writeFile(path, JSON.stringify(specification));
+    const planned = await cli(["agent", "plan", "--project", cliProject, "--spec", path, "--json"]);
+    expect(planned.code).toBe(0);
+    const plan = JSON.parse(planned.stdout) as {
+      scope: string;
+      requestedParts: string[];
+      parts: Array<{ part: string; status: string; blockers: string[] }>;
+      canApply: boolean;
+    };
+    expect(plan.scope).toBe("whole");
+    expect(plan.requestedParts).toEqual([
+      "headFace", "eyes", "mouth", "frontHair", "backHair", "ahoge", "ears",
+      "headwear", "body", "topCloth", "skirt", "tail", "accessory"
+    ]);
+    expect(plan.parts.map((part) => part.part)).toEqual(plan.requestedParts);
+
+    const omitted = { ...specification, parts: specification.parts.slice(1) };
+    const omittedPath = resolve(files, "whole-rig-spec-omitted.json");
+    await writeFile(omittedPath, JSON.stringify(omitted));
+    const omittedPlan = await cli(["agent", "plan", "--project", cliProject, "--spec", omittedPath, "--json"]);
+    expect(omittedPlan.code).toBe(0);
+    const omission = JSON.parse(omittedPlan.stdout) as { canApply: boolean; parts: Array<{ status: string; blockers: string[] }> };
+    expect(omission.canApply).toBe(false);
+    expect(omission.parts.some((part) => part.status === "blocked" && part.blockers.some((blocker) => blocker.includes("整模规格漏掉")))).toBe(true);
+  }, 120_000);
+
   it("creates and verifies a project through the public commands", async () => {
     const result = await cli(["verify", "--project", cliProject, "--json"]);
     expect(result.code).toBe(0);
@@ -89,6 +190,29 @@ describe("CLI contract", () => {
     const calibrated = await cli(["calibrate", "--project", cliProject, "--patch", patch, "--json"]);
     expect(calibrated.code).toBe(0);
     expect(JSON.parse(calibrated.stdout)).toMatchObject({ ok: true, revision: 1 });
+    const history = await cli(["history", "--project", cliProject, "--json"]);
+    expect(history.code).toBe(0);
+    const historySummary = JSON.parse(history.stdout) as {
+      currentRevision: number;
+      headSessionId: string;
+      sessions: Array<Record<string, unknown>>;
+    };
+    expect(historySummary.currentRevision).toBe(1);
+    expect(historySummary.sessions).toHaveLength(1);
+    expect(historySummary.sessions[0]).toMatchObject({
+      id: historySummary.headSessionId,
+      fromRevision: 0,
+      toRevision: 1,
+      label: "CLI 稀疏网格契约校准"
+    });
+    expect(historySummary.sessions[0]).not.toHaveProperty("patch");
+    expect(historySummary.sessions[0]).not.toHaveProperty("afterOverrides");
+
+    const fullHistory = await cli(["history", "--project", cliProject, "--full", "--json"]);
+    expect(fullHistory.code).toBe(0);
+    const completeSession = (JSON.parse(fullHistory.stdout) as { sessions: Array<Record<string, unknown>> }).sessions[0]!;
+    expect(completeSession).toHaveProperty("patch");
+    expect(completeSession).toHaveProperty("afterOverrides");
     const rendered = await cli(["render", "--project", cliProject, "--suite", "poses", "--output", resolve(files, "render"), "--json"]);
     expect(rendered.code).toBe(0);
     expect((await stat(resolve(files, "render", "pose-sheet.png"))).isFile()).toBe(true);

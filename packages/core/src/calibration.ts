@@ -1,6 +1,7 @@
 import { calibrationOverridesSchema } from "./schema.js";
 import { parsePuppetLoomProject } from "./project-format.js";
 import { remeshArtMesh } from "./art-mesh.js";
+import { frontHairPhysicsMask } from "./front-hair-geometry.js";
 import { makeGridMesh, reprojectMeshInfluences } from "./mesh.js";
 import type {
   CalibrationOverrides,
@@ -140,7 +141,12 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
   if (override.weights) next.weights = { ...next.weights, ...override.weights };
   if (override.mesh) next.mesh = clone(override.mesh);
   if (override.meshDensity) next.mesh = meshAtDensity(next, override.meshDensity.rows, override.meshDensity.cols);
-  if (override.meshDetail !== undefined) next.mesh = remeshArtMesh(next.mesh, next.bounds, override.meshDetail);
+  if (override.meshDetail !== undefined) {
+    next.mesh = remeshArtMesh(next.mesh, next.bounds, override.meshDetail);
+    if (next.role === "frontHair" && next.mesh.influences) {
+      next.mesh.influences.physics = next.mesh.points.map((point) => frontHairPhysicsMask(next, point));
+    }
+  }
   for (const [rawIndex, delta] of Object.entries(override.meshPointDeltas ?? {})) {
     const index = Number(rawIndex);
     const base = next.mesh.points[index];
@@ -204,6 +210,10 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
     }
   }
   if (overrides.runtime?.envelope) next.runtime.envelope = { ...next.runtime.envelope, ...overrides.runtime.envelope };
+  if (overrides.runtime?.poseField) {
+    if (!next.runtime.poseField) throw new Error("当前项目没有可校准的统一头部姿态场。");
+    next.runtime.poseField = { ...next.runtime.poseField, ...overrides.runtime.poseField };
+  }
   if (overrides.runtime?.motionTuning) {
     next.runtime.motionTuning = {
       amplitude: 1,

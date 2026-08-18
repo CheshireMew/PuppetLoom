@@ -1,7 +1,7 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { executeManagedRun, startManagedRun } from "../scripts/lib/managed-run.mjs";
+import { cleanupManagedArtifacts, executeManagedRun, startManagedRun } from "../scripts/lib/managed-run.mjs";
 import { artifactPath } from "./support/artifacts.js";
 
 describe("managed runtime artifacts", () => {
@@ -63,5 +63,47 @@ describe("managed runtime artifacts", () => {
       error: "controlled failure",
       cleanupCandidates: ["partial.bin"]
     });
+  });
+
+  it("keeps independent runs while identical evidence shares one NTFS file", async () => {
+    const root = artifactPath("managed-run-content-reuse");
+    const options = { category: "reuse", producer: "managed-run.test", root, estimatedBytes: 1024 ** 2, maximumManagedBytes: 32 * 1024 ** 2, minimumFreeBytes: 1, reuse };
+    const first = await startManagedRun(options);
+    await writeFile(first.path("same.bin"), Buffer.alloc(64 * 1024, 9));
+    await first.finish("succeeded");
+    const second = await startManagedRun(options);
+    await writeFile(second.path("same.bin"), Buffer.alloc(64 * 1024, 9));
+    await second.finish("succeeded");
+
+    const [firstStat, secondStat] = await Promise.all([
+      stat(first.path("same.bin"), { bigint: true }),
+      stat(second.path("same.bin"), { bigint: true })
+    ]);
+    expect(firstStat.dev).toBe(secondStat.dev);
+    expect(firstStat.ino).toBe(secondStat.ino);
+    const manifest = JSON.parse(await readFile(second.manifestPath, "utf8")) as { storageReuse: { mode: string; objectsReused: number; reusedLogicalBytes: number }; reusedObjects: Array<{ path: string }> };
+    expect(manifest.storageReuse).toMatchObject({ mode: "sha256-hardlink-v1", objectsReused: 1, reusedLogicalBytes: 64 * 1024 });
+    expect(manifest.reusedObjects).toEqual([{ path: "same.bin", bytes: 64 * 1024, sha256: expect.any(String), object: expect.any(String) }]);
+  });
+
+  it("previews retention cleanup, applies only the older run, and preserves reusable objects", async () => {
+    const root = artifactPath("managed-run-cleanup");
+    const options = { category: "cleanup", producer: "managed-run.test", root, estimatedBytes: 1024 ** 2, maximumManagedBytes: 32 * 1024 ** 2, minimumFreeBytes: 1, reuse };
+    const first = await startManagedRun(options);
+    await writeFile(first.path("same.bin"), Buffer.alloc(4096, 4));
+    await first.finish("succeeded");
+    const second = await startManagedRun(options);
+    await writeFile(second.path("same.bin"), Buffer.alloc(4096, 4));
+    await second.finish("succeeded");
+
+    const preview = await cleanupManagedArtifacts({ root, apply: false, includeLegacy: false, keepSucceeded: 1, keepFailed: 1 });
+    expect(preview.applied).toBe(false);
+    expect(preview.candidates).toEqual([first.directory]);
+    expect(await readFile(first.path("same.bin"))).toHaveLength(4096);
+
+    const applied = await cleanupManagedArtifacts({ root, apply: true, includeLegacy: false, keepSucceeded: 1, keepFailed: 1 });
+    expect(applied.applied).toBe(true);
+    await expect(access(first.directory)).rejects.toThrow();
+    expect(await readFile(second.path("same.bin"))).toHaveLength(4096);
   });
 });

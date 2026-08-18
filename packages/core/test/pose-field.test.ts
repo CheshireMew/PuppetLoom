@@ -120,14 +120,21 @@ describe("coherent semantic pose field", () => {
     }
   });
 
-  it("bends the hair contour on the skull surface instead of translating it rigidly", () => {
+  it("deforms the painted scalp on the skull surface without secondary drift", () => {
     const hair = layer("frontHair");
     const left = { x: 0.36, y: 0.22 };
     const right = { x: 0.64, y: 0.22 };
-    const posedLeft = applyCoherentPoseField(field, hair, left, 0.8, 0.15);
-    const posedRight = applyCoherentPoseField(field, hair, right, 0.8, 0.15);
-    expect(posedRight.x - posedLeft.x).not.toBeCloseTo(right.x - left.x, 4);
-    expect(posedLeft.y).not.toBeCloseTo(left.y, 4);
+    const widthAt = (yaw: number) => {
+      const posedLeft = applyCoherentPoseField(field, hair, left, yaw, 0.15);
+      const posedRight = applyCoherentPoseField(field, hair, right, yaw, 0.15);
+      return { width: posedRight.x - posedLeft.x, center: (posedRight.x + posedLeft.x) * 0.5 };
+    };
+    const neutral = widthAt(0);
+    const rightTurn = widthAt(0.8);
+    const leftTurn = widthAt(-0.8);
+    expect(rightTurn.width).toBeLessThan(neutral.width);
+    expect(rightTurn.width).toBeCloseTo(leftTurn.width, 8);
+    expect(rightTurn.center - neutral.center).toBeCloseTo(neutral.center - leftTurn.center, 8);
   });
 
   it("keeps the near face-framing hair wider than the far side and mirrors the relationship", () => {
@@ -149,7 +156,7 @@ describe("coherent semantic pose field", () => {
     expect(rightTurn.right).toBeCloseTo(leftTurn.left, 6);
   });
 
-  it("compresses visible crown height looking up and expands it looking down", () => {
+  it("applies bounded up/down skull perspective to the painted scalp", () => {
     const hair = layer("frontHair");
     const top = { x: 0.5, y: 0.12 };
     const forehead = { x: 0.5, y: 0.23 };
@@ -158,8 +165,11 @@ describe("coherent semantic pose field", () => {
       const posedForehead = applyCoherentPoseField(field, hair, forehead, 0, pitch);
       return posedForehead.y - posedTop.y;
     };
-    expect(crownHeight(-0.8)).toBeLessThan(crownHeight(0));
-    expect(crownHeight(0.8)).toBeGreaterThan(crownHeight(0));
+    const neutral = crownHeight(0);
+    expect(crownHeight(-0.8)).toBeLessThan(neutral);
+    expect(crownHeight(0.8)).toBeGreaterThan(neutral);
+    expect(crownHeight(-0.8)).toBeGreaterThan(neutral * 0.9);
+    expect(crownHeight(0.8)).toBeLessThan(neutral * 1.1);
   });
 
   it("preserves ahoge length through combined head poses", () => {
@@ -178,7 +188,7 @@ describe("coherent semantic pose field", () => {
     }
   });
 
-  it("leans the ahoge around its attached root instead of translating it as a floating piece", () => {
+  it("keeps the ahoge rigid with the painted scalp during primary head turns", () => {
     const hair = layer("frontHair");
     hair.secondaryAnchors = {
       ahogeRoot: { x: 0.5, y: 0.18 },
@@ -191,8 +201,8 @@ describe("coherent semantic pose field", () => {
     const rootLeft = applyCoherentPoseField(field, hair, root, -0.85, 0);
     const tipLeft = applyCoherentPoseField(field, hair, tip, -0.85, 0);
 
-    expect(tipRight.x - rootRight.x).not.toBeCloseTo(tipLeft.x - rootLeft.x, 6);
-    expect(tipRight.y - rootRight.y).not.toBeCloseTo(tipLeft.y - rootLeft.y, 6);
+    expect(tipRight.x - rootRight.x).toBeCloseTo(tipLeft.x - rootLeft.x, 8);
+    expect(tipRight.y - rootRight.y).toBeCloseTo(tipLeft.y - rootLeft.y, 8);
   });
 
   it("makes the near half of crown headwear larger and the far half smaller", () => {

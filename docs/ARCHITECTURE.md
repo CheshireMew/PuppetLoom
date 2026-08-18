@@ -15,8 +15,8 @@ PSD + 可选原图
       ├── calibration/sessions/*.json（修订与用户判断）
       └── textures
                          │
-                         ├── CLI describe / author / render / calibrate / compare / export
-                         ├── Electron 校准编辑器与 authoring 检查面板
+                         ├── 外部 Agent CLI：agent specification → plan/apply --spec / describe / author / render / compare
+                         ├── Electron 查看、播放与人工校准界面（不承载 Agent 编排）
                          ▼
                @puppetloom/renderer
           WebGL2 + 统一姿态场 + 确定性动作
@@ -64,11 +64,11 @@ PSD + 可选原图
 
 ### `apps/cli`
 
-CLI 是 Agent 和自动化入口。命令只调用 `core`：`describe` 读取稳定的控制点、图层和网格 ID；`author inspect/apply` 读取并事务修改参数图；`render` 生成视觉证据；`calibrate` 保存经过安全检查的稀疏修改；`compare/history/restore/evidence` 负责审计与用户确认；`export` 发布验证后的目录式副本；`cubism` 分析兼容范围、连接 Editor、生成侧车并最终验证官方运行时目录；`edit/play` 启动同一 Electron 应用。错误在最外层统一映射为退出码，JSON 错误写到标准错误。
+CLI 是 Codex 一类外部 Agent 和自动化系统的唯一编排入口。命令只调用 `core`：`agent specification` 为当前 revision 生成明确的数值规格模板，外部 Agent 负责结合自然语言与画面填写它；顶层 `agent plan/apply --spec` 只验证并确定性执行规格，依次调用头脸/表情、前发和次级运动制作器。计划阶段只读，执行阶段让每个存在的部位形成独立可恢复 revision、局部前后对比和连续运动证据，最后重新 `verifyProject` 并汇总 `completed/not-present/needs-assets/blocked`、`verification` 与总阻断项。旧 `--instruction/--scope` 只为调用兼容保留，不承担正式的语言理解和审美判断。`describe` 读取稳定的控制点、图层和网格 ID；`author inspect/apply` 读取并事务修改参数图；`render` 生成视觉证据；`calibrate` 保存经过安全检查的稀疏修改；`compare/history/restore/evidence` 负责审计与用户确认；`export` 发布验证后的目录式副本；`cubism` 分析兼容范围、连接 Editor、生成侧车并最终验证官方运行时目录；`edit/play` 启动同一 Electron 应用。错误在最外层统一映射为退出码，JSON 错误写到标准错误。
 
 ### `apps/desktop`
 
-Electron 主进程只编排应用和窗口生命周期。创建器与编辑器由同一个显式 `frame: false` 的控制窗口承载；主进程拥有最小化、最大化、还原、关闭和实际窗口状态，预加载层只暴露受限的窗口外壳 IPC，React 的 `WindowTitleBar` 负责呈现和发起动作。关闭动作仍进入 BrowserWindow 的正常 `close` 流程，因此编辑器原有的草稿刷新拦截不会被绕过。`project-ipc.ts` 封装文件对话框、项目发布、最近项目和受目录边界约束的资源读取；`calibration-ipc.ts` 封装编辑器 IPC、草稿串行化和证据读取，实际持久事务只由 `core` 执行。预加载脚本只暴露明确 IPC，React 界面不含直接文件系统权限；草稿自动保存和关窗刷新集中在 `useEditorDraftPersistence`，`EditorPresentation` 把图层树、画布覆盖层、authoring 检查、证据预览、属性与历史面板保持为无持久化职责的展示组件，`EditorWorkspace` 只编排编辑状态和操作。编辑器让用户在真实 WebGL 合成上用指针或键盘调整语义控制点、身体锚点、图层轴心、次级锚点与网格顶点，并只读核对 AI 写入的参数、绑定、变形器、表情、物理和行为。渲染层通过 `updateProject` 即时预览，不重复上传纹理。角色窗口以 20 Hz 读取光标目标，实时动作在 60 Hz 内部阻尼补间；暂停时播放时钟扣除停顿时长，恢复不会跳相位。
+Electron 主进程只编排应用和窗口生命周期，不接收自然语言任务，也不运行 Agent 计划或执行。创建器与编辑器由同一个显式 `frame: false` 的控制窗口承载；主进程拥有最小化、最大化、还原、关闭和实际窗口状态，预加载层只暴露受限的窗口外壳 IPC，React 的 `WindowTitleBar` 负责呈现和发起动作。关闭动作仍进入 BrowserWindow 的正常 `close` 流程，因此编辑器原有的草稿刷新拦截不会被绕过。`project-ipc.ts` 封装文件对话框、项目发布、最近项目和受目录边界约束的资源读取；`calibration-ipc.ts` 封装编辑器 IPC、草稿串行化和证据读取，实际持久事务只由 `core` 执行。预加载脚本只暴露明确 IPC，React 界面不含直接文件系统权限；草稿自动保存和关窗刷新集中在 `useEditorDraftPersistence`，`EditorPresentation` 把图层树、画布覆盖层、authoring 检查、证据预览、属性与历史面板保持为无持久化职责的展示组件，`EditorWorkspace` 只编排编辑状态和操作。编辑器让用户在真实 WebGL 合成上用指针或键盘调整语义控制点、身体锚点、图层轴心、次级锚点与网格顶点，并只读核对外部 Agent 写入的参数、绑定、变形器、表情、物理和行为。渲染层通过 `updateProject` 即时预览，不重复上传纹理。角色窗口以 20 Hz 读取光标目标，实时动作在 60 Hz 内部阻尼补间；暂停时播放时钟扣除停顿时长，恢复不会跳相位。
 
 `puppetloom.json` 始终保留可复现的自动绑定基线。创建器先在同级 pending 目录生成、强验证，再以目录移动作为发布点；目标原先为空时也先移动到操作归档，不删除。`calibration/current.json` 只记录偏离基线的内容和唯一历史头；`loadProject` 返回基线与覆盖合成结果。稀疏点位、权重和运行参数之外，校准层也允许保存完整替换网格，用于把旧项目从矩形网格非破坏式升级为 Alpha ArtMesh；替换仍经过同一 schema、安全姿态和视觉证据边界。校准先写 pending 操作、生成并校验证据、写不可达会话，最后原子切换当前头。这样恢复自动绑定不需要猜测旧数值，并发和中断也不会形成两个“当前版本”。用户在界面中的一次保存与 Agent 通过 CLI 的一次修改进入同一修订链，接受或拒绝状态记录在会话中，但单个角色的接受记录不会自动变成所有角色的通用规则。
 

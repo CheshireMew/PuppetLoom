@@ -13,7 +13,7 @@ import type {
   SemanticRole,
   Side
 } from "@puppetloom/core";
-import { Eye, EyeOff, Lock, LockOpen, ScanEye } from "lucide-react";
+import { ArrowDown, ArrowUp, Ban, Check, Eye, EyeOff, Lock, LockOpen, RotateCcw, Save, Scan, ScanEye, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useViewportNavigation } from "./useViewportNavigation.js";
 
 export type EditMode = "semantic" | "anchors" | "layer" | "mesh";
@@ -501,10 +501,10 @@ export function EditorViewportPanel({
           </svg>}
         </div>
         <div className="viewport-navigation" aria-label="视图缩放控制">
-          <button aria-label="缩小视图" title="缩小（-）" onClick={navigation.zoomOut}>−</button>
+          <button className="icon-only" aria-label="缩小视图" title="缩小（-）" onClick={navigation.zoomOut}><ZoomOut aria-hidden="true" /></button>
           <output aria-label="当前缩放比例">{navigation.zoomPercent}%</output>
-          <button aria-label="放大视图" title="放大（+）" onClick={navigation.zoomIn}>+</button>
-          <button className="fit-view" onClick={navigation.fit} title="适配窗口（0）">适配</button>
+          <button className="icon-only" aria-label="放大视图" title="放大（+）" onClick={navigation.zoomIn}><ZoomIn aria-hidden="true" /></button>
+          <button className="fit-view icon-only" aria-label="适配" onClick={navigation.fit} title="适配窗口（0）"><Scan aria-hidden="true" /></button>
         </div>
       </div>
       <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? selectedVertices.length > 1 ? `已选择 ${selectedVertices.length} 个点；拖动任意一个黄色节点即可整体移动。单击空白取消选择，Shift+拖动框选更多节点，Shift+单击可增减单点。` : "鼠标靠近节点会自动高亮，按下即可直接拖动。单击空白取消选择；按住 Shift 拖动可框选，Shift+单击可增减单点。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
@@ -612,7 +612,7 @@ export function EditorInspectorPanel({
         <label>侧别<select disabled={locked} value={selectedLayer.side} onChange={(event) => onLayerProperty({ side: event.target.value as Side })}><option value="left">角色左侧</option><option value="right">角色右侧</option><option value="center">中间 / 整体</option></select></label>
         <label>运动归属<select disabled={locked} value={selectedLayer.parentGroup} onChange={(event) => onLayerProperty({ parentGroup: event.target.value as LayerBinding["parentGroup"] })}><option value="head">头部</option><option value="body">身体</option><option value="root">根节点</option></select></label>
         <label>父图层<select disabled={locked} value={selectedLayer.parentLayerId ?? ""} onChange={(event) => onLayerProperty({ parentLayerId: event.target.value || null })}><option value="">无父图层</option>{project.layers.filter((layer) => canUseAsParent(selectedLayer.id, layer, layerMap)).map((layer) => <option key={layer.id} value={layer.id}>{layer.sourceName}</option>)}</select></label>
-        <div className="order-row"><span>绘制顺序 #{selectedLayer.order}</span><button disabled={locked} onClick={() => onMoveLayer(-1)}>向后</button><button disabled={locked} onClick={() => onMoveLayer(1)}>向前</button></div>
+        <div className="order-row"><span>绘制顺序 #{selectedLayer.order}</span><button className="icon-only" aria-label="向后移动一层" title="向后移动一层" disabled={locked} onClick={() => onMoveLayer(-1)}><ArrowDown aria-hidden="true" /></button><button className="icon-only" aria-label="向前移动一层" title="向前移动一层" disabled={locked} onClick={() => onMoveLayer(1)}><ArrowUp aria-hidden="true" /></button></div>
         {(["head", "body", "gaze", "physics"] as const).map((key) => <label className="range-row" key={key}><span>{key} {selectedLayer.weights[key].toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.01" value={selectedLayer.weights[key]} onChange={(event) => onLayerProperty({ weights: { [key]: Number(event.target.value) } })} /></label>)}
 
         <section className="mesh-density">
@@ -641,7 +641,7 @@ export function EditorInspectorPanel({
             return <label className="range-row" key={channel}><span>{channelLabel} {value.toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.05" value={value} onChange={(event) => onVertexInfluence(channel, Number(event.target.value))} /></label>;
           })}
         </section>}
-        <button onClick={onResetLayer} disabled={busy}>只恢复这个图层</button>
+        <button className="with-icon" onClick={onResetLayer} disabled={busy}><RotateCcw aria-hidden="true" />只恢复这个图层</button>
       </> : <p>从左侧选择图层。</p>}
       </div>
 
@@ -676,8 +676,8 @@ export function EditorInspectorPanel({
         {(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{key} {selectedTuning[key].toFixed(2)}</span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={selectedTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}
 
         <label>校准说明<input value={label} onChange={(event) => onLabel(event.target.value)} placeholder="例如：固定耳根并调整右眼外角" /></label>
-        <button className="primary" disabled={!hasPending || busy} onClick={onSave}>{busy ? "正在验证并生成证据…" : "保存校准"}</button>
-        <button disabled={!hasPending || busy} onClick={onDiscard}>放弃当前草稿</button>
+        <button className="primary with-icon" disabled={!hasPending || busy} onClick={onSave}><Save aria-hidden="true" />{busy ? "正在验证并生成证据…" : "保存校准"}</button>
+        <button className="with-icon" disabled={!hasPending || busy} onClick={onDiscard}><Trash2 aria-hidden="true" />放弃当前草稿</button>
         {notice && <p className="success">{notice}</p>}{error && <p className="error">{error}</p>}
       </section>
       </div>
@@ -687,7 +687,7 @@ export function EditorInspectorPanel({
         <h3>校准历史</h3>{sessions.length === 0 && <p>还没有保存过校准。</p>}
         {sessions.slice(0, 12).map((session) => <article key={session.id} className={comparison?.result.toRevision === session.toRevision ? "active" : ""}>
           <strong>r{session.toRevision} · {session.label}</strong><small>{session.evidenceStatus}</small>
-          <div><button onClick={() => onShowEvidence(session.id)}>查看对比</button><button onClick={() => onRestore(session.toRevision, `恢复到 ${session.label}`)}>恢复</button><button onClick={() => onMarkEvidence(session.id, "accepted")}>确认</button><button onClick={() => onMarkEvidence(session.id, "rejected")}>无效</button></div>
+          <div><button className="with-icon" onClick={() => onShowEvidence(session.id)}><Eye aria-hidden="true" />查看对比</button><button className="with-icon" onClick={() => onRestore(session.toRevision, `恢复到 ${session.label}`)}><RotateCcw aria-hidden="true" />恢复</button><button className="with-icon" onClick={() => onMarkEvidence(session.id, "accepted")}><Check aria-hidden="true" />确认</button><button className="with-icon" onClick={() => onMarkEvidence(session.id, "rejected")}><Ban aria-hidden="true" />无效</button></div>
         </article>)}
       </section>
       </div>

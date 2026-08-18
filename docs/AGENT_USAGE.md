@@ -1,6 +1,6 @@
 # Agent 调用说明
 
-Agent 通过 CLI 完成从 PSD 到可运行角色的确定性工作，也可以用同一校准接口和桌面编辑器与用户协作。软件负责格式、渲染、安全检查和历史；Agent 负责观察证据、判断应改哪个稳定控制量，以及把“当前角色校准”和“通用算法缺陷”分开。
+Codex 一类外部 Agent 通过 CLI 完成从 PSD 到可运行角色的工作，并用同一修订与证据接口和用户协作。软件负责格式、结构化规格验证、确定性制作、渲染、安全收敛和历史；外部 Agent 负责理解自然语言、选择整模或分部范围、观察实际证据、判断是否继续调整，以及把“当前角色校准”和“通用算法缺陷”分开。桌面应用只负责创建、查看、播放和人工兜底，不内嵌 Agent 对话或编排。
 
 下面用 `$cli = "E:\Code\PuppetLoom\apps\cli\dist\index.js"` 表示入口。
 
@@ -18,6 +18,32 @@ node $cli record --project E:\Puppets\CharacterName --output E:\Puppets\Characte
 ```
 
 `verify.valid` 证明文件和安全约束通过，不能代替视觉检查。Agent 必须实际查看 `pose-sheet.png`、`motion-sheet.png` 和 `record` 生成的动态接触表或 WebM，重点比较中立、左右转、上下看、四个组合方向，以及前后发、呆毛、耳朵、衣摆和尾巴的独立运动。需要把主运动冻结后单看惯性时，另运行 `record --mode secondary`；报告中的 `headAndBodyFrozen` 和主运动极值必须证明冻结真实发生。
+
+## 整模与分部自动制作
+
+外部 Agent 的首选制作入口是结构化规格，不是桌面按钮，也不是让软件用关键词猜自然语言。整模先取得与当前 revision 绑定的模板；Agent 看过基线后修改 `goal`、`parts`、数值 `intent` 和每个部位基于画面的非空 `rationale`，保存为 JSON，再做只读计划和执行。CLI 会拒绝原样模板、占位理由、缺少理由、重复部位、越界数值和过期 revision：
+
+```powershell
+node $cli agent specification --project E:\Puppets\CharacterName --scope whole --json
+node $cli agent plan --project E:\Puppets\CharacterName --spec E:\Puppets\rig-spec-r0.json --json
+node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\rig-spec-r0.json --json
+```
+
+规格的 `scope` 会明确保留这是整模任务还是选定部位任务。`--scope whole` 的 `parts` 只包含项目实际存在、需要 Agent 看图填写的部位；计划和最终报告仍会按确定顺序逐项覆盖 13 类职责：`headFace`、`eyes`、`mouth`、`frontHair`、`backHair`、`ahoge`、`ears`、`headwear`、`body`、`topCloth`、`skirt`、`tail` 和 `accessory`。不存在的部位明确报告 `not-present`，整模规格漏掉实际存在的部位则会阻止执行。只调整一个部位时在生成模板时把 scope 换成对应 ID，例如：
+
+```powershell
+node $cli agent specification --project E:\Puppets\CharacterName --scope frontHair --json
+node $cli agent plan --project E:\Puppets\CharacterName --spec E:\Puppets\front-hair-spec-r0.json --json
+node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\front-hair-spec-r0.json --json
+```
+
+模板只是安全起点，不能原样执行。`plan` 不写项目。正式规格计划返回 `inputMode: structured-specification`、当前 `baseRevision`、请求范围、草稿接管情况、各部位目标图层、检查、自动返修、素材请求、`canApply` 和 `blockers`。规格过期或数值越界时应重新看当前画面并生成新规格，不能只改 revision 绕过。确认范围和基线后才运行 `apply`。执行时，每个存在且通过计划的部位单独形成可恢复 revision；最终 JSON 返回总 `status`、from/to revision、各部位结果、最终 `verification`、总 `blockers` 和 `reportPath`。
+
+部位状态必须按原义报告：`completed` 是已经写入并产生证据，`not-present` 是项目没有相应语义图层，`needs-assets` 是闭眼或嘴形等可选素材尚缺，`blocked` 是自检、草稿、修订或最终验证阻止继续。不能新建不存在的假图层，也不能把缺素材或不存在说成制作完成。
+
+每个已完成部位会返回 `focusComparisonSheet`、4×4 `focusMotionSheet` 和用于定位单帧的 `focusMotionManifest`。外部 Agent 必须实际打开前后对比与连续运动接触表：头脸看体积和连接，眼嘴看形状与遮挡，头发和配饰看根部、滞后和回弹，身体与衣服看连接、呼吸和惯性。`verification.valid` 及 13 姿态全绿只证明结构安全，不能替代观感。最终应把这些证据交给用户看；用户反馈“幅度小一点”之类结果时，用同一 scope 再执行，而不是让用户自己拖网格。
+
+`agent front-hair plan/apply`、`agent secondary plan/apply` 和顶层 `--instruction/--scope` 是精确控制或旧调用兼容入口。它们不是正式的自然语言理解边界；理解、看图和决定返修属于外部 Agent。结构化规格无法表达的高层结构才交给下面的 `author inspect/apply`；只剩局部点位问题时才使用稀疏 `calibrate`。
 
 ## AI authoring 闭环
 

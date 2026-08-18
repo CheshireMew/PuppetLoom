@@ -1,6 +1,6 @@
 # PuppetLoom
 
-PuppetLoom 把一份分层角色 PSD 创建为会自主运动、可以继续由 AI 或用户校准的 2D 角色项目。自动创建不要求用户绘画、手工绑点或制作动作：程序先识别图层，推导关键点和网格，验证 13 个姿态，必要时缩小动作或切换到更保守的绑定。AI 可以通过事务式 CLI 增加参数、关键形态、变形器、表情、参数物理和行为；用户也可以在桌面编辑器中拖动控制点并核对 AI 写入结构。两条路径共用修订、证据、安全检查和运行时，最后都能在透明桌面窗口中运行。
+PuppetLoom 把一份分层角色 PSD 创建为会自主运动、可以继续由外部 Agent 或用户校准的 2D 角色项目。自动创建不要求用户绘画、手工绑点或制作动作：程序先识别图层，推导关键点和网格，验证 13 个姿态，必要时缩小动作或切换到更保守的绑定。Codex 一类外部 Agent 可以通过 CLI 对整模或指定部位完成制作、自检、返修和证据审查，也可以用事务式高层操作增加参数、关键形态、变形器、表情、参数物理和行为；桌面应用负责查看、播放和人工兜底，不内嵌 Agent 对话。两条编辑路径共用修订、证据、安全检查和运行时，最后都能在透明桌面窗口中运行。
 
 角色会呼吸、左右观察、抬头和低头，视线先于头部；脖子与上半身和头部同时进入姿态，头发、发饰、衣摆和尾巴才按各自重量延后响应。自主时间线把这些动作组织成可辨认的短段落，不把多个方向混成无意义摇摆；鼠标跟随时仍保留可见的自主头部动作，光标越远才越明确地接管朝向。三态嘴形齐全时，角色偶尔以数次长短不同的开合组成一句短促说话动作，而不是长时间维持同一个张口形状；缺少任一嘴形时嘴部保持闭合。没有闭眼素材时也不会伪造眨眼。
 
@@ -14,6 +14,7 @@ PuppetLoom 把一份分层角色 PSD 创建为会自主运动、可以继续由 
 - 自动验证中立姿态和 12 个运动姿态，检查网格翻转、过度拉伸、眼睛越界、脸发分离、颈部断开和画布越界。
 - CLI、使用一体化无边框外壳的 PSD 创建与编辑桌面界面，以及透明、无边框、置顶的角色窗口。创建器与编辑器共用可拖动的应用标题栏和原生最小化、最大化、还原、关闭能力；编辑器支持图层显示/锁定/父级/顺序、控制点、身体锚点、图层轴心、次级锚点、网格密度、软选择网格、脸部/头骨/头部/身体/视线/次级运动逐顶点权重、动作范围和分部响应参数；角色窗口支持拖动、缩放、暂停、置顶、鼠标穿透和系统级鼠标跟随。
 - 每次校准都保存为新修订，并生成姿态、次级运动、修改前后拼图和像素差异图。用户可以接受或拒绝一次修改，Agent 可以读取同一证据继续迭代，不需要猜测界面中发生了什么。
+- `agent specification` 为当前 revision 生成结构化制作模板；外部 Agent 看图并理解自然语言后填写部位、数值意图和理由，再由 `agent plan/apply --spec` 确定性制作。每个部位独立提交并生成局部前后对比和连续运动证据，最后返回整模验证与阻断项；软件不靠关键词替代 Agent 的理解和审美判断。
 - CLI 可以读取任一修订的完整顶点、作用权重和透明区域拓扑，为准确修订录制透明动态证据，并把更新后的 PSD 迁移到独立新项目而不覆盖旧项目。
 - `author inspect/apply` 让 AI 用高层操作事务修改同一个模型，自动为关键形态、表情、物理和行为生成前后预览；`export` 把当前有效修订烘焙成经过验证的新项目目录，不压缩、不覆盖现有目录。
 - Cubism 官方桥接会生成 exp3/motion3/physics3/cdi3，连接 Editor 读取和事务同步公开 API 可写结构，再以 Editor 官方导出的 moc3/model3 为真源生成新运行时目录；ArtMesh 顶点和 Warp 控制点不能由当前官方 API 写入时会明确阻断完整兼容结论。
@@ -57,6 +58,9 @@ node apps\cli\dist\index.js create --input character.psd --reference character.p
 node apps\cli\dist\index.js verify --project E:\Puppets\MyCharacter --json
 node apps\cli\dist\index.js describe --project E:\Puppets\MyCharacter --json
 node apps\cli\dist\index.js describe --project E:\Puppets\MyCharacter --layer layer-000-front-hair --revision 0 --json
+node apps\cli\dist\index.js agent specification --project E:\Puppets\MyCharacter --scope whole --json
+node apps\cli\dist\index.js agent plan --project E:\Puppets\MyCharacter --spec E:\Puppets\rig-spec-r0.json --json
+node apps\cli\dist\index.js agent apply --project E:\Puppets\MyCharacter --spec E:\Puppets\rig-spec-r0.json --json
 node apps\cli\dist\index.js author inspect --project E:\Puppets\MyCharacter --json
 node apps\cli\dist\index.js author apply --project E:\Puppets\MyCharacter --patch E:\Puppets\authoring.json --json
 node apps\cli\dist\index.js render --project E:\Puppets\MyCharacter --output E:\Puppets\Evidence --suite calibration --json
@@ -64,6 +68,7 @@ node apps\cli\dist\index.js record --project E:\Puppets\MyCharacter --output E:\
 node apps\cli\dist\index.js calibrate --project E:\Puppets\MyCharacter --patch E:\Puppets\change.json --json
 node apps\cli\dist\index.js compare --project E:\Puppets\MyCharacter --from 0 --to 1 --output E:\Puppets\Compare --json
 node apps\cli\dist\index.js history --project E:\Puppets\MyCharacter --json
+node apps\cli\dist\index.js history --project E:\Puppets\MyCharacter --full --json
 node apps\cli\dist\index.js restore --project E:\Puppets\MyCharacter --revision 0 --base-revision 3 --json
 node apps\cli\dist\index.js edit --project E:\Puppets\MyCharacter
 node apps\cli\dist\index.js enhance --project E:\Puppets\MyCharacter --assets E:\Puppets\MyCharacter\supplements --json
@@ -78,7 +83,7 @@ node apps\cli\dist\index.js cubism verify --model E:\Puppets\MyCharacter-cubism-
 node apps\cli\dist\index.js play --project E:\Puppets\MyCharacter --revision 0
 ```
 
-所有确定性命令都能返回 JSON。`describe` 提供可调整的稳定 ID 和坐标；`author` 提供当前参数图和带 `baseRevision` 的高层事务；`calibrate` 只接受经过结构、安全和并发基线验证的稀疏修改；`restore` 同样要求 `--base-revision`。`render` 与 `compare` 为 Agent 和用户生成同一套视觉证据。只要成功生成任一绑定等级，`create` 就返回 0；无效输入或校准补丁返回 2；文件系统、项目或运行时错误返回 3。详细流程见 [Agent 调用说明](docs/AGENT_USAGE.md)。
+所有确定性命令都能返回 JSON。`agent specification` 生成外部 Agent 要结合画面填写的 revision 固定模板；`agent plan --spec` 只读返回整模或分部计划，`agent apply --spec` 为每个存在的部位建立独立可恢复 revision，并返回局部证据和最终 `verification`；`describe` 提供可调整的稳定 ID 和坐标；`author` 提供当前参数图和带 `baseRevision` 的高层事务；`calibrate` 只接受经过结构、安全和并发基线验证的稀疏修改；`restore` 同样要求 `--base-revision`。`history` 默认只输出适合人和 Agent 浏览的修订摘要，需要完整补丁时再使用 `--full`。`render` 与 `compare` 为 Agent 和用户生成同一套视觉证据。只要成功生成任一绑定等级，`create` 就返回 0；无效输入或校准补丁返回 2；文件系统、项目或运行时错误返回 3。详细流程见 [Agent 调用说明](docs/AGENT_USAGE.md) 和 [版本与产物管理](docs/VERSIONING.md)。
 
 ## 项目目录
 

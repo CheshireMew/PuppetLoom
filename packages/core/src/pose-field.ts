@@ -1,5 +1,6 @@
 import { clamp } from "./math.js";
 import type { CoherentPoseField, LayerBinding, Point, SemanticCagePointId, SemanticControlCage, SemanticRole } from "./types.js";
+import { ahogeHingeWeight, ahogeMembership, frontHairSideGeometry } from "./front-hair-geometry.js";
 
 const skullRoles = new Set<SemanticRole>(["frontHair", "backHair", "sideHair", "headwear", "ear"]);
 const eyeSocketRoles = new Set<SemanticRole>(["eyeWhite", "iris", "eyelash", "eyeClosed"]);
@@ -193,17 +194,37 @@ function semanticLandmarkAdjustment(
   const outlineIds = new Set<SemanticCagePointId>(["cheekLeft", "cheekRight", "jawLeft", "jawRight"]);
   if (amount >= 1e-9 && outlineIds.has(id)) {
     const { near, far } = sidePerspective(turn, screenSide);
-    adjusted = { x: adjusted.x - direction * field.radiusX * (far * 0.035 + near * 0.008), y: adjusted.y };
+    // The spherical surface already turns the outline. This is only a small
+    // continuity correction; a large second squeeze makes the far cheek a
+    // vertical cut while the eyes and mouth keep moving on the surface.
+    adjusted = { x: adjusted.x - direction * field.radiusX * (far * 0.04 + near * 0.008), y: adjusted.y };
   } else if (amount >= 1e-9) {
-    const centerShift = id === "chin" ? 0.07 : id === "mouth" || id === "mouthLeft" || id === "mouthRight" ? 0.045 : id === "nose" ? 0.025 : 0;
+    const centerShift = id === "chin" ? 0.04 : id === "mouth" || id === "mouthLeft" || id === "mouthRight" ? 0.025 : id === "nose" ? 0.018 : 0;
     if (centerShift > 0) adjusted = { x: adjusted.x + direction * field.radiusX * amount * centerShift, y: adjusted.y };
   }
 
   const verticalTurn = clamp(pitch, -1, 1);
-  const lowerPlane = id === "chin" ? 1 : id === "jawLeft" || id === "jawRight" ? 0.62 : 0;
+  const lowerPlane = id === "chin" ? 1
+    : id === "jawLeft" || id === "jawRight" ? 0.76
+      : id === "mouth" || id === "mouthLeft" || id === "mouthRight" ? 0.24
+        : id === "cheekLeft" || id === "cheekRight" ? 0.16
+          : 0;
   if (lowerPlane > 0 && Math.abs(verticalTurn) >= 1e-9) {
-    // Looking up exposes the underside of the jaw; looking down foreshortens it.
-    adjusted = { x: adjusted.x, y: adjusted.y - verticalTurn * field.radiusY * lowerPlane * 0.065 };
+    // Looking up exposes the underside of the jaw; looking down foreshortens
+    // the lower face. Side landmarks also widen/narrow around the same face
+    // centre instead of each layer applying an unrelated vertical shift.
+    const pitchAmount = Math.abs(verticalTurn);
+    const widthScale = verticalTurn < 0
+      ? 1 + pitchAmount * 0.055 * lowerPlane
+      : 1 - pitchAmount * 0.07 * lowerPlane;
+    const lowerFaceCounterScale = verticalTurn < 0 ? -0.045 : -0.09;
+    adjusted = {
+      x: field.center.x + (adjusted.x - field.center.x) * widthScale,
+      // Counter the strong depth difference between the mouth and chin in the
+      // spherical projection. Up and down need separate compensation because
+      // the available 2D artwork exposes much less underside than forehead.
+      y: adjusted.y - verticalTurn * field.radiusY * lowerPlane * lowerFaceCounterScale
+    };
   }
   return adjusted;
 }
@@ -332,6 +353,25 @@ interface FrontHairBangProfile {
   root: Point;
 }
 
+function posedFrontHairAnchor(
+  field: CoherentPoseField,
+  cage: SemanticControlCage,
+  layer: LayerBinding,
+  anchor: Point,
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number,
+  pitch: number
+): Point {
+  const surface = projectSurface(field, layer, anchor, yawAngle, pitchAngle);
+  const cageTarget = mappedBySemanticCage(field, cage, anchor, "skull", yawAngle, pitchAngle, yaw, pitch);
+  const blend = cageBlendFor("frontHair");
+  return {
+    x: surface.x + (cageTarget.x - surface.x) * blend,
+    y: surface.y + (cageTarget.y - surface.y) * blend
+  };
+}
+
 function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, base: Point): FrontHairStrandProfile {
   const forehead = cage.points.forehead.position;
   const eyeY = (cage.points.eyeLeft.position.y + cage.points.eyeRight.position.y) * 0.5;
@@ -358,7 +398,12 @@ function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, 
   const strandTip = tip ?? fallbackTip;
   const strandLength = Math.max(layer.bounds.height * 0.28, strandTip.y - strandRoot.y);
   const progress = clamp((base.y - strandRoot.y) / strandLength, 0, 1);
-  const entersAtRoot = smoothstep01((base.y - (strandRoot.y - strandLength * 0.18)) / Math.max(1e-6, strandLength * 0.18));
+  // Include a broad collar above the detected side root. The root can sit
+  // between two mesh rows; a narrow collar then sends the outer row over the
+  // skull surface and the adjacent row with the face, collapsing the triangle
+  // between them at full yaw.
+  const rootCollar = strandLength * 0.9;
+  const entersAtRoot = smoothstep01((base.y - (strandRoot.y - rootCollar)) / Math.max(1e-6, rootCollar));
   const sideDistance = Math.abs(base.x - centerX) / halfWidth;
   const sideLock = smoothstep01((sideDistance - 0.42) / 0.58);
   const expectedX = strandRoot.x + (strandTip.x - strandRoot.x) * progress;
@@ -368,10 +413,12 @@ function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, 
   const strandMask = Math.max(sideLock, strandProximity * sideGate);
   const faceFollow = entersAtRoot * strandMask * (1 - smoothstep01((progress - 0.06) / 0.64)) * 0.82;
   const rootLock = entersAtRoot * strandMask * (1 - smoothstep01((progress - 0.01) / 0.34));
-  // Keep the side-strand transition below a full replacement. A narrow hair
-  // layer can place adjacent grid columns on opposite sides of this mask; a
-  // 100% replacement then collapses the transition column at full yaw.
-  const strandRelease = strandMask * smoothstep01((progress - 0.08) / 0.82) * 0.82;
+  // Once the strand leaves its root, preserve its painted vertical fall early.
+  // Letting the spherical skull projection dominate until the lower half made
+  // the far-side contour cave inward before it reached the free tip. The 94%
+  // ceiling keeps the transition continuous without replacing adjacent mesh
+  // columns discontinuously.
+  const strandRelease = strandMask * smoothstep01((progress - 0.015) / 0.56) * 0.94;
   return { faceFollow, rootLock, strandRelease, root: strandRoot };
 }
 
@@ -395,33 +442,6 @@ function frontHairBangProfile(cage: SemanticControlCage, layer: LayerBinding, ba
     progress,
     root: { x: base.x, y: rootY }
   };
-}
-
-function posedFrontHairAnchor(
-  field: CoherentPoseField,
-  cage: SemanticControlCage,
-  layer: LayerBinding,
-  anchor: Point,
-  yawAngle: number,
-  pitchAngle: number,
-  yaw: number,
-  pitch: number
-): Point {
-  const surface = projectSurface(field, layer, anchor, yawAngle, pitchAngle);
-  const cageTarget = mappedBySemanticCage(field, cage, anchor, "skull", yawAngle, pitchAngle, yaw, pitch);
-  const blend = cageBlendFor("frontHair");
-  return {
-    x: surface.x + (cageTarget.x - surface.x) * blend,
-    y: surface.y + (cageTarget.y - surface.y) * blend
-  };
-}
-
-function ahogePoseWeight(layer: LayerBinding, base: Point): number {
-  if (layer.role !== "frontHair") return 0;
-  const root = layer.secondaryAnchors?.ahogeRoot;
-  if (!root || base.y >= root.y) return 0;
-  const aboveRoot = smoothstep01((root.y - base.y) / Math.max(1e-6, root.y - layer.bounds.y));
-  return aboveRoot;
 }
 
 function frontHairAttachmentDisplacement(
@@ -465,15 +485,58 @@ function preserveFrontHairFaceGap(
   if (outwardGap <= 0 || outwardGap >= faceHalfWidth * 0.45) return posed;
 
   const { near, far } = sidePerspective(yaw, screenSide);
-  const targetGapScale = 1 + near * 0.04 - far * 0.1;
+  const targetGapScale = 1 + near * 0.035 - far * 0.035;
   const faceX = edge.x + faceDisplacement.x;
   const currentGap = screenSide * (posed.x - faceX);
-  const safeGap = clamp(currentGap, outwardGap * 0.68, outwardGap * 1.48);
+  const safeGap = clamp(currentGap, outwardGap * 0.86, outwardGap * 1.42);
   const desiredGap = outwardGap * targetGapScale;
-  const correctedGap = safeGap + (desiredGap - safeGap) * 0.46;
+  const correctedGap = safeGap + (desiredGap - safeGap) * 0.38;
   const targetX = faceX + screenSide * correctedGap;
   const edgeWeight = layerEdgeWeight(base, edge, faceHalfWidth) * rootLock;
   return { x: posed.x + (targetX - posed.x) * edgeWeight, y: posed.y };
+}
+
+function applyFrontHairContourPlane(
+  field: CoherentPoseField,
+  cage: SemanticControlCage | undefined,
+  layer: LayerBinding,
+  base: Point,
+  posed: Point,
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number,
+  pitch: number
+): Point {
+  if (layer.role !== "frontHair") return posed;
+  if (ahogeMembership(layer, base)) return posed;
+  const geometry = frontHairSideGeometry(layer, base);
+  const width = Math.max(1e-6, layer.bounds.width);
+  const u = clamp((base.x - layer.bounds.x) / width, 0, 1);
+  const outerWeight = smoothstep01((Math.abs(u - 0.5) - 0.1) / 0.16);
+  const hangingWeight = smoothstep01((geometry.progress - 0.015) / 0.38);
+  const contourWeight = outerWeight * hangingWeight;
+  if (contourWeight <= 1e-6) return posed;
+  const rootSurface = projectSurface(field, layer, geometry.root, yawAngle, pitchAngle);
+  const rootCage = cage
+    ? mappedBySemanticCage(field, cage, geometry.root, "skull", yawAngle, pitchAngle, yaw, pitch)
+    : rootSurface;
+  const blend = cage ? cageBlendFor("frontHair") : 0;
+  const posedRoot = {
+    x: rootSurface.x + (rootCage.x - rootSurface.x) * blend,
+    y: rootSurface.y + (rootCage.y - rootSurface.y) * blend
+  };
+  const { near, far } = sidePerspective(yaw, geometry.screenSide);
+  // The complete side lock hangs from one transformed root. Scaling its
+  // painted local offset keeps the outer contour continuous: perspective can
+  // make the lock modestly wider or narrower, but cannot pull successive
+  // vertices toward the face by different spherical-projection amounts.
+  const scaleX = 1 + near * 0.045 - far * 0.04;
+  const targetX = posedRoot.x + (base.x - geometry.root.x) * scaleX;
+  const contourCorrection = clamp((targetX - posed.x) * contourWeight, -width * 0.018, width * 0.018);
+  return {
+    x: posed.x + contourCorrection,
+    y: posed.y
+  };
 }
 
 function layerEdgeWeight(base: Point, edge: Point, faceHalfWidth: number): number {
@@ -493,13 +556,6 @@ function applyHeadwearCrownPerspective(
   pitch: number
 ): Point {
   if (layer.role !== "headwear") return posed;
-  // This PSD combines the white crown, bows and side fins in one bitmap. A
-  // partial geometric mask cannot follow the painted frill silhouette between
-  // grid vertices, so it leaves the visible outer edge on the old projection.
-  // Treat the complete headwear as one depth plane here; the side fins still
-  // receive their separate hinge motion later in deform.ts.
-  const crownWeight = 1;
-
   const crownPivot = {
     x: layer.bounds.x + layer.bounds.width * 0.5,
     y: layer.bounds.y + layer.bounds.height * 0.28
@@ -522,15 +578,209 @@ function applyHeadwearCrownPerspective(
   // This target replaces the skull foreshortening across the crown rather
   // than merely nudging it. At the runtime yaw limit it keeps the near frills
   // visibly wider and the far frills visibly narrower.
-  const scaleX = 1 + near * 0.15 - far * 0.18;
-  const scaleY = 1 + near * 0.045 - far * 0.065;
-  const target = {
+  const vertical = clamp(pitch, -1, 1);
+  const scaleX = (1 + near * 0.15 - far * 0.18) * (1 + Math.max(0, vertical) * 0.035);
+  const scaleY = (1 + near * 0.045 - far * 0.065)
+    * (1 - Math.max(0, -vertical) * 0.1 + Math.max(0, vertical) * 0.12);
+  const crownTarget = {
     x: posedPivot.x + (base.x - crownPivot.x) * scaleX,
     y: posedPivot.y + (base.y - crownPivot.y) * scaleY
   };
+  // The source combines the crown, bows and side fins in one bitmap. Spatially
+  // separate the lower outer regions so they follow their own skull attachment
+  // instead of being stretched around the crown centre.
+  const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
+  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+  const sideWeight = smoothstep01((Math.abs(u - 0.5) - 0.19) / 0.2) * smoothstep01((v - 0.3) / 0.34);
+  const side: -1 | 1 = u < 0.5 ? -1 : 1;
+  const sideRoot = {
+    x: layer.bounds.x + layer.bounds.width * (side < 0 ? 0.34 : 0.66),
+    y: layer.bounds.y + layer.bounds.height * 0.54
+  };
+  const sideSurface = projectSurface(field, hairShellLayer, sideRoot, yawAngle, pitchAngle);
+  const sideCage = cage
+    ? mappedBySemanticCage(field, cage, sideRoot, "skull", yawAngle, pitchAngle, yaw, pitch)
+    : sideSurface;
+  const sideRootPosed = {
+    x: sideSurface.x + (sideCage.x - sideSurface.x) * blend,
+    y: sideSurface.y + (sideCage.y - sideSurface.y) * blend
+  };
+  const sideDepth = sidePerspective(yaw, side);
+  const sideTarget = {
+    x: sideRootPosed.x + (base.x - sideRoot.x) * (1 + sideDepth.near * 0.07 - sideDepth.far * 0.12),
+    y: sideRootPosed.y + (base.y - sideRoot.y) * (1 - Math.max(0, -vertical) * 0.05 + Math.max(0, vertical) * 0.06)
+  };
+  const target = {
+    x: crownTarget.x + (sideTarget.x - crownTarget.x) * sideWeight,
+    y: crownTarget.y + (sideTarget.y - crownTarget.y) * sideWeight
+  };
   return {
-    x: posed.x + (target.x - posed.x) * crownWeight,
-    y: posed.y + (target.y - posed.y) * crownWeight
+    x: target.x,
+    y: target.y
+  };
+}
+
+function applyBackHairVolume(
+  field: CoherentPoseField,
+  cage: SemanticControlCage | undefined,
+  layer: LayerBinding,
+  base: Point,
+  posed: Point,
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number,
+  pitch: number,
+  skullInfluence: number
+): Point {
+  if (layer.role !== "backHair" && layer.role !== "sideHair") return posed;
+  const pivot = layer.role === "backHair" && field.skullCenter
+    ? { x: field.skullCenter.x, y: field.skullCenter.y + (field.skullRadiusY ?? layer.bounds.height * 0.3) * 0.12 }
+    : layer.pivot;
+  const surfacePivot = projectSurface(field, layer, pivot, yawAngle, pitchAngle);
+  const cagePivot = cage
+    ? mappedBySemanticCage(field, cage, pivot, "skull", yawAngle, pitchAngle, yaw, pitch)
+    : surfacePivot;
+  const blend = cage ? cageBlendFor(layer.role) * clamp(skullInfluence, 0, 1) : 0;
+  const posedPivot = {
+    x: surfacePivot.x + (cagePivot.x - surfacePivot.x) * blend,
+    y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * blend
+  };
+  const side: -1 | 1 = base.x < pivot.x ? -1 : 1;
+  const depth = sidePerspective(yaw, side);
+  const vertical = clamp(pitch, -1, 1);
+  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+  const freeLength = smoothstep01((v - 0.28) / 0.62);
+  const attached = {
+    x: posedPivot.x + (base.x - pivot.x) * (1 + depth.near * 0.035 - depth.far * 0.055),
+    y: posedPivot.y + (base.y - pivot.y) * (1 - Math.max(0, -vertical) * 0.08 + Math.max(0, vertical) * 0.09)
+  };
+  const hanging = {
+    x: base.x + (posedPivot.x - pivot.x) + (base.x - pivot.x) * (depth.near * 0.018 - depth.far * 0.028),
+    y: base.y + (posedPivot.y - pivot.y)
+  };
+  return {
+    x: attached.x + (hanging.x - attached.x) * freeLength,
+    y: attached.y + (hanging.y - attached.y) * freeLength
+  };
+}
+
+function applyFrontHairVolume(
+  field: CoherentPoseField,
+  cage: SemanticControlCage | undefined,
+  layer: LayerBinding,
+  base: Point,
+  yawAngle: number,
+  pitchAngle: number,
+  yaw: number,
+  pitch: number,
+  skullInfluence: number
+): Point {
+  const pivot = layer.secondaryAnchors?.frontHairRoot ?? layer.pivot;
+  const surfacePivot = projectSurface(field, layer, pivot, yawAngle, pitchAngle);
+  const cagePivot = cage
+    ? mappedBySemanticCage(field, cage, pivot, "skull", yawAngle, pitchAngle, yaw, pitch)
+    : surfacePivot;
+  const blend = cage ? cageBlendFor("frontHair") * clamp(skullInfluence, 0, 1) : 0;
+  const surfaceScalp = projectSurface(field, layer, base, yawAngle, pitchAngle);
+  const cageScalp = cage
+    ? mappedBySemanticCage(field, cage, base, "skull", yawAngle, pitchAngle, yaw, pitch)
+    : surfaceScalp;
+  const posedScalp = {
+    x: surfaceScalp.x + (cageScalp.x - surfaceScalp.x) * blend,
+    y: surfaceScalp.y + (cageScalp.y - surfaceScalp.y) * blend
+  };
+  let posedPivot = {
+    x: surfacePivot.x + (cagePivot.x - surfacePivot.x) * blend,
+    y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * blend
+  };
+  if (cage) {
+    const centerX = (cage.points.faceLeft.position.x + cage.points.faceRight.position.x) * 0.5;
+    const epsilon = Math.max(1e-8, field.radiusX * 1e-5);
+    const left = frontHairAttachmentDisplacement(field, cage, layer, { x: centerX - epsilon, y: pivot.y }, yawAngle, pitchAngle, yaw, pitch);
+    const right = frontHairAttachmentDisplacement(field, cage, layer, { x: centerX + epsilon, y: pivot.y }, yawAngle, pitchAngle, yaw, pitch);
+    const faceFollow = {
+      x: pivot.x + (left.x + right.x) * 0.5,
+      y: pivot.y + (left.y + right.y) * 0.5
+    };
+    const attachment = clamp(skullInfluence, 0, 1);
+    posedPivot = {
+      x: posedPivot.x + (faceFollow.x - posedPivot.x) * attachment,
+      y: posedPivot.y + (faceFollow.y - posedPivot.y) * attachment
+    };
+  }
+  const turn = clamp(yaw, -1, 1);
+  const vertical = clamp(pitch, -1, 1);
+  const localX = base.x - pivot.x;
+  const localY = base.y - pivot.y;
+  const halfWidth = Math.max(1e-6, layer.bounds.width * 0.5);
+  const normalizedX = clamp(localX / halfWidth, -1, 1);
+  const ahogeRoot = layer.secondaryAnchors?.ahogeRoot;
+  const flexibleRootY = layer.secondaryAnchors?.frontHairRoot?.y ?? pivot.y;
+  const flexibleRelease = smoothstep01((base.y - flexibleRootY) / Math.max(1e-6, layer.bounds.height * 0.18));
+
+  // The scalp follows the stable skull perspective. Below the detected root,
+  // bangs gradually leave that curved head surface and hang from the shared
+  // attachment plane. This is head-pose deformation, not secondary wobble.
+  const cosine = 1;
+  const sine = 0;
+  const flexiblePitchScale = 1 - Math.max(0, -vertical) * 0.045 + Math.max(0, vertical) * 0.055;
+  const pitchScale = 1 + (flexiblePitchScale - 1) * flexibleRelease;
+  const screenSide: -1 | 1 = normalizedX < 0 ? -1 : 1;
+  const depth = sidePerspective(turn, screenSide);
+  const perspectiveScaleX = 1 + depth.near * 0.1 - depth.far * 0.1;
+  const perspectiveWrap = turn * halfWidth * 0.025 * (1 - normalizedX * normalizedX) * flexibleRelease;
+  const hangingMapped = {
+    x: posedPivot.x + localX * perspectiveScaleX * cosine - localY * pitchScale * sine + perspectiveWrap,
+    y: posedPivot.y + localX * sine + localY * pitchScale * cosine
+  };
+  let mapped = {
+    x: posedScalp.x + (hangingMapped.x - posedScalp.x) * flexibleRelease,
+    y: posedScalp.y + (hangingMapped.y - posedScalp.y) * flexibleRelease
+  };
+  if (cage) {
+    const strand = frontHairStrandProfile(cage, layer, base);
+    const faceDisplacement = frontHairAttachmentDisplacement(
+      field,
+      cage,
+      layer,
+      base,
+      yawAngle,
+      pitchAngle,
+      yaw,
+      pitch
+    );
+    // A side lock is attached to the face at its detected root, then becomes
+    // progressively independent as it falls. Without this attachment pass,
+    // the root follows the round skull surface while the face edge follows the
+    // face cage, which opens a visible notch and can fold the first mesh row.
+    const attachment = Math.max(strand.faceFollow, strand.rootLock);
+    const attached = {
+      x: base.x + faceDisplacement.x,
+      y: base.y + faceDisplacement.y
+    };
+    mapped = {
+      x: mapped.x + (attached.x - mapped.x) * attachment,
+      y: mapped.y + (attached.y - mapped.y) * attachment
+    };
+    mapped = preserveFrontHairFaceGap(cage, base, mapped, faceDisplacement, yaw, strand.rootLock);
+  }
+  mapped = applyFrontHairContourPlane(field, cage, layer, base, mapped, yawAngle, pitchAngle, yaw, pitch);
+  const ahogeWeight = ahogeHingeWeight(layer, base);
+  if (!ahogeRoot || ahogeWeight <= 1e-6) return mapped;
+
+  const rootPosed = cage
+    ? posedFrontHairAnchor(field, cage, layer, ahogeRoot, yawAngle, pitchAngle, yaw, pitch)
+    : projectSurface(field, layer, ahogeRoot, yawAngle, pitchAngle);
+  const rigidAhoge = {
+    x: rootPosed.x + base.x - ahogeRoot.x,
+    y: rootPosed.y + base.y - ahogeRoot.y
+  };
+  // Keep head-turn projection continuous across the shared ArtMesh. The
+  // ahoge uses a broad, continuously tapered collar so this rigid primary
+  // transform cannot create a discontinuous seam at the painted scalp.
+  return {
+    x: mapped.x + (rigidAhoge.x - mapped.x) * ahogeWeight,
+    y: mapped.y + (rigidAhoge.y - mapped.y) * ahogeWeight
   };
 }
 
@@ -569,15 +819,19 @@ function projectSurface(field: CoherentPoseField, layer: LayerBinding, base: Poi
   };
 }
 
-function applyEyePerspective(layer: LayerBinding, base: Point, posed: Point, posedPivot: Point, yaw: number): Point {
+function applyEyePerspective(layer: LayerBinding, base: Point, posed: Point, posedPivot: Point, yaw: number, pitch: number): Point {
   if (layer.side === "center" || (!eyeSocketRoles.has(layer.role) && layer.role !== "eyebrow")) return posed;
   const { near, far } = sidePerspective(yaw, layerScreenSide(layer));
   const scaleX = eyeSocketRoles.has(layer.role)
     ? clamp(1 + near * 0.025 - far * 0.12, 0.88, 1.025)
     : clamp(1 + near * 0.018 - far * 0.08, 0.92, 1.018);
-  const scaleY = eyeSocketRoles.has(layer.role)
+  const yawScaleY = eyeSocketRoles.has(layer.role)
     ? clamp(1 + near * 0.006 - far * 0.018, 0.982, 1.006)
     : clamp(1 + near * 0.004 - far * 0.012, 0.988, 1.004);
+  const vertical = clamp(pitch, -1, 1);
+  const pitchScaleX = 1 - Math.max(0, vertical) * 0.018 + Math.max(0, -vertical) * 0.008;
+  const pitchScaleY = 1 - Math.max(0, vertical) * 0.055 + Math.max(0, -vertical) * 0.035;
+  const scaleY = yawScaleY * pitchScaleY;
   // The eye centre already follows the semantic face cage. Preserve the
   // neutral eye drawing around that centre and apply perspective once; using
   // the already-projected local coordinates here compressed the far eye twice.
@@ -585,7 +839,7 @@ function applyEyePerspective(layer: LayerBinding, base: Point, posed: Point, pos
   const localY = base.y - layer.pivot.y;
   const turn = clamp(yaw, -1, 1);
   return {
-    x: posedPivot.x + localX * scaleX,
+    x: posedPivot.x + localX * scaleX * pitchScaleX,
     y: posedPivot.y + localY * scaleY + localX * turn * 0.018
   };
 }
@@ -618,8 +872,24 @@ export function applyCoherentPoseField(
   cageInfluence: { face?: number; skull?: number } = {}
 ): Point {
   const yawAngle = clamp(yaw, -1, 1) * field.maxYawRadians;
-  const pitchAngle = clamp(pitch, -1, 1) * field.maxPitchRadians;
+  const pitchLimit = pitch < 0
+    ? field.maxPitchUpRadians ?? field.maxPitchRadians
+    : field.maxPitchDownRadians ?? field.maxPitchRadians;
+  const pitchAngle = clamp(pitch, -1, 1) * pitchLimit;
   if (Math.abs(yawAngle) < 1e-9 && Math.abs(pitchAngle) < 1e-9) return { ...base };
+  if (layer.role === "frontHair") {
+    return applyFrontHairVolume(
+      field,
+      semanticCage,
+      layer,
+      base,
+      yawAngle,
+      pitchAngle,
+      yaw,
+      pitch,
+      cageInfluence.skull ?? 1
+    );
+  }
   const surfacePosed = projectSurface(field, layer, base, yawAngle, pitchAngle);
   const cache = semanticCage ? evaluationCacheFor(field, semanticCage, yawAngle, pitchAngle, yaw, pitch) : undefined;
   let surfacePivot = cache?.surfacePivots.get(layer);
@@ -647,78 +917,12 @@ export function applyCoherentPoseField(
     y: surfacePosed.y + (cagePosed.y - surfacePosed.y) * cageBlend
   };
   posed = applyHeadwearCrownPerspective(field, semanticCage, layer, base, posed, yawAngle, pitchAngle, yaw, pitch);
-  if (layer.role === "frontHair") {
-    const ahogeWeight = ahogePoseWeight(layer, base);
-    const ahogeRoot = layer.secondaryAnchors?.ahogeRoot;
-    if (ahogeRoot && ahogeWeight > 1e-6) {
-      const rootSurface = projectSurface(field, layer, ahogeRoot, yawAngle, pitchAngle);
-      const rootCage = semanticCage
-        ? mappedBySemanticCage(field, semanticCage, ahogeRoot, "skull", yawAngle, pitchAngle, yaw, pitch)
-        : rootSurface;
-      const rootPosed = {
-        x: rootSurface.x + (rootCage.x - rootSurface.x) * cageBlend,
-        y: rootSurface.y + (rootCage.y - rootSurface.y) * cageBlend
-      };
-      const lean = -clamp(yaw, -1, 1) * field.maxYawRadians * 0.22;
-      const cos = Math.cos(lean);
-      const sin = Math.sin(lean);
-      const localX = base.x - ahogeRoot.x;
-      const localY = base.y - ahogeRoot.y;
-      const rigidAhoge = {
-        x: rootPosed.x + localX * cos - localY * sin,
-        y: rootPosed.y + localX * sin + localY * cos
-      };
-      posed = {
-        x: posed.x + (rigidAhoge.x - posed.x) * ahogeWeight,
-        y: posed.y + (rigidAhoge.y - posed.y) * ahogeWeight
-      };
-    }
-  }
-  if (semanticCage && layer.role === "frontHair") {
-    const bang = frontHairBangProfile(semanticCage, layer, base);
-    if (bang.weight > 1e-6) {
-      const rootPosed = posedFrontHairAnchor(field, semanticCage, layer, bang.root, yawAngle, pitchAngle, yaw, pitch);
-      const curtainTarget = {
-        x: base.x + (rootPosed.x - bang.root.x)
-          + Math.sign(yaw) * field.radiusX * Math.abs(yaw) * bang.progress * 0.015,
-        y: base.y + (rootPosed.y - bang.root.y)
-      };
-      const curtainWeight = bang.weight * 0.88;
-      posed = {
-        x: posed.x + (curtainTarget.x - posed.x) * curtainWeight,
-        y: posed.y + (curtainTarget.y - posed.y) * curtainWeight
-      };
-    }
-    const strand = frontHairStrandProfile(semanticCage, layer, base);
-    if (strand.strandRelease > 1e-6) {
-      const rootDisplacement = frontHairAttachmentDisplacement(field, semanticCage, layer, strand.root, yawAngle, pitchAngle, yaw, pitch);
-      const hangingTarget = {
-        x: base.x + rootDisplacement.x,
-        y: base.y + rootDisplacement.y
-      };
-      posed = {
-        x: posed.x + (hangingTarget.x - posed.x) * strand.strandRelease,
-        y: posed.y + (hangingTarget.y - posed.y) * strand.strandRelease
-      };
-    }
-    const desired = frontHairAttachmentDisplacement(field, semanticCage, layer, base, yawAngle, pitchAngle, yaw, pitch);
-    posed = {
-      x: posed.x + (desired.x - (posed.x - base.x)) * strand.faceFollow * 0.72,
-      y: posed.y + (desired.y - (posed.y - base.y)) * strand.faceFollow * 0.24
-    };
-    posed = preserveFrontHairFaceGap(
-      semanticCage,
-      base,
-      posed,
-      desired,
-      yaw,
-      strand.rootLock
-    );
-  }
+  posed = applyBackHairVolume(field, semanticCage, layer, base, posed, yawAngle, pitchAngle, yaw, pitch, cageInfluence.skull ?? 1);
   const posedPivot = {
     x: surfacePivot.x + (cagePivot.x - surfacePivot.x) * cageBlend,
     y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * cageBlend
   };
-  const perspective = applyEyePerspective(layer, base, posed, posedPivot, yaw);
+  posed = applyFrontHairContourPlane(field, semanticCage, layer, base, posed, yawAngle, pitchAngle, yaw, pitch);
+  const perspective = applyEyePerspective(layer, base, posed, posedPivot, yaw, pitch);
   return semanticCage ? perspective : applyFaceSilhouette(field, layer, base, perspective, yaw);
 }

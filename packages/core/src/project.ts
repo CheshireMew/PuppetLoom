@@ -833,11 +833,14 @@ async function commitCalibrationPatch(root: string, patch: CalibrationPatch, rep
     const evidence = await (await import("./render-suite.js")).compareProjectStates(
       root, before, after, current.revision, revision, evidenceDirectory, patch.authoring?.previews ?? []
     );
-    if (replacementOverrides === undefined && rebuiltLayers.length === 1
-      && (evidence.visualDifference.changedPixelRatio > 0.02 || evidence.visualDifference.meanAbsoluteDifference > 0.0015)) {
+    const neutralMeshDifference = replacementOverrides === undefined && rebuiltLayers.length === 1
+      ? await (await import("./render-suite.js")).compareNeutralProjectStates(root, before, after, evidenceDirectory)
+      : undefined;
+    if (neutralMeshDifference
+      && (neutralMeshDifference.significantPixelRatio > 0.02 || neutralMeshDifference.meanAbsoluteDifference > 0.0015)) {
       throw new PuppetLoomError(
         "INVALID_INPUT",
-        `当前图层重建后的视觉差异过大（${(evidence.visualDifference.changedPixelRatio * 100).toFixed(2)}% 像素发生变化，平均差异 ${evidence.visualDifference.meanAbsoluteDifference.toFixed(6)}）。本次校准没有写入，请调整网格密度或顶点后再保存。`
+        `当前图层重建后的视觉差异过大：中立外观有 ${(neutralMeshDifference.significantPixelRatio * 100).toFixed(2)}% 像素显著变化，平均差异 ${neutralMeshDifference.meanAbsoluteDifference.toFixed(6)}。本次校准没有写入，请调整网格密度或顶点后再保存。`
       );
     }
     const calibration: CalibrationDocument = {

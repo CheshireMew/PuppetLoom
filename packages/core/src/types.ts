@@ -336,6 +336,9 @@ export interface CoherentPoseField {
   skullRadiusY?: number;
   maxYawRadians: number;
   maxPitchRadians: number;
+  /** Optional asymmetric pitch limits for materials with different up/down headroom. */
+  maxPitchUpRadians?: number;
+  maxPitchDownRadians?: number;
   perspective: number;
 }
 
@@ -451,6 +454,7 @@ export interface CalibrationOverrides {
   layers?: Record<string, LayerCalibrationOverride>;
   runtime?: {
     envelope?: Partial<MotionEnvelope>;
+    poseField?: Partial<Pick<CoherentPoseField, "maxYawRadians" | "maxPitchRadians" | "maxPitchUpRadians" | "maxPitchDownRadians" | "perspective">>;
     motionTuning?: Partial<MotionTuning>;
     secondaryMotionTuning?: Partial<Record<SecondaryMotionPart, Partial<MotionTuning>>>;
   };
@@ -478,7 +482,7 @@ export interface CalibrationPatch {
     anchors?: Array<keyof AnchorGraph>;
     semanticPoints?: SemanticCagePointId[];
     layers?: string[];
-    runtime?: Array<"envelope" | "motionTuning" | "secondaryMotionTuning">;
+    runtime?: Array<"envelope" | "poseField" | "motionTuning" | "secondaryMotionTuning">;
   };
 }
 

@@ -91,6 +91,38 @@ describe("calibration override contract", () => {
     expect(upgraded.points).toEqual(replacement.points);
   });
 
+  it("rebuilds front-hair physics weights by semantic region instead of carrying scalp wobble forward", () => {
+    const value = project();
+    const target = value.layers.find((entry) => entry.id === "child")!;
+    target.role = "frontHair";
+    target.parentGroup = "head";
+    target.weights = { head: 1, body: 0, gaze: 0, physics: 1 };
+    target.secondaryAnchors = {
+      ahogeRoot: { x: 0.4, y: 0.3 },
+      frontHairRoot: { x: 0.4, y: 0.42 },
+      frontHairRootLeft: { x: 0.28, y: 0.42 },
+      frontHairRootRight: { x: 0.52, y: 0.42 },
+      frontHairTipLeft: { x: 0.23, y: 0.58 },
+      frontHairTipRight: { x: 0.57, y: 0.58 }
+    };
+    target.mesh = buildArtMesh(target.bounds, {
+      textureSize: { width: 160, height: 160 }, alphaThreshold: 8, detail: 10,
+      regions: [{ outer: [{ x: 0.5, y: 0 }, { x: 1, y: 0.35 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0, y: 0.35 }], holes: [] }]
+    });
+    target.mesh.influences!.physics = target.mesh.points.map(() => 1);
+
+    const rebuilt = applyCalibrationOverrides(value, { layers: { child: { meshDetail: 12 } } }).layers.find((entry) => entry.id === "child")!;
+    const lateralCrown = rebuilt.mesh.points
+      .map((point, index) => ({ point, weight: rebuilt.mesh.influences!.physics![index]! }))
+      .filter(({ point }) => point.y < target.secondaryAnchors!.frontHairRoot!.y && Math.abs(point.x - target.secondaryAnchors!.ahogeRoot!.x) > target.bounds.width * 0.2);
+    const freeEnds = rebuilt.mesh.points
+      .map((point, index) => ({ point, weight: rebuilt.mesh.influences!.physics![index]! }))
+      .filter(({ point }) => point.y > target.secondaryAnchors!.frontHairRoot!.y + target.bounds.height * 0.12);
+    expect(lateralCrown.length).toBeGreaterThan(0);
+    expect(lateralCrown.every(({ weight }) => weight === 0)).toBe(true);
+    expect(freeEnds.some(({ weight }) => weight === 1)).toBe(true);
+  });
+
   it("stores independent face and skull control-cage influence per vertex", () => {
     const applied = applyCalibrationOverrides(project(), {
       layers: { child: { vertexInfluences: { face: { "0": 0.2 }, skull: { "0": 0.7 } } } }

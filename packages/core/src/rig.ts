@@ -5,6 +5,7 @@ import { makeAdaptiveMesh } from "./art-mesh.js";
 import { makeGridMesh } from "./mesh.js";
 import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 import { createDefaultAuthoringModel } from "./model.js";
+import { frontHairPhysicsMask } from "./front-hair-geometry.js";
 import type {
   AnchorGraph,
   LayerBinding,
@@ -369,7 +370,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     const parentGroup: LayerBinding["parentGroup"] = weights.head >= 0.5 ? "head" : weights.body > 0 ? "body" : "root";
     const clipLayerId = clipLayerFor(layer, imported.layers);
     const secondaryAnchors = secondaryAnchorsFor(layer, faceLayer, imported.canvas);
-    return {
+    const binding: LayerBinding = {
       id: layer.id,
       sourceName: layer.sourceName,
       sourcePath: layer.sourcePath,
@@ -394,6 +395,10 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       ...(layer.role === "mouth" ? { mouthVariant: "closed" as const } : {}),
       parentGroup
     };
+    if (binding.role === "frontHair" && binding.mesh.influences) {
+      binding.mesh.influences.physics = binding.mesh.points.map((point) => frontHairPhysicsMask(binding, point));
+    }
+    return binding;
   });
   const features = featuresFor(imported, level);
   const poseField = poseFieldFor(anchors, level);

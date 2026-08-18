@@ -10,4 +10,6 @@ test/artifacts/*
 Thumbs.db
 workspace/
 local-fixtures/
+archive/abandoned-tests/
+archive/nested-repositories/
 *.puppetloom.local.json

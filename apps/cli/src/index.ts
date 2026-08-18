@@ -10,19 +10,27 @@ import {
   buildCubismExportPlan,
   clearCubismPreview,
   compareProjectRevisions,
+  createModelAgentSpecificationTemplate,
   createProject,
   describeAuthoringProject,
   describeProject,
   enhanceProject,
   exportPortableProject,
   finalizeCubismExport,
+  planFrontHairAgent,
+  planSecondaryPartAgent,
   inspectPsd,
   inspectCubismEditor,
   listCalibrationSessions,
   loadCalibration,
   loadProject,
   migrateProject,
+  planModelAgent,
+  readModelAgentSpecification,
   renderProjectSuite,
+  runModelAgent,
+  runFrontHairAgent,
+  runSecondaryPartAgent,
   restoreCalibrationRevision,
   saveAuthoringPatch,
   saveCalibrationPatch,
@@ -33,7 +41,7 @@ import {
   verifyCubismModel,
   verifyProject
 } from "@puppetloom/core";
-import type { AuthoringPatch, CalibrationPatch, CubismPreviewPose, RenderSuiteKind } from "@puppetloom/core";
+import type { AuthoringPatch, CalibrationPatch, CubismPreviewPose, ModelAgentOptions, ModelAgentPart, ModelAgentRequestScope, RenderSuiteKind, SecondaryModelAgentPart } from "@puppetloom/core";
 import { Command, CommanderError } from "commander";
 
 type OutputOptions = { json?: boolean };
@@ -52,6 +60,7 @@ function print(value: unknown, options: OutputOptions = {}): void {
 function exitCode(error: unknown): number {
   if (error instanceof PuppetLoomError && error.code === "INVALID_INPUT") return 2;
   if (error instanceof CommanderError && error.code === "commander.helpDisplayed") return 0;
+  if (error instanceof CommanderError) return 2;
   return 3;
 }
 
@@ -154,6 +163,8 @@ const program = new Command()
   .description("将分层角色 PSD 创建为安全、自主运动的 2D 角色项目")
   .version("0.1.0")
   .showHelpAfterError();
+
+const parseAsJson = process.argv.includes("--json");
 
 program
   .command("inspect")
@@ -355,6 +366,134 @@ program
 
 const author = program.command("author").description("供 Agent 检查和修改参数、关键形态与变形器");
 
+const agent = program.command("agent").description("让 Agent 按部位完成分析、制作、自检和证据闭环");
+const modelAgentScopes = ["whole", "headFace", "eyes", "mouth", "frontHair", "backHair", "ahoge", "ears", "headwear", "body", "topCloth", "skirt", "tail", "accessory"] as const;
+function modelAgentScope(value: string): ModelAgentRequestScope {
+  if (!(modelAgentScopes as readonly string[]).includes(value)) throw new PuppetLoomError("INVALID_INPUT", `不支持的 Agent 范围：${value}`);
+  return value as "whole" | ModelAgentPart;
+}
+
+type ModelAgentCliOptions = { project: string; spec?: string; instruction?: string; scope?: string; json?: boolean };
+
+async function modelAgentOptions(options: ModelAgentCliOptions): Promise<ModelAgentOptions> {
+  if (options.spec) {
+    if (options.instruction || options.scope) throw new PuppetLoomError("INVALID_INPUT", "使用 --spec 时不能再传 --instruction 或 --scope；范围和意图已经由制作规格明确给出。" );
+    return { specification: await readModelAgentSpecification(resolve(options.spec)) };
+  }
+  return {
+    instruction: options.instruction ?? "把整个模型做得自然、协调，并自动检查和返修",
+    scope: modelAgentScope(options.scope ?? "whole")
+  };
+}
+
+agent
+  .command("specification")
+  .alias("spec")
+  .description("生成与当前 revision 绑定的结构化制作规格模板，交给外部 Agent 看图后填写")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--scope <scope>", `模板范围：${modelAgentScopes.join("、")}`, "whole")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; scope: string; json?: boolean }) => {
+    await run(async () => {
+      const scope = modelAgentScope(options.scope);
+      print(await createModelAgentSpecificationTemplate(resolve(options.project), scope === "whole" ? "whole" : [scope]), options);
+    }, options);
+  });
+
+agent
+  .command("plan")
+  .description("验证并展开外部 Agent 的结构化制作规格；旧自然语言参数仅为兼容入口")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--spec <rig-spec.json>", "外部 Agent 生成的结构化制作规格（正式入口）")
+  .option("--instruction <text>", "旧版自然语言目标（兼容入口）")
+  .option("--scope <scope>", `旧版范围：${modelAgentScopes.join("、")}`)
+  .option("--json", "输出 JSON")
+  .action(async (options: ModelAgentCliOptions) => {
+    await run(async () => print(await planModelAgent(resolve(options.project), await modelAgentOptions(options)), options), options);
+  });
+
+agent
+  .command("apply")
+  .description("确定性执行外部 Agent 的结构化制作规格，并生成可回滚 revision 与视觉证据")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--spec <rig-spec.json>", "外部 Agent 生成的结构化制作规格（正式入口）")
+  .option("--instruction <text>", "旧版自然语言目标（兼容入口）")
+  .option("--scope <scope>", `旧版范围：${modelAgentScopes.join("、")}`)
+  .option("--json", "输出 JSON")
+  .action(async (options: ModelAgentCliOptions) => {
+    await run(async () => print(await runModelAgent(resolve(options.project), await modelAgentOptions(options)), options), options);
+  });
+
+const frontHairAgent = agent.command("front-hair").description("自动完成前发网格接管、转向关键形、滞后回弹和安全检查");
+
+frontHairAgent
+  .command("plan")
+  .description("分析前发与当前草稿，生成完整执行计划但不写入项目")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--instruction <text>", "自然语言目标", "让前发随头部转向自然变形，并增加轻微滞后和回弹")
+  .option("--layer <id>", "显式指定前发图层")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; instruction: string; layer?: string; json?: boolean }) => {
+    await run(async () => print(await planFrontHairAgent(resolve(options.project), {
+      instruction: options.instruction,
+      ...(options.layer ? { layerId: options.layer } : {})
+    }), options), options);
+  });
+
+const secondaryAgentParts = ["backHair", "ahoge", "ears", "headwear", "topCloth", "skirt", "tail", "accessory"] as const;
+function secondaryAgentPart(value: string): SecondaryModelAgentPart {
+  if (!(secondaryAgentParts as readonly string[]).includes(value)) throw new PuppetLoomError("INVALID_INPUT", `不支持的次级运动部位：${value}`);
+  return value as SecondaryModelAgentPart;
+}
+
+const secondaryAgent = agent.command("secondary").description("自动完成后发、呆毛、耳朵、头饰、衣服、裙摆、尾巴或配饰的制作与自检");
+
+secondaryAgent
+  .command("plan")
+  .description("分析指定部位并生成自动制作与返修计划，但不写入项目")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .requiredOption("--part <part>", `部位：${secondaryAgentParts.join("、")}`)
+  .option("--instruction <text>", "自然语言目标")
+  .option("--layer <id...>", "显式指定一个或多个图层")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; part: string; instruction?: string; layer?: string[]; json?: boolean }) => {
+    await run(async () => print(await planSecondaryPartAgent(resolve(options.project), {
+      part: secondaryAgentPart(options.part),
+      ...(options.instruction ? { instruction: options.instruction } : {}),
+      ...(options.layer?.length ? { layerIds: options.layer } : {})
+    }), options), options);
+  });
+
+secondaryAgent
+  .command("apply")
+  .description("执行指定部位的自动制作、自检、返修和证据闭环")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .requiredOption("--part <part>", `部位：${secondaryAgentParts.join("、")}`)
+  .option("--instruction <text>", "自然语言目标")
+  .option("--layer <id...>", "显式指定一个或多个图层")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; part: string; instruction?: string; layer?: string[]; json?: boolean }) => {
+    await run(async () => print(await runSecondaryPartAgent(resolve(options.project), {
+      part: secondaryAgentPart(options.part),
+      ...(options.instruction ? { instruction: options.instruction } : {}),
+      ...(options.layer?.length ? { layerIds: options.layer } : {})
+    }), options), options);
+  });
+
+frontHairAgent
+  .command("apply")
+  .description("执行前发制作闭环；每一步形成可回滚修订并生成前后证据")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--instruction <text>", "自然语言目标", "让前发随头部转向自然变形，并增加轻微滞后和回弹")
+  .option("--layer <id>", "显式指定前发图层")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; instruction: string; layer?: string; json?: boolean }) => {
+    await run(async () => print(await runFrontHairAgent(resolve(options.project), {
+      instruction: options.instruction,
+      ...(options.layer ? { layerId: options.layer } : {})
+    }), options), options);
+  });
+
 author
   .command("inspect")
   .description("读取当前 authoring 图、图层挂接关系和修订号")
@@ -473,11 +612,29 @@ program
 
 program
   .command("history")
-  .description("读取项目校准历史")
+  .description("读取精简的项目修订历史；需要完整补丁和网格数据时显式使用 --full")
   .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--full", "返回完整会话、补丁和累计覆盖数据")
   .option("--json", "输出 JSON")
-  .action(async (options: { project: string; json?: boolean }) => {
-    await run(async () => print({ sessions: await listCalibrationSessions(resolve(options.project)) }, options), options);
+  .action(async (options: { project: string; full?: boolean; json?: boolean }) => {
+    await run(async () => {
+      const project = resolve(options.project);
+      const [calibration, sessions] = await Promise.all([loadCalibration(project), listCalibrationSessions(project)]);
+      print({
+        currentRevision: calibration.revision,
+        headSessionId: calibration.headSessionId,
+        sessions: options.full ? sessions : sessions.map((session) => ({
+          id: session.id,
+          label: session.label,
+          createdAt: session.createdAt,
+          fromRevision: session.fromRevision,
+          toRevision: session.toRevision,
+          evidenceStatus: session.evidenceStatus,
+          parentSessionId: session.parentSessionId,
+          evidenceDirectory: session.evidenceDirectory
+        }))
+      }, options);
+    }, options);
   });
 
 program
@@ -576,9 +733,20 @@ program
     await run(async () => launchDesktop(["--edit", "--project", resolve(options.project)]));
   });
 
-program.exitOverride();
-program.parseAsync(process.argv).catch((error: unknown) => {
-  if (error instanceof CommanderError && (error.code === "commander.helpDisplayed" || error.code === "commander.version")) return;
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = exitCode(error);
-});
+function configureCommandParsing(command: Command): void {
+  command.exitOverride();
+  if (parseAsJson) command.configureOutput({ writeErr: () => undefined });
+  for (const child of command.commands) configureCommandParsing(child);
+}
+
+configureCommandParsing(program);
+try {
+  await program.parseAsync(process.argv);
+} catch (error: unknown) {
+  if (!(error instanceof CommanderError && (error.code === "commander.helpDisplayed" || error.code === "commander.version"))) {
+    const code = exitCode(error);
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(parseAsJson ? `${JSON.stringify({ ok: false, error: message, exitCode: code })}\n` : `${message}\n`);
+    process.exitCode = code;
+  }
+}

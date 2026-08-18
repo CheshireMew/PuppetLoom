@@ -106,6 +106,45 @@ describe("secondary motion anchoring", () => {
     expect(movement(tip, deformPoint(project, layer, tip, state))).toBeGreaterThan(movement(root, deformPoint(project, layer, root, state)) * 5);
   });
 
+  it("rotates every ahoge point by one rigid angle around the detected root", () => {
+    const layer = secondaryLayer("frontHair");
+    const root = layer.secondaryAnchors!.ahogeRoot!;
+    const inner = { x: root.x - layer.bounds.width * 0.04, y: root.y - layer.bounds.height * 0.08 };
+    const tip = { x: root.x - layer.bounds.width * 0.12, y: root.y - layer.bounds.height * 0.2 };
+    const state = { ...neutralMotionState, ahogeX: 0.05, ahogeY: -0.012 };
+    const movedInner = deformPoint(project, layer, inner, state);
+    const movedTip = deformPoint(project, layer, tip, state);
+    const angleChange = (before: typeof inner, after: typeof inner) => Math.atan2(after.y - root.y, after.x - root.x) - Math.atan2(before.y - root.y, before.x - root.x);
+    expect(deformPoint(project, layer, root, state)).toEqual(root);
+    expect(Math.hypot(movedInner.x - root.x, movedInner.y - root.y)).toBeCloseTo(Math.hypot(inner.x - root.x, inner.y - root.y), 10);
+    expect(Math.hypot(movedTip.x - root.x, movedTip.y - root.y)).toBeCloseTo(Math.hypot(tip.x - root.x, tip.y - root.y), 10);
+    expect(angleChange(inner, movedInner)).toBeCloseTo(angleChange(tip, movedTip), 10);
+  });
+
+  it("does not classify lateral crown vertices above the ahoge root as ahoge", () => {
+    const layer = secondaryLayer("frontHair");
+    const root = layer.secondaryAnchors!.ahogeRoot!;
+    const crown = {
+      x: root.x + layer.bounds.width * 0.31,
+      y: root.y - layer.bounds.height * 0.1
+    };
+    const moved = deformPoint(project, layer, crown, { ...neutralMotionState, ahogeX: 0.08, ahogeY: -0.04 });
+    expect(moved).toEqual(crown);
+  });
+
+  it("bends each face-framing strand around its own root without changing its radial length", () => {
+    const layer = secondaryLayer("frontHair");
+    const leftRoot = layer.secondaryAnchors!.frontHairRootLeft!;
+    const rightRoot = layer.secondaryAnchors!.frontHairRootRight!;
+    const leftTip = layer.secondaryAnchors!.frontHairTipLeft!;
+    const rightTip = layer.secondaryAnchors!.frontHairTipRight!;
+    const state = { ...neutralMotionState, hairX: 0.05 };
+    const movedLeft = deformPoint(project, layer, leftTip, state);
+    const movedRight = deformPoint(project, layer, rightTip, state);
+    expect(Math.hypot(movedLeft.x - leftRoot.x, movedLeft.y - leftRoot.y)).toBeCloseTo(Math.hypot(leftTip.x - leftRoot.x, leftTip.y - leftRoot.y), 10);
+    expect(Math.hypot(movedRight.x - rightRoot.x, movedRight.y - rightRoot.y)).toBeCloseTo(Math.hypot(rightTip.x - rightRoot.x, rightTip.y - rightRoot.y), 10);
+  });
+
   it("keeps the scalp between the ahoge and bangs rigid while both free ends move", () => {
     const layer = secondaryLayer("frontHair");
     const scalp = { x: layer.pivot.x, y: layer.bounds.y + layer.bounds.height * 0.4 };
@@ -126,6 +165,19 @@ describe("secondary motion anchoring", () => {
     expect(movement(waist, deformPoint(project, layer, waist, state))).toBeLessThan(1e-8);
     expect(Math.abs(movedHem.x - hem.x)).toBeGreaterThan(0.02);
     expect(Math.abs(movedHem.x - hem.x)).toBeGreaterThan(Math.abs(movedHem.y - hem.y) * 4);
+  });
+
+  it("locks both sides of the clothing seam while allowing fabric away from the waist to move", () => {
+    const top = secondaryLayer("topWear", { x: 0.42, y: 0.3, width: 0.16, height: 0.2 });
+    const skirt = secondaryLayer("bottomWear", { x: 0.35, y: 0.5, width: 0.3, height: 0.3 });
+    const seam = { x: 0.5, y: 0.5 };
+    const bodiceMiddle = { x: 0.46, y: 0.4 };
+    const hem = { x: 0.46, y: 0.8 };
+    const state = { ...neutralMotionState, clothX: 0.06, clothY: 0.02 };
+    expect(deformPoint(project, top, seam, state)).toEqual(seam);
+    expect(deformPoint(project, skirt, seam, state)).toEqual(seam);
+    expect(movement(bodiceMiddle, deformPoint(project, top, bodiceMiddle, state))).toBeGreaterThan(0.001);
+    expect(movement(hem, deformPoint(project, skirt, hem, state))).toBeGreaterThan(0.01);
   });
 
   it("pins the tail root and moves its far end mainly up and down", () => {
@@ -311,5 +363,18 @@ describe("connected head and upper-body motion", () => {
     const footPoint = { x: 0.47, y: 0.93 };
     expect(movement(topPoint, deformPoint(connectedProject, top, topPoint, state))).toBeGreaterThan(0.001);
     expect(deformPoint(connectedProject, foot, footPoint, state)).toEqual(footPoint);
+  });
+
+  it("moves the bodice and skirt as one garment at their shared waistline", () => {
+    const top = secondaryLayer("topWear", { x: 0.42, y: 0.38, width: 0.16, height: 0.2 });
+    const skirt = secondaryLayer("bottomWear", { x: 0.35, y: 0.58, width: 0.3, height: 0.3 });
+    top.weights = { head: 0, body: 1, gaze: 0, physics: 0 };
+    skirt.weights = { head: 0, body: 1, gaze: 0, physics: 0 };
+    const seam = { x: 0.5, y: 0.58 };
+    const state = { ...neutralMotionState, bodySway: 0.65, bodyPitch: 0.18, bodyRoll: 0.08 };
+    const topSeam = deformPoint(connectedProject, top, seam, state);
+    const skirtSeam = deformPoint(connectedProject, skirt, seam, state);
+    expect(topSeam.x).toBeCloseTo(skirtSeam.x, 10);
+    expect(topSeam.y).toBeCloseTo(skirtSeam.y, 10);
   });
 });

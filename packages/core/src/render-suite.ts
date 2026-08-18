@@ -274,3 +274,32 @@ export async function compareProjectStates(
   await writeFile(join(output, "comparison.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return result;
 }
+
+/** Compares only the neutral render so intentional authored motion is not mistaken for remesh damage. */
+export async function compareNeutralProjectStates(
+  projectDirectory: string,
+  beforeProject: import("./types.js").PuppetLoomProject,
+  afterProject: import("./types.js").PuppetLoomProject,
+  outputDirectory: string
+): Promise<RevisionComparisonResult["visualDifference"]> {
+  const output = resolve(outputDirectory);
+  await mkdir(output, { recursive: true });
+  const [beforeSources, afterSources] = await Promise.all([
+    loadProjectTextureSources(projectDirectory, beforeProject),
+    loadProjectTextureSources(projectDirectory, afterProject)
+  ]);
+  const width = 600;
+  const height = 600;
+  const beforePixels = renderProjectPoseWithSources(beforeProject, beforeSources, neutralMotionState, width, height);
+  const afterPixels = renderProjectPoseWithSources(afterProject, afterSources, neutralMotionState, width, height);
+  const beforePath = join(output, "neutral-before.png");
+  const afterPath = join(output, "neutral-after.png");
+  const differencePath = join(output, "neutral-difference.png");
+  await Promise.all([
+    sharp(Buffer.from(beforePixels.data), { raw: { width, height, channels: 4 } }).png().toFile(beforePath),
+    sharp(Buffer.from(afterPixels.data), { raw: { width, height, channels: 4 } }).png().toFile(afterPath)
+  ]);
+  const result = await absoluteDifference(beforePath, afterPath, differencePath);
+  await writeFile(join(output, "neutral-comparison.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  return result;
+}

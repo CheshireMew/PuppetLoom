@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Copy, Minus, Square, X } from "lucide-react";
 import type { WindowShellAction, WindowShellState } from "../electron/global.js";
 
 const initialState: WindowShellState = {
@@ -50,9 +51,9 @@ export function WindowTitleBar({ title }: { title: string }): React.JSX.Element 
         <span className="window-titlebar-title">{title}</span>
       </div>
       <div className="window-titlebar-controls" aria-label="窗口控制">
-        <button type="button" aria-label="最小化窗口" title="最小化" disabled={!state.minimizable} onClick={() => void act("minimize")}><span aria-hidden="true">—</span></button>
-        <button type="button" aria-label={state.maximized ? "还原窗口" : "最大化窗口"} title={state.maximized ? "还原" : "最大化"} disabled={!state.maximizable} onClick={() => void act("toggle-maximize")}><span aria-hidden="true">{state.maximized ? "❐" : "□"}</span></button>
-        <button type="button" className="window-titlebar-close" aria-label="关闭窗口" title="关闭" disabled={!state.closable} onClick={() => void act("close")}><span aria-hidden="true">×</span></button>
+        <button type="button" aria-label="最小化窗口" title="最小化" disabled={!state.minimizable} onClick={() => void act("minimize")}><Minus aria-hidden="true" /></button>
+        <button type="button" aria-label={state.maximized ? "还原窗口" : "最大化窗口"} title={state.maximized ? "还原" : "最大化"} disabled={!state.maximizable} onClick={() => void act("toggle-maximize")}>{state.maximized ? <Copy aria-hidden="true" /> : <Square aria-hidden="true" />}</button>
+        <button type="button" className="window-titlebar-close" aria-label="关闭窗口" title="关闭" disabled={!state.closable} onClick={() => void act("close")}><X aria-hidden="true" /></button>
       </div>
     </div>
   );

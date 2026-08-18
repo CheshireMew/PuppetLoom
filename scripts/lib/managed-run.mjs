@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, open, readFile, readdir, rename, stat, statfs, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { createReadStream } from "node:fs";
+import { access, link, mkdir, open, readFile, readdir, rename, rm, stat, statfs, unlink, writeFile } from "node:fs/promises";
+import { dirname, join, parse, relative, resolve, sep } from "node:path";
 
 export const DEFAULT_MAXIMUM_MANAGED_BYTES = 2 * 1024 ** 3;
 export const DEFAULT_MINIMUM_FREE_BYTES = 2 * 1024 ** 3;
@@ -39,6 +40,32 @@ async function bytesUnder(root) {
   return total;
 }
 
+function physicalFileKey(path, fileStat) {
+  return fileStat.ino && fileStat.ino !== 0n ? `${fileStat.dev}:${fileStat.ino}` : resolve(path);
+}
+
+async function physicalBytesUnderPaths(paths) {
+  let total = 0;
+  const seen = new Set();
+  for (const root of paths) {
+    const rootStat = await stat(root, { bigint: true }).catch(() => undefined);
+    if (!rootStat) continue;
+    const files = rootStat.isDirectory() ? await filesUnder(root) : [root];
+    for (const path of files) {
+      const fileStat = await stat(path, { bigint: true });
+      const key = physicalFileKey(path, fileStat);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      total += Number(fileStat.size);
+    }
+  }
+  return total;
+}
+
+async function physicalBytesUnder(root) {
+  return physicalBytesUnderPaths([root]);
+}
+
 async function ownedRunManifests(runsRoot) {
   const manifests = [];
   for (const entry of await readdir(runsRoot, { withFileTypes: true }).catch(() => [])) {
@@ -62,15 +89,98 @@ function cleanupCandidates(inventory) {
   return inventory.filter((item) => item.path !== "preflight-lock.json").map((item) => item.path);
 }
 
+async function sha256File(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
 async function inventoryUnder(directory, manifestPath) {
   const inventory = [];
   for (const path of await filesUnder(directory)) {
     if (resolve(path) === resolve(manifestPath)) continue;
-    const bytes = await readFile(path);
     const ownedPath = relative(directory, path);
-    inventory.push({ path: ownedPath, class: artifactClass(ownedPath), bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+    inventory.push({ path: ownedPath, class: artifactClass(ownedPath), bytes: (await stat(path)).size, sha256: await sha256File(path) });
   }
   return inventory;
+}
+
+function samePhysicalFile(first, second) {
+  return first.dev === second.dev && first.ino !== 0n && first.ino === second.ino;
+}
+
+async function replaceWithObjectLink(sourcePath, objectPath, expectedBytes) {
+  await mkdir(dirname(objectPath), { recursive: true });
+  let objectAlreadyExisted = await exists(objectPath);
+  if (!objectAlreadyExisted) {
+    try {
+      await link(sourcePath, objectPath);
+      return { state: "stored" };
+    } catch (error) {
+      if (error.code !== "EEXIST") return { state: "fallback", error: error.message };
+      objectAlreadyExisted = true;
+    }
+  }
+
+  try {
+    const [sourceStat, objectStat] = await Promise.all([
+      stat(sourcePath, { bigint: true }),
+      stat(objectPath, { bigint: true })
+    ]);
+    if (Number(objectStat.size) !== expectedBytes) {
+      return { state: "fallback", error: `对象大小不匹配：${objectPath}` };
+    }
+    if (samePhysicalFile(sourceStat, objectStat)) return { state: objectAlreadyExisted ? "reused" : "stored" };
+
+    const backupPath = `${sourcePath}.${process.pid}.${randomUUID().slice(0, 8)}.dedupe-backup`;
+    await rename(sourcePath, backupPath);
+    try {
+      await link(objectPath, sourcePath);
+      await unlink(backupPath);
+      return { state: "reused" };
+    } catch (error) {
+      await unlink(sourcePath).catch(() => undefined);
+      try {
+        await rename(backupPath, sourcePath);
+      } catch (restoreError) {
+        throw new AggregateError([error, restoreError], `去重失败且无法恢复原文件：${sourcePath}`);
+      }
+      return { state: "fallback", error: error.message };
+    }
+  } catch (error) {
+    if (error instanceof AggregateError) throw error;
+    return { state: "fallback", error: error.message };
+  }
+}
+
+async function deduplicateInventory(managedRoot, directory, inventory) {
+  const objectsRoot = join(managedRoot, "objects", "sha256");
+  const reusedObjects = [];
+  const fallbackObjects = [];
+  let objectsCreated = 0;
+  let reusedLogicalBytes = 0;
+  for (const item of inventory) {
+    if (item.class !== "evidence") continue;
+    const sourcePath = join(directory, item.path);
+    const objectPath = join(objectsRoot, item.sha256.slice(0, 2), item.sha256);
+    const result = await replaceWithObjectLink(sourcePath, objectPath, item.bytes);
+    if (result.state === "stored") objectsCreated += 1;
+    if (result.state === "reused") {
+      reusedLogicalBytes += item.bytes;
+      reusedObjects.push({ path: item.path, bytes: item.bytes, sha256: item.sha256, object: relative(managedRoot, objectPath) });
+    }
+    if (result.state === "fallback") fallbackObjects.push({ path: item.path, reason: result.error });
+  }
+  return {
+    mode: "sha256-hardlink-v1",
+    objectRoot: relative(managedRoot, objectsRoot),
+    objectsCreated,
+    objectsReused: reusedObjects.length,
+    reusedLogicalBytes,
+    fallbackCount: fallbackObjects.length,
+    fallbackObjects,
+    reusedObjects
+  };
 }
 
 function categoryBytes(inventory) {
@@ -205,7 +315,7 @@ export async function startManagedRun({
   let lockReleased = false;
   try {
     await recoverInterruptedRuns(runsRoot);
-    const currentBytes = await bytesUnder(managedRoot);
+    const currentBytes = await physicalBytesUnder(managedRoot);
     const reservedBytes = await pendingReservationBytes(runsRoot);
     const filesystem = await statfs(await nearestExistingDirectory(managedRoot));
     const freeBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
@@ -238,13 +348,15 @@ export async function startManagedRun({
     return {
       id,
       directory,
+      managedRoot,
+      objectDirectory: join(managedRoot, "objects", "sha256"),
       manifestPath,
       path: (...parts) => join(directory, ...parts),
       async finish(status = "succeeded", error) {
         if (finished) return;
         if (!["succeeded", "failed"].includes(status)) throw new Error(`不支持的托管运行终态：${status}`);
-        finished = true;
         const inventory = await inventoryUnder(directory, manifestPath);
+        const storageReuse = await deduplicateInventory(managedRoot, directory, inventory);
         const completedAt = new Date().toISOString();
         await atomicJson(manifestPath, {
           ...pending, status, updatedAt: completedAt, completedAt,
@@ -252,9 +364,12 @@ export async function startManagedRun({
           inventory,
           categoryBytes: categoryBytes(inventory),
           totalBytes: inventory.reduce((sum, item) => sum + item.bytes, 0),
+          storageReuse: Object.fromEntries(Object.entries(storageReuse).filter(([key]) => key !== "reusedObjects")),
+          reusedObjects: storageReuse.reusedObjects,
           peakBytes: { kind: "preflight-upper-bound", bytes: estimate },
           cleanupCandidates: status === "failed" ? cleanupCandidates(inventory) : []
         });
+        finished = true;
       }
     };
   } finally {
@@ -279,7 +394,7 @@ export async function reportManagedArtifacts(root = resolve("test/artifacts")) {
   const entries = await readdir(managedRoot, { withFileTypes: true }).catch(() => []);
   const unmanagedCandidates = [];
   for (const entry of entries) {
-    if (entry.name === "runs") continue;
+    if (["runs", "objects", ".locks", ".gitkeep"].includes(entry.name)) continue;
     const path = join(managedRoot, entry.name);
     unmanagedCandidates.push({ path, bytes: entry.isDirectory() ? await bytesUnder(path) : (await stat(path)).size, lastModified: (await stat(path)).mtime.toISOString() });
   }
@@ -288,5 +403,118 @@ export async function reportManagedArtifacts(root = resolve("test/artifacts")) {
     try { manifests.push({ path, manifest: JSON.parse(await readFile(path, "utf8")) }); }
     catch { manifests.push({ path, manifest: { status: "invalid" } }); }
   }
-  return { root: managedRoot, policy: "report-only", unmanagedCandidates, runs: manifests };
+  const objectsRoot = join(managedRoot, "objects");
+  return {
+    root: managedRoot,
+    policy: "report-only",
+    logicalBytes: await bytesUnder(managedRoot),
+    physicalBytes: await physicalBytesUnder(managedRoot),
+    objectStore: {
+      path: objectsRoot,
+      files: (await filesUnder(objectsRoot)).length,
+      logicalBytes: await bytesUnder(objectsRoot),
+      physicalBytes: await physicalBytesUnder(objectsRoot)
+    },
+    unmanagedCandidates,
+    runs: manifests
+  };
+}
+
+function assertSafeManagedRoot(root) {
+  const managedRoot = resolve(root);
+  const driveRoot = parse(managedRoot).root;
+  if (managedRoot === driveRoot || managedRoot === resolve(".")) throw new Error(`拒绝清理过宽目录：${managedRoot}`);
+  if (managedRoot.length <= driveRoot.length + 3) throw new Error(`拒绝清理可疑目录：${managedRoot}`);
+  return managedRoot;
+}
+
+function terminalBucket(status) {
+  if (status === "succeeded") return "succeeded";
+  if (["failed", "interrupted"].includes(status)) return "failed";
+  return undefined;
+}
+
+export async function planManagedArtifactCleanup({
+  root = resolve("test/artifacts"),
+  all = false,
+  keepSucceeded = 2,
+  keepFailed = 1,
+  includeLegacy = true
+} = {}) {
+  const managedRoot = assertSafeManagedRoot(root);
+  const entries = await readdir(managedRoot, { withFileTypes: true }).catch(() => []);
+  const manifests = [];
+  const activeRuns = [];
+  for (const manifestPath of await ownedRunManifests(join(managedRoot, "runs"))) {
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      const record = { manifestPath, directory: dirname(manifestPath), manifest };
+      manifests.push(record);
+      if (manifest.status === "pending" && processIsAlive(manifest.processId)) activeRuns.push(record);
+    } catch {
+      // Invalid manifests stay untouched in retention mode; --all remains explicit.
+    }
+  }
+
+  let candidates = [];
+  if (all) {
+    candidates = entries.filter((entry) => entry.name !== ".gitkeep").map((entry) => join(managedRoot, entry.name));
+  } else {
+    const grouped = new Map();
+    for (const record of manifests) {
+      const bucket = terminalBucket(record.manifest.status);
+      if (!bucket) continue;
+      const key = `${record.manifest.category}\u0000${record.manifest.producer}\u0000${bucket}`;
+      const group = grouped.get(key) ?? [];
+      group.push(record);
+      grouped.set(key, group);
+    }
+    for (const [key, group] of grouped) {
+      const bucket = key.slice(key.lastIndexOf("\u0000") + 1);
+      const keep = bucket === "succeeded" ? keepSucceeded : keepFailed;
+      group.sort((a, b) => String(b.manifest.completedAt ?? b.manifest.createdAt ?? "").localeCompare(String(a.manifest.completedAt ?? a.manifest.createdAt ?? "")));
+      candidates.push(...group.slice(keep).map((record) => record.directory));
+    }
+    if (includeLegacy) {
+      candidates.push(...entries
+        .filter((entry) => !["runs", "objects", ".locks", ".gitkeep"].includes(entry.name))
+        .map((entry) => join(managedRoot, entry.name)));
+    }
+  }
+
+  candidates = [...new Set(candidates.map((candidate) => resolve(candidate)))].filter((candidate) => candidate.startsWith(`${managedRoot}${sep}`));
+  return {
+    root: managedRoot,
+    mode: all ? "all" : "retention",
+    activeRuns: activeRuns.map((record) => ({ id: record.manifest.id, producer: record.manifest.producer, directory: record.directory })),
+    candidates,
+    candidatePhysicalBytes: await physicalBytesUnderPaths(candidates)
+  };
+}
+
+async function garbageCollectObjects(managedRoot) {
+  const objectsRoot = join(managedRoot, "objects", "sha256");
+  const removed = [];
+  let releasedBytes = 0;
+  for (const path of await filesUnder(objectsRoot)) {
+    const fileStat = await stat(path);
+    if (fileStat.nlink > 1) continue;
+    releasedBytes += fileStat.size;
+    await unlink(path);
+    removed.push(path);
+  }
+  return { removed, releasedBytes };
+}
+
+export async function cleanupManagedArtifacts(options = {}) {
+  const plan = await planManagedArtifactCleanup(options);
+  if (!options.apply) return { ...plan, applied: false, garbageCollected: { removed: [], releasedBytes: 0 } };
+  if (plan.activeRuns.length) throw new Error(`仍有 ${plan.activeRuns.length} 个测试运行中，已拒绝清理。`);
+  for (const candidate of plan.candidates) {
+    if (!candidate.startsWith(`${plan.root}${sep}`)) throw new Error(`清理目标越界：${candidate}`);
+    await rm(candidate, { recursive: true, force: true });
+  }
+  const garbageCollected = options.all ? { removed: [], releasedBytes: 0 } : await garbageCollectObjects(plan.root);
+  await mkdir(plan.root, { recursive: true });
+  return { ...plan, applied: true, garbageCollected };
 }

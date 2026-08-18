@@ -73,6 +73,9 @@ try {
   const titlebar = control.getByTestId("window-titlebar");
   await titlebar.waitFor();
   if (await titlebar.getAttribute("data-window-shell") !== "integrated" || await titlebar.getAttribute("data-window-frame") !== "false") throw new Error("启动器没有消费一体化外壳状态。" );
+  const windowControlButtons = titlebar.locator(".window-titlebar-controls button");
+  if (await windowControlButtons.count() !== 3 || await windowControlButtons.locator("svg").count() !== 3) throw new Error("窗口控制没有统一使用图标。" );
+  if ((await windowControlButtons.allInnerTexts()).some((text) => /[—□❐×]/.test(text))) throw new Error("窗口控制仍在使用字符假装图标。" );
   const launcherBrowserWindow = await electronApp.browserWindow(control);
   const launcherWindowSize = await launcherBrowserWindow.evaluate((window) => window.getSize());
   if (launcherWindowSize[0] !== 1440 || launcherWindowSize[1] !== 900) throw new Error(`启动界面不是完整工作区尺寸：${JSON.stringify(launcherWindowSize)}`);
@@ -164,6 +167,11 @@ try {
     return false;
   }, undefined, { timeout: 30_000 });
   const editorStage = control.getByTestId("editor-stage");
+  const viewportButtons = control.locator(".viewport-navigation button");
+  if (await viewportButtons.count() !== 3 || await viewportButtons.locator("svg").count() !== 3) throw new Error("视图缩放控制没有统一使用图标。" );
+  if ((await viewportButtons.allInnerTexts()).some((text) => text.trim().length > 0)) throw new Error("视图缩放控制仍显示字符按钮。" );
+  const undoRedoButtons = control.locator(".editor-history-actions .icon-only");
+  if (await undoRedoButtons.count() !== 2 || await undoRedoButtons.locator("svg").count() !== 2) throw new Error("撤销和重做没有使用图标按钮。" );
   const stageBeforeNavigation = await editorStage.boundingBox();
   if (!stageBeforeNavigation) throw new Error("编辑视图没有可用的画布范围。");
   const expectedAspectRatio = workspace.project.canvas.width / workspace.project.canvas.height;
@@ -250,6 +258,8 @@ try {
   if (JSON.stringify(workspaceAfterSolo.draft) !== JSON.stringify(workspaceBeforeSolo.draft)) throw new Error("单层查看被错误写入了项目草稿。");
 
   await control.getByRole("button", { name: "网格与权重" }).click();
+  const orderButtons = control.locator(".order-row button");
+  if (await orderButtons.count() !== 2 || await orderButtons.locator("svg").count() !== 2) throw new Error("图层绘制顺序没有使用图标按钮。" );
   await control.locator(".mesh-handle-hit").first().waitFor();
   const handles = control.locator(".mesh-handle-hit");
   const visibleHandles = control.locator(".mesh-handle");
@@ -557,6 +567,9 @@ try {
   viewer.on("console", (message) => { if (message.type() === "error") process.stderr.write(`[viewer console] ${message.text()}\n`); });
   await viewer.getByTestId("viewer").waitFor();
   await viewer.locator("canvas").waitFor({ state: "visible" });
+  const viewerControlButtons = viewer.locator(".viewer-controls button");
+  if (await viewerControlButtons.count() !== 7 || await viewerControlButtons.locator("svg").count() !== 7) throw new Error("角色窗口控制栏没有完整使用图标。" );
+  if ((await viewerControlButtons.allInnerTexts()).some((text) => text.trim().length > 0)) throw new Error("角色窗口控制栏仍包含拥挤的文字按钮。" );
   await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
   const viewerReady = await viewer.evaluate(() => {
     const canvas = document.querySelector("canvas");

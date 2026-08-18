@@ -148,6 +148,46 @@ function simplifyClosedLoop(points: Point[], tolerance: number): Point[] {
   return simplified.length >= 3 ? simplified : points;
 }
 
+function cornerRemovalError(points: Point[], index: number): number {
+  const previous = points[(index - 1 + points.length) % points.length]!;
+  const current = points[index]!;
+  const next = points[(index + 1) % points.length]!;
+  return distanceToSegment(current, previous, next);
+}
+
+/**
+ * Ramer-Douglas-Peucker limits contour error but may still retain several
+ * almost coincident vertices around a sharp raster corner. Those short edges
+ * are useless for deformation and create the dense point clusters and sliver
+ * triangles visible in the editor. Remove the less significant endpoint of
+ * every undersized edge until the contour has a useful, even spacing.
+ */
+function pruneCloseLoopPoints(points: Point[], minimumSpacing: number): Point[] {
+  const output = [...points];
+  if (output.length <= 4 || minimumSpacing <= 0) return output;
+  const maximumPasses = output.length * 2;
+  for (let pass = 0; pass < maximumPasses && output.length > 4; pass += 1) {
+    let shortestIndex = -1;
+    let shortestDistance = minimumSpacing;
+    for (let index = 0; index < output.length; index += 1) {
+      const current = output[index]!;
+      const next = output[(index + 1) % output.length]!;
+      const distance = Math.hypot(next.x - current.x, next.y - current.y);
+      if (distance < shortestDistance) {
+        shortestDistance = distance;
+        shortestIndex = index;
+      }
+    }
+    if (shortestIndex < 0) break;
+    const nextIndex = (shortestIndex + 1) % output.length;
+    const removeIndex = cornerRemovalError(output, shortestIndex) <= cornerRemovalError(output, nextIndex)
+      ? shortestIndex
+      : nextIndex;
+    output.splice(removeIndex, 1);
+  }
+  return removeCollinear(output);
+}
+
 function labelComponents(mask: Uint8Array, width: number, height: number): PixelComponent[] {
   const labels = new Int32Array(mask.length);
   const components: PixelComponent[] = [];
@@ -265,9 +305,14 @@ function isMeaningfulComponent(component: PixelComponent, pixels: PixelBuffer, d
   }
   const span = Math.max(maxX - minX + 1, maxY - minY + 1);
   const clearlyVisible = peakAlpha >= Math.max(32, alphaThreshold * 4);
-  const structurallyLarge = span >= Math.max(8, detail * 1.5)
-    || component.pixels.length >= Math.max(16, detail * detail * 0.5);
-  return clearlyVisible || structurallyLarge;
+  // Alpha antialiasing often leaves a few detached 1-7 px islands beside an
+  // otherwise continuous painted silhouette. Peak opacity alone used to keep
+  // those islands, producing tiny four-point ArtMeshes that looked like stray
+  // control points. Preserve independent painted pieces only when they have a
+  // useful spatial extent or area at the requested deformation scale.
+  const structurallyLarge = span >= Math.max(5, detail * 0.7)
+    || component.pixels.length >= Math.max(10, detail * detail * 0.12);
+  return clearlyVisible && structurallyLarge;
 }
 
 export function traceArtMeshSource(pixels: PixelBuffer, alphaThreshold = 8, detail = 32): ArtMeshSource {
@@ -309,7 +354,8 @@ function pixelLoop(loop: Point[], source: ArtMeshSource, tolerance: number): Poi
     const box = [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }];
     return signedArea(points) < 0 ? box.reverse() : box;
   }
-  return simplifyClosedLoop(points, tolerance);
+  const simplified = simplifyClosedLoop(points, tolerance);
+  return pruneCloseLoopPoints(simplified, Math.max(1.5, tolerance * 0.82));
 }
 
 function triangulateRegion(region: ArtMeshRegion, source: ArtMeshSource, detail: number): { points: Point[]; triangles: number[] } {
@@ -375,12 +421,30 @@ function triangulateRegion(region: ArtMeshRegion, source: ArtMeshSource, detail:
   return { points: input, triangles };
 }
 
+function meaningfulStoredRegion(region: ArtMeshRegion, source: ArtMeshSource, detail: number): boolean {
+  const points = region.outer.map((point) => ({
+    x: point.x * source.textureSize.width,
+    y: point.y * source.textureSize.height
+  }));
+  if (points.length < 3) return false;
+  const span = Math.max(
+    Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x)),
+    Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y))
+  );
+  const area = Math.abs(signedArea(points));
+  return span >= Math.max(5, detail * 0.7) || area >= Math.max(10, detail * detail * 0.12);
+}
+
 export function buildArtMesh(bounds: Rect, source: ArtMeshSource, detail = source.detail): MeshBinding {
   const clampedDetail = Math.max(4, Math.min(256, detail));
+  const meaningfulRegions = source.regions.filter((region) => meaningfulStoredRegion(region, source, clampedDetail));
+  const regions = meaningfulRegions.length > 0
+    ? meaningfulRegions
+    : [...source.regions].sort((left, right) => Math.abs(signedArea(right.outer)) - Math.abs(signedArea(left.outer))).slice(0, 1);
   const points: Point[] = [];
   const uvs: Point[] = [];
   const triangles: number[] = [];
-  for (const region of source.regions) {
+  for (const region of regions) {
     const triangulated = triangulateRegion(region, source, clampedDetail);
     if (points.length + triangulated.points.length > MAX_ART_MESH_VERTICES) {
       throw new Error(`ArtMesh 顶点不能超过 ${MAX_ART_MESH_VERTICES}，请增大细节尺度。`);
@@ -396,7 +460,7 @@ export function buildArtMesh(bounds: Rect, source: ArtMeshSource, detail = sourc
   if (points.length < 3 || triangles.length < 3) throw new Error("Alpha 轮廓没有生成可渲染的 ArtMesh。" );
   return {
     topology: "art",
-    art: { ...source, detail: clampedDetail },
+    art: { ...source, detail: clampedDetail, regions },
     points,
     uvs,
     triangles,

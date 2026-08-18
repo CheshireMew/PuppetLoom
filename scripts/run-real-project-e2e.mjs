@@ -1,15 +1,16 @@
-import { cp } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { _electron as electron } from "playwright";
 import { executeManagedRun } from "./lib/managed-run.mjs";
+import { resolveProjectSource } from "./lib/project-source.mjs";
+import { cloneCurrentProjectForTest } from "./lib/test-project-clone.mjs";
 
 const root = resolve(".");
-const source = resolve(process.argv[2] ?? "workspace/blue-whale-maid-r34");
-await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", estimatedBytes: 1024 * 1024 ** 2, reuse: { applicable: false, reason: "真实项目副本会被草稿和校准链修改，必须与来源及其它验收运行隔离。" } }, async (artifactRun) => {
+const source = await resolveProjectSource(process.argv[2]);
+await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "测试结论仍然独立；来源素材和纹理通过只读硬链接复用，校准与项目清单保持可写副本。" } }, async (artifactRun) => {
 const project = artifactRun.path(`project-${basename(source)}`);
 const screenshot = artifactRun.path("editor.png");
 const applicationProfile = artifactRun.path("user-data");
-await cp(source, project, { recursive: true, errorOnExist: true, force: false });
+const cloneReport = await cloneCurrentProjectForTest(source, project, { objectRoot: artifactRun.objectDirectory });
 
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js"), "--edit", "--project", project],
@@ -32,7 +33,7 @@ try {
 
   const baseline = await editor.evaluate((directory) => window.puppetloom.readEditorWorkspace(directory), project);
   if (baseline.project.name !== "source" || baseline.project.layers.length !== 29) {
-    throw new Error(`真实项目读取结果不符合 r34：${JSON.stringify({ name: baseline.project.name, layers: baseline.project.layers.length })}`);
+    throw new Error(`正式模型测试副本读取结果不正确：${JSON.stringify({ name: baseline.project.name, layers: baseline.project.layers.length })}`);
   }
   if (baseline.project.quality.safetyScale !== 1) throw new Error(`真实项目未在满幅安全边界打开：${baseline.project.quality.safetyScale}`);
   const expectedRevision = baseline.calibration.revision + 1;
@@ -129,11 +130,11 @@ try {
   const firstFrame = await viewer.evaluate(frameSignature);
   await viewer.waitForTimeout(1_200);
   const secondFrame = await viewer.evaluate(frameSignature);
-  if (firstFrame === secondFrame) throw new Error("真实 r34 角色窗口默认启动后画面没有自主运动。" );
+  if (firstFrame === secondFrame) throw new Error("正式模型角色窗口默认启动后画面没有自主运动。" );
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
-  if (pointer.strength !== 1) throw new Error(`真实 r34 角色窗口首次启动没有默认开启鼠标跟随：${JSON.stringify(pointer)}`);
+  if (pointer.strength !== 1) throw new Error(`正式模型角色窗口首次启动没有默认开启鼠标跟随：${JSON.stringify(pointer)}`);
 
-  process.stdout.write(`${JSON.stringify({ ok: true, source, projectCopy: project, screenshot, revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, source, projectCopy: project, screenshot, cloneReport, revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale }, null, 2)}\n`);
 } finally {
   await electronApp.close();
 }

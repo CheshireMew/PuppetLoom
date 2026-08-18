@@ -1,6 +1,8 @@
 import { clamp } from "./math.js";
 import { evaluateLayerAuthoring, resolveMotionState } from "./model.js";
 import { applyCoherentPoseField } from "./pose-field.js";
+import { ahogeHingeWeight, frontHairSideGeometry } from "./front-hair-geometry.js";
+import { clothingBodyFollow, clothingSecondaryRelease } from "./clothing-geometry.js";
 import type { LayerBinding, MotionChainState, MotionState, Point, PuppetLoomProject } from "./types.js";
 
 function rotate(point: Point, pivot: Point, radians: number): Point {
@@ -75,7 +77,7 @@ function bodyMotionInfluence(layer: LayerBinding, base: Point): number {
   }
   if (layer.role === "topWear") return 1;
   if (layer.role === "arm" || layer.role === "hand") return 0.9;
-  if (layer.role === "bottomWear") return 0.62;
+  if (layer.role === "bottomWear") return clothingBodyFollow(layer, base);
   if (layer.role === "tail" || layer.role === "accessory") return 0.7;
   if (layer.role === "leg") return 0.16;
   if (layer.role === "foot") return 0;
@@ -83,37 +85,11 @@ function bodyMotionInfluence(layer: LayerBinding, base: Point): number {
   return 0.75;
 }
 
-function frontHairSecondaryRelease(layer: LayerBinding, base: Point): number {
-  const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
-  const centerX = layer.bounds.x + layer.bounds.width * 0.5;
-  const screenLeft = base.x < centerX;
-  const commonRootY = layer.secondaryAnchors?.frontHairRoot?.y ?? layer.bounds.y + layer.bounds.height * 0.52;
-  const root = screenLeft
-    ? layer.secondaryAnchors?.frontHairRootLeft ?? { x: layer.bounds.x + layer.bounds.width * 0.18, y: commonRootY }
-    : layer.secondaryAnchors?.frontHairRootRight ?? { x: layer.bounds.x + layer.bounds.width * 0.82, y: commonRootY };
-  const tip = screenLeft
-    ? layer.secondaryAnchors?.frontHairTipLeft ?? { x: layer.bounds.x + layer.bounds.width * 0.1, y: layer.bounds.y + layer.bounds.height }
-    : layer.secondaryAnchors?.frontHairTipRight ?? { x: layer.bounds.x + layer.bounds.width * 0.9, y: layer.bounds.y + layer.bounds.height };
-  const length = Math.max(layer.bounds.height * 0.28, tip.y - root.y);
-  const progress = clamp((base.y - root.y) / length, 0, 1);
-  const expectedX = root.x + (tip.x - root.x) * progress;
-  const distanceFromStrand = Math.abs(base.x - expectedX) / Math.max(1e-6, layer.bounds.width * 0.3);
-  const strandProximity = 1 - smoothstep01((distanceFromStrand - 0.2) / 0.8);
-  const outerBand = smoothstep01((Math.abs(u - 0.5) - 0.18) / 0.27);
-  const strandMask = Math.max(outerBand, strandProximity * 0.9);
-  const sideRelease = smoothstep01(progress) ** 1.3 * strandMask;
-
-  const rootV = clamp((commonRootY - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0.35, 0.78);
-  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-  const bangRelease = smoothstep01((v - rootV) / Math.max(0.08, 1 - rootV)) ** 1.35 * (1 - outerBand) * 0.22;
-  return Math.max(sideRelease, bangRelease);
-}
-
 function secondaryFree(layer: LayerBinding, base: Point): number {
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
   if (layer.role === "frontHair") {
-    return frontHairSecondaryRelease(layer, base);
+    return frontHairSideGeometry(layer, base).totalRelease;
   }
   if (layer.role === "headwear") {
     const hinge = base.x < layer.bounds.x + layer.bounds.width * 0.5
@@ -138,8 +114,9 @@ function secondaryFree(layer: LayerBinding, base: Point): number {
     const distanceFromRoot = Math.hypot((u - 0.03) * 0.9, (v - 0.08) * 0.74);
     return smoothstep01((distanceFromRoot - 0.05) / 0.38);
   }
-  if (layer.role === "topWear") return smoothstep01((v - 0.52) / 0.48) ** 2;
-  if (layer.role === "bottomWear") return smoothstep01((v - 0.12) / 0.88) ** 2;
+  if (layer.role === "topWear" || layer.role === "bottomWear" || layer.role === "arm") {
+    return clothingSecondaryRelease(layer, base);
+  }
   return v * v;
 }
 
@@ -177,18 +154,6 @@ function earHingeFor(layer: LayerBinding, base: Point): { pivot: Point; mirror: 
     return { pivot: layer.pivot, mirror };
   }
   return undefined;
-}
-
-function ahogeFree(layer: LayerBinding, base: Point): number {
-  if (layer.role !== "frontHair") return 0;
-  const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
-  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-  const root = layer.secondaryAnchors?.ahogeRoot;
-  const rootU = root ? clamp((root.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1) : 0.5;
-  const rootV = root ? clamp((root.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0.12, 0.42) : 0.24;
-  const center = 1 - smoothstep01((Math.abs(u - rootU) - 0.045) / 0.24);
-  const aboveRoot = smoothstep01((rootV - v) / Math.max(0.08, rootV));
-  return center * aboveRoot;
 }
 
 function hasSidePerspective(layer: LayerBinding): boolean {
@@ -239,7 +204,10 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     point.x = bodyPivot.x + (point.x - bodyPivot.x) * compression;
     const localU = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
     const localV = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
-    const upperFollow = layer.role === "neck" ? 1 : 1 - smoothstep01((localV - 0.08) / 0.92);
+    const isConnectedGarment = layer.role === "topWear" || layer.role === "arm" || layer.role === "hand" || layer.role === "bottomWear";
+    const garmentTop = project.anchors.neck?.y ?? bodyPivot.y - faceHeight * 0.45;
+    const garmentFollow = 1 - smoothstep01((base.y - garmentTop) / Math.max(0.08, bodyPivot.y - garmentTop));
+    const upperFollow = layer.role === "neck" ? 1 : isConnectedGarment ? garmentFollow : 1 - smoothstep01((localV - 0.08) / 0.92);
     if (layer.role === "neck" || layer.role === "topWear" || layer.role === "arm" || layer.role === "hand" || layer.role === "bottomWear") {
       point.x += bodyTurn * faceWidth * 0.012 * bodyWeight * upperFollow;
       point.y += bodyTurn * (localU - 0.5) * faceHeight * 0.018 * bodyWeight * upperFollow;
@@ -301,16 +269,23 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     const free = secondaryFree(layer, base);
     const weight = physicsLayerWeight;
     if (layer.role === "frontHair") {
+      const strand = frontHairSideGeometry(layer, base);
+      const strandChain = strand.screenSide < 0 ? state.secondary?.frontHairLeft : state.secondary?.frontHairRight;
+      const commonPivot = layer.secondaryAnchors?.frontHairRoot ?? layer.pivot;
+      const bangRelease = strand.sideMask >= 0.5 ? 0 : strand.bangRelease;
       if (state.secondary) {
-        const bend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, free);
-        const lift = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "y", u, free);
-        addLocalBend(point, base, layer.pivot, bend * 3.1 * weight, 1);
-        point.y += lift * faceHeight * 0.72 * weight;
-        point.x += lift * (u - 0.5) * faceWidth * 1.1 * weight;
+        const sideBend = chainValue(strandChain, "x", strand.sideRelease);
+        const sideLift = chainValue(strandChain, "y", strand.sideRelease);
+        const bangBend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, bangRelease);
+        const bangLift = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "y", u, bangRelease);
+        addLocalRotation(point, base, strand.root, sideBend * 2.45 * weight, 1);
+        addLocalRotation(point, base, commonPivot, bangBend * 1.35 * weight, 1);
+        point.y += sideLift * faceHeight * 0.22 * weight * strand.sideRelease;
+        point.y += bangLift * faceHeight * 0.16 * weight * bangRelease;
       } else {
-        addLocalBend(point, base, layer.pivot, state.hairX * 2.1 * weight, free);
-        point.y += state.hairY * faceHeight * 0.42 * weight * free;
-        point.x += state.hairY * (u - 0.5) * faceWidth * 1.35 * weight * free;
+        addLocalRotation(point, base, strand.root, state.hairX * 1.7 * weight * strand.sideRelease, 1);
+        addLocalRotation(point, base, commonPivot, state.hairX * 0.9 * weight * bangRelease, 1);
+        point.y += state.hairY * faceHeight * 0.2 * weight * free;
       }
     } else if (layer.role === "backHair" || layer.role === "sideHair") {
       if (state.secondary) {
@@ -339,7 +314,7 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
       const hinge = earHingeFor(layer, base);
       if (hinge) addLocalBend(point, base, hinge.pivot, (state.earY * hinge.mirror * 20 + state.earX * 6) * weight, free);
     } else if (layer.role === "topWear" || layer.role === "bottomWear") {
-      const clothScale = layer.role === "bottomWear" ? 5.2 : 2.1;
+      const clothScale = layer.role === "bottomWear" ? 3.4 : 1.5;
       const clothChain = layer.role === "bottomWear" ? state.secondary?.skirt : state.secondary?.topCloth;
       const clothX = clothChain ? chainValue(clothChain, "x", free) : state.clothX * free;
       const clothY = clothChain ? chainValue(clothChain, "y", free) : state.clothY * free;
@@ -362,13 +337,12 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
       point.y += accessoryY * faceHeight * 0.68 * weight;
     }
     if (layer.role === "frontHair") {
-      const ahoge = ahogeFree(layer, base);
-      const ahogeX = state.secondary ? chainValue(state.secondary.ahoge, "x", ahoge) : state.ahogeX * ahoge;
-      const ahogeY = state.secondary ? chainValue(state.secondary.ahoge, "y", ahoge) : state.ahogeY * ahoge;
+      const ahoge = ahogeHingeWeight(layer, base);
+      const ahogeX = state.secondary ? chainValue(state.secondary.ahoge, "x", 1) : state.ahogeX;
+      const ahogeY = state.secondary ? chainValue(state.secondary.ahoge, "y", 1) : state.ahogeY;
       const ahogePivot = layer.secondaryAnchors?.ahogeRoot ?? layer.pivot;
-      addLocalBend(point, base, ahogePivot, ahogeX * 6.4 * weight, 1);
-      point.y += ahogeY * faceHeight * 2.2 * weight;
-      point.y += ahogeX * (u - 0.5) * faceHeight * 0.2 * weight;
+      const hingeWeight = layer.weights.physics * release;
+      addLocalRotation(point, base, ahogePivot, (ahogeX * 5.4 + ahogeY * 1.5) * hingeWeight, ahoge);
     }
   }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuildReport, InspectionReport, PuppetLoomProject } from "@puppetloom/core";
 import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
+import { ExternalLink, FileUp, FolderOpen, FolderOutput, Minus, MousePointer2, MousePointerClick, Pause, Pin, Play, Plus, PointerOff, Sparkles, X } from "lucide-react";
 import type { RecentProject, ViewerState } from "../electron/global.js";
 import { EditorWorkspace } from "./EditorWorkspace.js";
 import { WindowTitleBar } from "./WindowTitleBar.js";
@@ -91,13 +92,13 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       <canvas ref={canvas} className="puppet-canvas" />
       <div className="drag-strip" title="拖动角色窗口"><span>{project?.name ?? "加载中"}</span></div>
       <nav className="viewer-controls" aria-label="角色窗口控制">
-        <button onClick={() => act("smaller")} title="缩小">−</button>
-        <button onClick={() => act("larger")} title="放大">＋</button>
-        <button onClick={() => act("pause")} title="暂停或继续">{state.paused ? "继续" : "暂停"}</button>
-        <button onClick={() => act("top")} title="切换置顶">{state.alwaysOnTop ? "取消置顶" : "置顶"}</button>
-        <button onClick={() => act("pointer-tracking")} title="在鼠标跟随和自主观察之间切换">{state.mouseTracking ? "跟随中" : "自主"}</button>
-        <button onClick={() => act("click-through")} title="启用后按 Ctrl+Shift+P 恢复鼠标">穿透</button>
-        <button onClick={() => act("close")} title="关闭">×</button>
+        <button className="icon-only" aria-label="缩小角色窗口" onClick={() => act("smaller")} title="缩小角色窗口"><Minus aria-hidden="true" /></button>
+        <button className="icon-only" aria-label="放大角色窗口" onClick={() => act("larger")} title="放大角色窗口"><Plus aria-hidden="true" /></button>
+        <button className={`icon-only ${state.paused ? "is-active" : ""}`} aria-label={state.paused ? "继续播放" : "暂停播放"} aria-pressed={state.paused} onClick={() => act("pause")} title={state.paused ? "继续播放" : "暂停播放"}>{state.paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}</button>
+        <button className={`icon-only ${state.alwaysOnTop ? "is-active" : ""}`} aria-label={state.alwaysOnTop ? "取消置顶" : "置顶窗口"} aria-pressed={state.alwaysOnTop} onClick={() => act("top")} title={state.alwaysOnTop ? "取消置顶" : "置顶窗口"}><Pin aria-hidden="true" /></button>
+        <button className={`icon-only ${state.mouseTracking ? "is-active" : ""}`} aria-label={state.mouseTracking ? "切换为自主观察" : "切换为鼠标跟随"} aria-pressed={state.mouseTracking} onClick={() => act("pointer-tracking")} title={state.mouseTracking ? "当前跟随鼠标；点击切换为自主观察" : "当前自主观察；点击切换为鼠标跟随"}>{state.mouseTracking ? <MousePointer2 aria-hidden="true" /> : <Sparkles aria-hidden="true" />}</button>
+        <button className={`icon-only ${state.clickThrough ? "is-active" : ""}`} aria-label={state.clickThrough ? "关闭鼠标穿透" : "开启鼠标穿透"} aria-pressed={state.clickThrough} onClick={() => act("click-through")} title={state.clickThrough ? "关闭鼠标穿透" : "开启鼠标穿透；按 Ctrl+Shift+P 恢复鼠标"}>{state.clickThrough ? <PointerOff aria-hidden="true" /> : <MousePointerClick aria-hidden="true" />}</button>
+        <button className="icon-only viewer-close" aria-label="关闭角色窗口" onClick={() => act("close")} title="关闭角色窗口"><X aria-hidden="true" /></button>
       </nav>
       {state.clickThrough && <div className="shortcut-hint">Ctrl+Shift+P 恢复鼠标</div>}
       {error && <div className="viewer-error">{error}</div>}
@@ -129,7 +130,7 @@ function DropField({ label, value, accept, optional, onPick, onDrop }: {
     >
       <div><strong>{label}</strong>{optional && <span className="optional">可选</span>}</div>
       <p>{value || "拖到这里，或从本机选择"}</p>
-      <button onClick={() => void onPick()}>选择文件</button>
+      <button className="with-icon" onClick={() => void onPick()}><FileUp aria-hidden="true" />选择文件</button>
     </section>
   );
 }
@@ -226,7 +227,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
       <header>
         <div className="mark">PL</div>
         <div><h1>PuppetLoom</h1><p>分层 PSD 进去，一个克制、稳定、会自己动的角色出来。</p></div>
-        <button className="secondary open-project" onClick={() => void openExisting()}>打开 PuppetLoom 项目目录</button>
+        <button className="secondary open-project with-icon" onClick={() => void openExisting()}><FolderOpen aria-hidden="true" />打开 PuppetLoom 项目目录</button>
       </header>
       <div className="workflow">
         <section className="inputs">
@@ -235,9 +236,9 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
           <DropField label="原始角色图" value={reference} accept="\\.(png|jpe?g|webp)$" optional onPick={() => choose("reference")} onDrop={setReference} />
           <section className="output-field">
             <div><strong>项目输出目录</strong><p>{output || "请选择一个新目录或空目录"}</p></div>
-            <button onClick={() => void choose("output")}>选择目录</button>
+            <button className="with-icon" onClick={() => void choose("output")}><FolderOutput aria-hidden="true" />选择目录</button>
           </section>
-          <button className="primary" disabled={!ready} onClick={() => void create()}>{busy ? "正在创建并验证…" : "创建角色项目"}</button>
+          <button className="primary with-icon" disabled={!ready} onClick={() => void create()}><Sparkles aria-hidden="true" />{busy ? "正在创建并验证…" : "创建角色项目"}</button>
           <p className="policy">缺少三态嘴形时嘴部保持不动；接入后只偶发一次缓慢开合，不连续无声说话。缺少闭眼素材不会阻塞创建。</p>
         </section>
         <div className="launch-sidebar">
@@ -254,13 +255,13 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
             {report && <Report report={report} />}
             {projectDirectory && <section className="result-actions">
               <p>项目已写入：<br/><code>{projectDirectory}</code></p>
-              <button className="primary" onClick={() => onEdit(projectDirectory)}>打开绑定与校准编辑器</button>
-              <button className="primary" onClick={() => void launch()}>打开透明角色窗口</button>
+              <button className="primary with-icon" onClick={() => onEdit(projectDirectory)}><ExternalLink aria-hidden="true" />打开绑定与校准编辑器</button>
+              <button className="primary with-icon" onClick={() => void launch()}><Play aria-hidden="true" />打开透明角色窗口</button>
               {viewerId !== undefined && <div className="remote-controls">
-                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}>暂停 / 继续</button>
-                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "click-through")}>鼠标穿透</button>
-                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "pointer-tracking")}>鼠标跟随 / 自主观察</button>
-                <button onClick={() => void window.puppetloom.controlViewer(viewerId, "top")}>切换置顶</button>
+                <button className="with-icon" onClick={() => void window.puppetloom.controlViewer(viewerId, "pause")}><Pause aria-hidden="true" />暂停 / 继续</button>
+                <button className="with-icon" onClick={() => void window.puppetloom.controlViewer(viewerId, "click-through")}><PointerOff aria-hidden="true" />鼠标穿透</button>
+                <button className="with-icon" onClick={() => void window.puppetloom.controlViewer(viewerId, "pointer-tracking")}><MousePointer2 aria-hidden="true" />跟随 / 自主</button>
+                <button className="with-icon" onClick={() => void window.puppetloom.controlViewer(viewerId, "top")}><Pin aria-hidden="true" />切换置顶</button>
               </div>}
             </section>}
             {error && <div className="error" role="alert">{error}</div>}

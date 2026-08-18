@@ -96,7 +96,13 @@ function layerMeshIssues(project: PuppetLoomProject, layer: LayerBinding, state:
     const baseArea = signedArea(a0, b0, c0);
     const currentArea = signedArea(a1, b1, c1);
     if (baseArea * currentArea <= 0 || Math.abs(currentArea) < Math.abs(baseArea) * 0.08) {
-      issues.push({ code: "mesh-inversion", severity: "error", message: `${layer.sourceName} 的网格发生翻转。`, layerId: layer.id });
+      const areaRatio = Math.abs(baseArea) > 1e-12 ? currentArea / baseArea : 0;
+      issues.push({
+        code: "mesh-inversion",
+        severity: "error",
+        message: `${layer.sourceName} 的网格三角形 ${index / 3}（顶点 ${ia}/${ib}/${ic}）发生翻转或塌陷，面积比 ${areaRatio.toFixed(4)}。`,
+        layerId: layer.id
+      });
       break;
     }
     const baseLongest = Math.max(distance(a0, b0), distance(b0, c0), distance(c0, a0), 1e-6);

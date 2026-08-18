@@ -255,6 +255,8 @@ export const puppetLoomProjectSchema = z.object({
       skullRadiusY: z.number().positive().optional(),
       maxYawRadians: z.number().positive(),
       maxPitchRadians: z.number().positive(),
+      maxPitchUpRadians: z.number().positive().optional(),
+      maxPitchDownRadians: z.number().positive().optional(),
       perspective: z.number().min(0).max(0.5)
     }).optional(),
     semanticCage: z.object({
@@ -570,6 +572,13 @@ export const calibrationOverridesSchema = z.object({
       breath: z.number().min(0).max(0.08).optional(),
       globalScale: z.number().min(0.5).max(1.5).optional()
     }).partial().optional(),
+    poseField: z.object({
+      maxYawRadians: z.number().min(0.08).max(0.7).optional(),
+      maxPitchRadians: z.number().min(0.06).max(0.55).optional(),
+      maxPitchUpRadians: z.number().min(0.06).max(0.55).optional(),
+      maxPitchDownRadians: z.number().min(0.06).max(0.55).optional(),
+      perspective: z.number().min(0).max(0.5).optional()
+    }).partial().optional(),
     motionTuning: z.object({
       amplitude: z.number().min(0).max(1.5).optional(),
       response: z.number().min(0).max(1).optional(),
@@ -596,7 +605,7 @@ export const calibrationPatchSchema = z.object({
     anchors: z.array(z.enum(["headTop", "forehead", "eyeLeft", "eyeRight", "cheekLeft", "cheekRight", "nose", "mouth", "chin", "neck", "shoulderLeft", "shoulderRight", "bodyCenter"])).optional(),
     semanticPoints: z.array(semanticCagePointIdSchema).optional(),
     layers: z.array(z.string().min(1)).optional(),
-    runtime: z.array(z.enum(["envelope", "motionTuning", "secondaryMotionTuning"])).optional()
+    runtime: z.array(z.enum(["envelope", "poseField", "motionTuning", "secondaryMotionTuning"])).optional()
   }).optional()
 });
 

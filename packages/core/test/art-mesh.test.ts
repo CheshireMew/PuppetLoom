@@ -65,6 +65,49 @@ describe("Alpha-aware ArtMesh", () => {
     }
   });
 
+  it("drops detached alpha specks instead of turning them into stray mesh clusters", () => {
+    const texture = pixels(96, 96, (x, y) => {
+      const main = x >= 18 && x < 78 && y >= 12 && y < 88;
+      const twoPixelSpeck = x >= 84 && x < 86 && y >= 20 && y < 22;
+      const narrowPaintedStrand = x >= 7 && x < 10 && y >= 24 && y < 58;
+      return main || twoPixelSpeck || narrowPaintedStrand;
+    });
+    const source = traceArtMeshSource(texture, 8, 12);
+    expect(source.regions).toHaveLength(2);
+
+    const mesh = buildArtMesh({ x: 0, y: 0, width: 1, height: 1 }, source);
+    expect(mesh.points.some((point) => point.x > 0.86 && point.y < 0.3)).toBe(false);
+    expect(mesh.points.some((point) => point.x < 0.12 && point.y > 0.2 && point.y < 0.65)).toBe(true);
+  });
+
+  it("also removes legacy speck regions when remeshing a stored ArtMesh source", () => {
+    const source = traceArtMeshSource(pixels(96, 96, (x, y) => x >= 16 && x < 80 && y >= 12 && y < 90), 8, 12);
+    source.regions.push({
+      outer: [{ x: 0.9, y: 0.1 }, { x: 0.94, y: 0.1 }, { x: 0.94, y: 0.12 }, { x: 0.9, y: 0.12 }],
+      holes: []
+    });
+    const legacy = buildArtMesh({ x: 0, y: 0, width: 1, height: 1 }, { ...source, detail: 4 }, 4);
+    legacy.art = source;
+    const rebuilt = remeshArtMesh(legacy, { x: 0, y: 0, width: 1, height: 1 }, 12);
+    expect(rebuilt.art?.regions).toHaveLength(1);
+    expect(rebuilt.points.some((point) => point.x > 0.88 && point.y < 0.15)).toBe(false);
+  });
+
+  it("keeps contour vertices evenly spaced at the selected deformation detail", () => {
+    const texture = pixels(160, 160, (x, y) => {
+      const dx = x - 80;
+      const dy = y - 80;
+      const radius = 57 + Math.sin(Math.atan2(dy, dx) * 18) * 2.4;
+      return dx * dx + dy * dy <= radius * radius;
+    });
+    const detail = 12;
+    const mesh = buildArtMesh({ x: 0, y: 0, width: 1, height: 1 }, traceArtMeshSource(texture, 8, detail));
+    const nearest = mesh.uvs.map((point, index) => Math.min(...mesh.uvs.map((candidate, candidateIndex) => candidateIndex === index
+      ? Number.POSITIVE_INFINITY
+      : Math.hypot((candidate.x - point.x) * texture.width, (candidate.y - point.y) * texture.height))));
+    expect(nearest.filter((distance) => distance < detail * 0.25).length).toBeLessThanOrEqual(2);
+  });
+
   it("retains a compact regular mesh for fully opaque rectangular artwork", () => {
     const texture = pixels(32, 24, () => true);
     const mesh = makeAdaptiveMesh({
