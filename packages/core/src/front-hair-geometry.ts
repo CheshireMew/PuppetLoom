@@ -18,8 +18,34 @@ export interface FrontHairSideGeometry {
   progress: number;
   sideMask: number;
   sideRelease: number;
+  bangRoot: Point;
+  bangTipY: number;
+  bangProgress: number;
+  bangMask: number;
   bangRelease: number;
   totalRelease: number;
+}
+
+function normalizedU(layer: LayerBinding, point: Point): number {
+  return clamp((point.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width));
+}
+
+/**
+ * Finds the lower edge of the short central fringe independently from the two
+ * long face-framing locks. The old implementation normalized every bang
+ * vertex against the complete front-hair bitmap height, so a short fringe
+ * ending around the eyes never accumulated a useful release weight.
+ */
+function centralBangTipY(layer: LayerBinding, fallbackRootY: number): number {
+  const height = Math.max(1e-6, layer.bounds.height);
+  const central = layer.mesh.points.filter((candidate) => {
+    const candidateU = normalizedU(layer, candidate);
+    return candidateU >= 0.3 && candidateU <= 0.7 && candidate.y > fallbackRootY + height * 0.04;
+  });
+  const detected = central.length > 0
+    ? Math.max(...central.map((candidate) => candidate.y))
+    : fallbackRootY + height * 0.34;
+  return clamp(detected, fallbackRootY + height * 0.12, layer.bounds.y + height);
 }
 
 /**
@@ -30,7 +56,7 @@ export interface FrontHairSideGeometry {
 export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontHairSideGeometry {
   const width = Math.max(1e-6, layer.bounds.width);
   const height = Math.max(1e-6, layer.bounds.height);
-  const u = clamp((point.x - layer.bounds.x) / width);
+  const u = normalizedU(layer, point);
   const v = clamp((point.y - layer.bounds.y) / height);
   const screenSide: -1 | 1 = u < 0.5 ? -1 : 1;
   const commonRootY = layer.secondaryAnchors?.frontHairRoot?.y ?? layer.bounds.y + height * 0.52;
@@ -47,9 +73,29 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
   const strandProximity = 1 - smoothstep((distanceFromStrand - 0.2) / 0.8);
   const outerBand = smoothstep((Math.abs(u - 0.5) - 0.18) / 0.27);
   const strandMask = Math.max(outerBand, strandProximity * 0.9);
-  const sideRelease = smoothstep(progress) ** 1.3 * strandMask;
-  const rootV = clamp((commonRootY - layer.bounds.y) / height, 0.35, 0.78);
-  const bangRelease = smoothstep((v - rootV) / Math.max(0.08, 1 - rootV)) ** 1.35 * (1 - outerBand) * 0.22;
+  // Central bangs start above the side-lock roots and often finish much
+  // earlier than the complete bitmap. Detect their own lower contour, then
+  // release each short strand over that local length.
+  const bangRootY = clamp(
+    commonRootY - height * 0.14,
+    layer.bounds.y + height * 0.26,
+    layer.bounds.y + height * 0.44
+  );
+  const bangTipY = centralBangTipY(layer, bangRootY);
+  const bangProgress = clamp((point.y - bangRootY) / Math.max(height * 0.12, bangTipY - bangRootY));
+  const bangHorizontal = 1 - smoothstep((Math.abs(u - 0.5) - 0.17) / 0.15);
+  // Long side locks can cross the central horizontal band below the short
+  // fringe. Stop the bang mask shortly after the detected fringe contour so
+  // those locks keep their own roots and motion chain.
+  const bangBottomEnvelope = 1 - smoothstep((point.y - bangTipY) / Math.max(1e-6, height * 0.055));
+  const bangMask = bangHorizontal * bangBottomEnvelope;
+  const atSharedRoot = Math.hypot(point.x - (layer.secondaryAnchors?.frontHairRoot?.x ?? layer.pivot.x), point.y - commonRootY) <= height * 1e-6;
+  const bangRelease = atSharedRoot ? 0 : smoothstep((bangProgress - 0.08) / 0.92) ** 1.2 * bangMask;
+  // A central fringe tip near either side root previously got claimed by the
+  // side-strand proximity test. Give the explicit bang classification
+  // precedence while retaining a smooth overlap at its boundary.
+  const sideOwnership = 1 - bangMask * 0.9;
+  const sideRelease = smoothstep(progress) ** 1.3 * strandMask * sideOwnership;
   return {
     u,
     v,
@@ -59,6 +105,10 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
     progress,
     sideMask: strandMask,
     sideRelease,
+    bangRoot: { x: point.x, y: bangRootY },
+    bangTipY,
+    bangProgress,
+    bangMask,
     bangRelease,
     totalRelease: Math.max(sideRelease, bangRelease)
   };

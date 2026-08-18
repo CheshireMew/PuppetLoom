@@ -23,6 +23,24 @@ function opaqueAt(buffer: PixelBuffer, u: number, v: number): boolean {
   return (buffer.data[(y * buffer.width + x) * 4 + 3] ?? 0) >= 8;
 }
 
+function longestBoundaryEdgePixels(mesh: ReturnType<typeof buildArtMesh>, texture: PixelBuffer): number {
+  const edgeCounts = new Map<string, { from: number; to: number; count: number }>();
+  for (let index = 0; index < mesh.triangles.length; index += 3) {
+    const triangle = mesh.triangles.slice(index, index + 3);
+    for (const [from, to] of [[triangle[0]!, triangle[1]!], [triangle[1]!, triangle[2]!], [triangle[2]!, triangle[0]!]]) {
+      const key = from < to ? `${from},${to}` : `${to},${from}`;
+      const edge = edgeCounts.get(key);
+      if (edge) edge.count += 1;
+      else edgeCounts.set(key, { from, to, count: 1 });
+    }
+  }
+  return Math.max(...[...edgeCounts.values()].filter(({ count }) => count === 1).map(({ from, to }) => {
+    const a = mesh.uvs[from]!;
+    const b = mesh.uvs[to]!;
+    return Math.hypot((b.x - a.x) * texture.width, (b.y - a.y) * texture.height);
+  }));
+}
+
 describe("Alpha-aware ArtMesh", () => {
   it("keeps disconnected painted regions separate and preserves transparent holes", () => {
     const texture = pixels(64, 48, (x, y) => {
@@ -106,6 +124,25 @@ describe("Alpha-aware ArtMesh", () => {
       ? Number.POSITIVE_INFINITY
       : Math.hypot((candidate.x - point.x) * texture.width, (candidate.y - point.y) * texture.height))));
     expect(nearest.filter((distance) => distance < detail * 0.25).length).toBeLessThanOrEqual(2);
+  });
+
+  it("does not collapse a long smooth silhouette arc into one undeformable boundary edge", () => {
+    const texture = pixels(161, 260, (x, y) => {
+      const dx = (x - 80) / 73;
+      const dy = (y - 132) / 120;
+      return dx * dx + dy * dy <= 1;
+    });
+    const detail = 12;
+    const mesh = buildArtMesh({ x: 0, y: 0, width: 1, height: 1 }, traceArtMeshSource(texture, 8, detail));
+    expect(longestBoundaryEdgePixels(mesh, texture)).toBeLessThanOrEqual(detail * 2.05);
+
+    const clippedTexture = pixels(161, 260, (x, y) => {
+      const dx = (x - 105) / 75;
+      const dy = (y - 132) / 112;
+      return dx * dx + dy * dy <= 1;
+    });
+    const clippedMesh = buildArtMesh({ x: 0, y: 0, width: 1, height: 1 }, traceArtMeshSource(clippedTexture, 8, detail));
+    expect(longestBoundaryEdgePixels(clippedMesh, clippedTexture)).toBeLessThanOrEqual(detail * 2.05);
   });
 
   it("retains a compact regular mesh for fully opaque rectangular artwork", () => {

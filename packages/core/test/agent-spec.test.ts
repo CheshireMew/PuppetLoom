@@ -21,7 +21,9 @@ function validSpecification() {
         ahogeStability: 0.44,
         lagResponse: 8.8,
         lagDamping: 0.9,
-        deformationScale: 0.72
+        deformationScale: 0.72,
+        crownOutset: 0.04,
+        bangLagDegrees: 5.5
       }
     }]
   };
@@ -39,6 +41,12 @@ describe("external Agent rig specification", () => {
     const excessive = validSpecification();
     excessive.parts[0]!.intent.deformationScale = 9;
     expect(() => parseModelAgentSpecification(excessive)).toThrow("deformationScale");
+    const excessiveOutset = validSpecification();
+    excessiveOutset.parts[0]!.intent.crownOutset = 0.2;
+    expect(() => parseModelAgentSpecification(excessiveOutset)).toThrow("crownOutset");
+    const excessiveBang = validSpecification();
+    excessiveBang.parts[0]!.intent.bangLagDegrees = 30;
+    expect(() => parseModelAgentSpecification(excessiveBang)).toThrow("bangLagDegrees");
     const multipleFrontLayers = validSpecification();
     multipleFrontLayers.parts[0]!.layerIds = ["front-a", "front-b"];
     expect(() => parseModelAgentSpecification(multipleFrontLayers)).toThrow("最多只能指定一个图层");

@@ -271,20 +271,19 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     if (layer.role === "frontHair") {
       const strand = frontHairSideGeometry(layer, base);
       const strandChain = strand.screenSide < 0 ? state.secondary?.frontHairLeft : state.secondary?.frontHairRight;
-      const commonPivot = layer.secondaryAnchors?.frontHairRoot ?? layer.pivot;
-      const bangRelease = strand.sideMask >= 0.5 ? 0 : strand.bangRelease;
+      const bangRelease = strand.bangRelease;
       if (state.secondary) {
         const sideBend = chainValue(strandChain, "x", strand.sideRelease);
         const sideLift = chainValue(strandChain, "y", strand.sideRelease);
         const bangBend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, bangRelease);
         const bangLift = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "y", u, bangRelease);
         addLocalRotation(point, base, strand.root, sideBend * 2.45 * weight, 1);
-        addLocalRotation(point, base, commonPivot, bangBend * 1.35 * weight, 1);
+        addLocalRotation(point, base, strand.bangRoot, bangBend * 1.35 * weight, 1);
         point.y += sideLift * faceHeight * 0.22 * weight * strand.sideRelease;
         point.y += bangLift * faceHeight * 0.16 * weight * bangRelease;
       } else {
         addLocalRotation(point, base, strand.root, state.hairX * 1.7 * weight * strand.sideRelease, 1);
-        addLocalRotation(point, base, commonPivot, state.hairX * 0.9 * weight * bangRelease, 1);
+        addLocalRotation(point, base, strand.bangRoot, state.hairX * 0.9 * weight * bangRelease, 1);
         point.y += state.hairY * faceHeight * 0.2 * weight * free;
       }
     } else if (layer.role === "backHair" || layer.role === "sideHair") {

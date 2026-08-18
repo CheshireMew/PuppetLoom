@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { commitModelAgentProposal, type ModelAgentCheck, type ModelAgentRepair } from "./agent.js";
-import { prepareAgentMeshes } from "./agent-mesh.js";
+import { assessAgentMesh, prepareAgentMeshes } from "./agent-mesh.js";
 import { applyAuthoringOperations } from "./authoring.js";
 import { applyCalibrationOverrides } from "./calibration.js";
 import { deformedPoints, neutralMotionState } from "./deform.js";
@@ -21,6 +21,7 @@ import type {
   AuthoringPreview,
   CalibrationDraftDocument,
   CalibrationOverrides,
+  LayerCalibrationOverride,
   CalibrationSaveResult,
   LayerBinding,
   ModelBinding,
@@ -48,6 +49,8 @@ export interface FrontHairIntentProfile {
   lagResponse: number;
   lagDamping: number;
   deformationScale: number;
+  crownOutset?: number;
+  bangLagDegrees?: number;
   explanation: string[];
 }
 
@@ -158,6 +161,8 @@ function instructionProfile(rawInstruction?: string, explicitIntent?: FrontHairI
       lagResponse: 8.2,
       lagDamping: 0.78,
       deformationScale: 0.88,
+      crownOutset: 0,
+      bangLagDegrees: 3.2,
       explanation: ["旧调用兼容入口使用固定安全基线；自然语言意图应由外部 Agent 写入结构化规格。"]
     }
   };
@@ -221,24 +226,7 @@ function vertexRelease(layer: LayerBinding, point: Point): VertexRelease {
   const height = Math.max(1e-6, layer.bounds.height);
   const u = clamp((point.x - layer.bounds.x) / width);
   const v = clamp((point.y - layer.bounds.y) / height);
-  const commonRootY = layer.secondaryAnchors?.frontHairRoot?.y ?? layer.bounds.y + height * 0.52;
-  const screenLeft = point.x < layer.bounds.x + width * 0.5;
-  const root = screenLeft
-    ? layer.secondaryAnchors?.frontHairRootLeft ?? { x: layer.bounds.x + width * 0.18, y: commonRootY }
-    : layer.secondaryAnchors?.frontHairRootRight ?? { x: layer.bounds.x + width * 0.82, y: commonRootY };
-  const tip = screenLeft
-    ? layer.secondaryAnchors?.frontHairTipLeft ?? { x: layer.bounds.x + width * 0.1, y: layer.bounds.y + height }
-    : layer.secondaryAnchors?.frontHairTipRight ?? { x: layer.bounds.x + width * 0.9, y: layer.bounds.y + height };
-  const length = Math.max(height * 0.28, tip.y - root.y);
-  const progress = clamp((point.y - root.y) / length);
-  const expectedX = root.x + (tip.x - root.x) * progress;
-  const distanceFromStrand = Math.abs(point.x - expectedX) / Math.max(1e-6, width * 0.3);
-  const strandProximity = 1 - smoothstep((distanceFromStrand - 0.2) / 0.8);
-  const outerBand = smoothstep((Math.abs(u - 0.5) - 0.18) / 0.27);
-  const sideRelease = smoothstep(progress) ** 1.3 * Math.max(outerBand, strandProximity * 0.9);
-  const rootV = clamp((commonRootY - layer.bounds.y) / height, 0.35, 0.78);
-  const bangRelease = smoothstep((v - rootV) / Math.max(0.08, 1 - rootV)) ** 1.35 * (1 - outerBand) * 0.24;
-  const strand = Math.max(sideRelease, bangRelease);
+  const strand = frontHairSideGeometry(layer, point).totalRelease;
 
   const ahoge = ahogeHingeWeight(layer, point);
   return { u, v, strand, ahoge, total: Math.max(strand, ahoge) };
@@ -296,10 +284,65 @@ function lagKeyform(
     if (ahogeMembership(layer, point)) return { x: 0, y: 0 };
     const strand = frontHairSideGeometry(layer, point);
     if (strand.totalRelease <= 1e-6) return { x: 0, y: 0 };
-    const angle = -value * direction * strand.totalRelease * profile.deformationScale * angleLimit;
-    return rotationDelta(point, strand.sideRelease >= strand.bangRelease ? strand.root : layer.secondaryAnchors?.frontHairRoot ?? layer.pivot, angle);
+    const sign = -value * direction * profile.deformationScale;
+    const sideDelta = rotationDelta(point, strand.root, sign * strand.sideRelease * angleLimit);
+    // A short bang has much less lever length than a long side lock. Reusing
+    // the side-lock angle left its tip below one pixel even at full lag. Give
+    // the central fringe its own restrained 3.2° hinge range.
+    const bangAngle = (profile.bangLagDegrees ?? 3.2) * Math.PI / 180;
+    const bangDelta = rotationDelta(point, strand.bangRoot, sign * strand.bangRelease * bangAngle);
+    return { x: sideDelta.x + bangDelta.x, y: sideDelta.y + bangDelta.y };
   });
   return { values: [value], ...(Object.keys(deltas).length > 0 ? { meshPointDeltas: deltas } : {}) };
+}
+
+function crownOutsetWeight(uv: Point): number {
+  const side = smoothstep((Math.abs(uv.x - 0.5) - 0.12) / 0.38);
+  const enters = smoothstep((uv.y - 0.12) / 0.24);
+  const leaves = 1 - smoothstep((uv.y - 0.58) / 0.22);
+  return side * enters * leaves;
+}
+
+function crownOutsetOverride(layer: LayerBinding, outset: number): LayerCalibrationOverride | undefined {
+  if (outset <= 1e-9) return undefined;
+  const width = Math.max(1e-6, layer.bounds.width);
+  const height = Math.max(1e-6, layer.bounds.height);
+  const meshPointDeltas = Object.fromEntries(layer.mesh.points.flatMap((point, index) => {
+    const uv = layer.mesh.uvs[index];
+    if (!uv) return [];
+    const side = uv.x < 0.5 ? -1 : uv.x > 0.5 ? 1 : 0;
+    const weight = crownOutsetWeight(uv);
+    if (side === 0 || weight <= 1e-6) return [];
+    // Calibration deltas are stored relative to the UV-aligned ArtMesh. Keep
+    // any existing authored neutral correction, then add the requested crown
+    // fullness so a later revision does not silently erase earlier work.
+    const uvBase = {
+      x: layer.bounds.x + width * uv.x,
+      y: layer.bounds.y + height * uv.y
+    };
+    return [[String(index), {
+      x: rounded(point.x - uvBase.x + side * width * outset * weight),
+      y: rounded(point.y - uvBase.y)
+    }]];
+  }));
+  const secondaryAnchors = Object.fromEntries([
+    ["frontHairRootLeft", layer.secondaryAnchors?.frontHairRootLeft],
+    ["frontHairRootRight", layer.secondaryAnchors?.frontHairRootRight]
+  ].flatMap(([name, rawAnchor]) => {
+    const anchor = rawAnchor as Point | undefined;
+    if (!anchor) return [];
+    const uv = {
+      x: clamp((anchor.x - layer.bounds.x) / width),
+      y: clamp((anchor.y - layer.bounds.y) / height)
+    };
+    const side = uv.x < 0.5 ? -1 : 1;
+    return [[name, { x: rounded(anchor.x + side * width * outset * crownOutsetWeight(uv)), y: anchor.y }]];
+  })) as LayerCalibrationOverride["secondaryAnchors"];
+  const anchorPatch = secondaryAnchors ?? {};
+  return {
+    meshPointDeltas,
+    ...(Object.keys(anchorPatch).length > 0 ? { secondaryAnchors: anchorPatch } : {})
+  };
 }
 
 function idsFor(layer: LayerBinding): {
@@ -431,6 +474,14 @@ function unstableFrontHairVertices(project: PuppetLoomProject, layer: LayerBindi
 function maxBindingDelta(operations: AuthoringOperation[], bindingId: string): number {
   const binding = operations.find((operation): operation is Extract<AuthoringOperation, { op: "upsert-binding" }> => operation.op === "upsert-binding" && operation.binding.id === bindingId)?.binding;
   return Math.max(0, ...(binding?.keyforms.flatMap((keyform) => Object.values(keyform.meshPointDeltas ?? {}).map((delta) => Math.hypot(delta.x, delta.y))) ?? []));
+}
+
+function maxBindingDeltaForVertices(operations: AuthoringOperation[], bindingId: string, vertexIndices: readonly number[]): number {
+  const binding = operations.find((operation): operation is Extract<AuthoringOperation, { op: "upsert-binding" }> => operation.op === "upsert-binding" && operation.binding.id === bindingId)?.binding;
+  const wanted = new Set(vertexIndices.map(String));
+  return Math.max(0, ...(binding?.keyforms.flatMap((keyform) => Object.entries(keyform.meshPointDeltas ?? {}).flatMap(([index, delta]) => (
+    wanted.has(index) ? [Math.hypot(delta.x, delta.y)] : []
+  ))) ?? []));
 }
 
 function neutralDrift(project: PuppetLoomProject, layer: LayerBinding): number {
@@ -584,7 +635,8 @@ function qualityChecks(
   layer: LayerBinding,
   operations: AuthoringOperation[],
   topology: FrontHairTopologySummary,
-  unifiedPose: boolean
+  unifiedPose: boolean,
+  profile: FrontHairIntentProfile
 ): FrontHairAgentCheck[] {
   const ids = idsFor(layer);
   const poses = validateProjectPoses(project);
@@ -600,7 +652,31 @@ function qualityChecks(
   const lagDelta = maxBindingDelta(operations, ids.directLagBinding);
   const drift = neutralDrift(project, layer);
   const geometry = frontHairGeometryChecks(project, layer);
+  const meshAssessment = assessAgentMesh(layer);
   const scale = Math.max(layer.bounds.width, layer.bounds.height);
+  const expectedCrownOutset = layer.bounds.width * (profile.crownOutset ?? 0);
+  const crownOutsets = layer.mesh.points.flatMap((point, index) => {
+    const uv = layer.mesh.uvs[index];
+    if (!uv || crownOutsetWeight(uv) < 0.65 || Math.abs(uv.x - 0.5) < 1e-6) return [];
+    const uvX = layer.bounds.x + layer.bounds.width * uv.x;
+    return [{ side: uv.x < 0.5 ? -1 : 1, outset: (point.x - uvX) * (uv.x < 0.5 ? -1 : 1) }];
+  });
+  const leftCrownOutset = Math.max(0, ...crownOutsets.filter(({ side }) => side < 0).map(({ outset }) => outset));
+  const rightCrownOutset = Math.max(0, ...crownOutsets.filter(({ side }) => side > 0).map(({ outset }) => outset));
+  const canvasScale = Math.min(project.canvas.width, project.canvas.height);
+  const bangGeometry = layer.mesh.points.map((point, index) => ({ index, geometry: frontHairSideGeometry(layer, point) }));
+  const bangCandidates = bangGeometry.filter(({ geometry: strand }) => (
+    strand.bangMask >= 0.6 && strand.bangProgress >= 0.3
+  ));
+  const releasedBangVertices = bangCandidates.filter(({ geometry: strand }) => strand.bangRelease >= 0.5);
+  const maximumBangRelease = Math.max(0, ...bangCandidates.map(({ geometry: strand }) => strand.bangRelease));
+  const maximumBangLagDelta = maxBindingDeltaForVertices(
+    operations,
+    ids.directLagBinding,
+    bangCandidates.map(({ index }) => index)
+  );
+  const maximumBangLagPixels = maximumBangLagDelta * Math.min(project.canvas.width, project.canvas.height);
+  const minimumVisibleBangDelta = Math.max(1.8 / Math.min(project.canvas.width, project.canvas.height), scale * 0.006);
   const rootIndices = layer.mesh.points.flatMap((point, index) => vertexRelease(layer, point).total <= 0.08 ? [index] : []);
   const rootLag = Math.max(0, ...rootIndices.map((index) => {
     const binding = operations.find((operation): operation is Extract<AuthoringOperation, { op: "upsert-binding" }> => operation.op === "upsert-binding" && operation.binding.id === ids.directLagBinding)?.binding;
@@ -623,6 +699,34 @@ function qualityChecks(
       }
     },
     {
+      id: "silhouette-resolution",
+      label: "头发外轮廓有足够控制点保持圆润体积，不被过长直边压瘪",
+      passed: layer.mesh.art === undefined
+        || meshAssessment.maximumBoundaryEdgePixels <= layer.mesh.art.detail * 2.2,
+      details: {
+        applicable: layer.mesh.art !== undefined,
+        maximumBoundaryEdgePixels: rounded(meshAssessment.maximumBoundaryEdgePixels, 3),
+        maximumAllowedPixels: rounded((layer.mesh.art?.detail ?? 0) * 2.2, 3),
+        pointCount: layer.mesh.points.length
+      }
+    },
+    {
+      id: "crown-volume",
+      label: "左右头顶到鬓角保留对称、可见的外凸弧度",
+      passed: expectedCrownOutset <= 1e-9 || (
+        leftCrownOutset >= expectedCrownOutset * 0.72
+        && rightCrownOutset >= expectedCrownOutset * 0.72
+        && leftCrownOutset <= expectedCrownOutset * 1.35
+        && rightCrownOutset <= expectedCrownOutset * 1.35
+      ),
+      details: {
+        requestedOutsetPixels: rounded(expectedCrownOutset * canvasScale, 3),
+        leftOutsetPixels: rounded(leftCrownOutset * canvasScale, 3),
+        rightOutsetPixels: rounded(rightCrownOutset * canvasScale, 3),
+        inspectedVertices: crownOutsets.length
+      }
+    },
+    {
       id: "neutral-preservation",
       label: "中立姿态保持原图，不引入静态漂移",
       passed: drift <= 1e-8,
@@ -639,6 +743,24 @@ function qualityChecks(
       label: "前发根部不会被滞后补偿拉离头部",
       passed: rootIndices.length > 0 && rootLag <= scale * 0.001,
       details: { inspectedRootVertices: rootIndices.length, maximumRootLagDelta: rounded(rootLag, 8), maximumLagDelta: rounded(lagDelta, 8) }
+    },
+    {
+      id: "central-bang-motion",
+      label: "中央刘海拥有独立根部、渐变权重和可见的发梢运动",
+      passed: bangCandidates.length >= 2
+        && releasedBangVertices.length >= 2
+        && maximumBangRelease >= 0.65
+        && maximumBangLagDelta >= minimumVisibleBangDelta
+        && maximumBangLagDelta <= scale * 0.08,
+      details: {
+        candidateVertices: bangCandidates.length,
+        releasedVertices: releasedBangVertices.length,
+        maximumRelease: rounded(maximumBangRelease, 6),
+        maximumLagDelta: rounded(maximumBangLagDelta, 8),
+        maximumLagPixels: rounded(maximumBangLagPixels, 3),
+        minimumVisibleLagDelta: rounded(minimumVisibleBangDelta, 8),
+        relativeLagDelta: rounded(maximumBangLagDelta / Math.max(1e-9, scale), 6)
+      }
     },
     {
       id: "side-perspective",
@@ -675,10 +797,15 @@ function qualityChecks(
 /** Builds the deterministic front-hair proposal without writing project files. */
 export function createFrontHairAgentProposal(project: PuppetLoomProject, rawInstruction?: string, requestedLayerId?: string, explicitIntent?: FrontHairIntentProfile): PreparedFrontHairProposal {
   const { profile: requestedProfile, instruction: _instruction } = instructionProfile(rawInstruction, explicitIntent);
-  const layer = selectFrontHairLayer(project, requestedLayerId);
-  if (!project.runtime.features.hairPhysics) throw new PuppetLoomError("INVALID_INPUT", "当前项目关闭了头发物理，无法建立完整的前发动态闭环。" );
+  const selectedLayer = selectFrontHairLayer(project, requestedLayerId);
+  const neutralShape = crownOutsetOverride(selectedLayer, requestedProfile.crownOutset ?? 0);
+  const workingProject = neutralShape
+    ? applyCalibrationOverrides(project, { layers: { [selectedLayer.id]: neutralShape } })
+    : project;
+  const layer = selectFrontHairLayer(workingProject, selectedLayer.id);
+  if (!workingProject.runtime.features.hairPhysics) throw new PuppetLoomError("INVALID_INPUT", "当前项目关闭了头发物理，无法建立完整的前发动态闭环。" );
   const topology = topologySummary(layer);
-  const unifiedPose = Boolean(project.runtime.poseField && project.runtime.semanticCage);
+  const unifiedPose = Boolean(workingProject.runtime.poseField && workingProject.runtime.semanticCage);
   let lastProposal: PreparedFrontHairProposal | undefined;
   const protectedVertices = new Set<number>();
   const repairs: ModelAgentRepair[] = [];
@@ -700,7 +827,7 @@ export function createFrontHairAgentProposal(project: PuppetLoomProject, rawInst
       const operations = frontHairOperations(layer, profile, protectedVertices, unifiedPose);
       let authored: PuppetLoomProject;
       try {
-        authored = applyAuthoringOperations(project, operations);
+        authored = applyAuthoringOperations(workingProject, operations);
       } catch (error) {
         throw new PuppetLoomError("INVALID_INPUT", "Agent 生成的前发参数、关键形或物理图无法形成有效模型。", { cause: error });
       }
@@ -710,15 +837,26 @@ export function createFrontHairAgentProposal(project: PuppetLoomProject, rawInst
         model: authored.model,
         layers: {
           [layer.id]: {
+            ...(neutralShape ?? {}),
             weights: { head: 1, body: 0, gaze: 0, physics: 1 },
             vertexInfluences: { physics: physicsInfluencePatch(layer), pin: Object.fromEntries(layer.mesh.points.map((_point, index) => [String(index), 0])) }
           }
         },
         runtime: { secondaryMotionTuning: { frontHair: frontHairTuning, ahoge: ahogeTuning } }
       };
-      const proposed = applyCalibrationOverrides(authored, overrides);
+      // `workingProject` already contains the neutral crown adjustment used
+      // to author and validate these operations. Keep it in the persisted
+      // patch, but do not apply the same point/anchor delta a second time to
+      // the in-memory proposal.
+      const effectiveLayerOverride = { ...overrides.layers![layer.id]! };
+      delete effectiveLayerOverride.meshPointDeltas;
+      delete effectiveLayerOverride.secondaryAnchors;
+      const proposed = applyCalibrationOverrides(authored, {
+        ...overrides,
+        layers: { [layer.id]: effectiveLayerOverride }
+      });
       const proposedLayer = proposed.layers.find((candidate) => candidate.id === layer.id)!;
-      const checks = qualityChecks(proposed, proposedLayer, operations, topology, unifiedPose);
+      const checks = qualityChecks(proposed, proposedLayer, operations, topology, unifiedPose, profile);
       lastProposal = { layer: proposedLayer, intent: profile, topology, operations, previews: frontHairPreviews(), overrides, project: proposed, checks, repairs: clone(repairs) };
       if (checks.every((check) => check.passed)) return lastProposal;
       const unsafePose = checks.find((check) => check.id === "pose-safety" && !check.passed);

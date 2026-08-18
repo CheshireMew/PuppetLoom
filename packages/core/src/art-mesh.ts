@@ -78,8 +78,24 @@ function distanceToLoops(point: Point, loops: Point[][]): number {
   return distance;
 }
 
-function removeCollinear(points: RasterPoint[]): RasterPoint[] {
+function removeCollinear(points: RasterPoint[], maximumSegmentLength = Number.POSITIVE_INFINITY): RasterPoint[] {
   if (points.length <= 3) return points;
+  if (Number.isFinite(maximumSegmentLength)) {
+    const output = [...points];
+    const maximumPasses = output.length * 2;
+    for (let pass = 0; pass < maximumPasses && output.length > 3; pass += 1) {
+      const removable = output.findIndex((current, index) => {
+        const previous = output[(index - 1 + output.length) % output.length]!;
+        const next = output[(index + 1) % output.length]!;
+        const cross = (current.x - previous.x) * (next.y - current.y) - (current.y - previous.y) * (next.x - current.x);
+        return Math.abs(cross) <= 1e-9
+          && Math.hypot(next.x - previous.x, next.y - previous.y) <= maximumSegmentLength;
+      });
+      if (removable < 0) break;
+      output.splice(removable, 1);
+    }
+    return output;
+  }
   const output: RasterPoint[] = [];
   for (let index = 0; index < points.length; index += 1) {
     const previous = points[(index - 1 + points.length) % points.length]!;
@@ -95,7 +111,19 @@ function perpendicularDistance(point: Point, start: Point, end: Point): number {
   return distanceToSegment(point, start, end);
 }
 
-function simplifyOpenPath(points: Point[], tolerance: number): Point[] {
+function halfLengthIndex(points: Point[]): number {
+  const lengths: number[] = [];
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    total += Math.hypot(points[index]!.x - points[index - 1]!.x, points[index]!.y - points[index - 1]!.y);
+    lengths.push(total);
+  }
+  const target = total * 0.5;
+  const found = lengths.findIndex((length) => length >= target) + 1;
+  return Math.max(1, Math.min(points.length - 2, found));
+}
+
+function simplifyOpenPath(points: Point[], tolerance: number, maximumSegmentLength = Number.POSITIVE_INFINITY): Point[] {
   if (points.length <= 2) return points;
   let furthestIndex = 0;
   let furthestDistance = 0;
@@ -106,9 +134,17 @@ function simplifyOpenPath(points: Point[], tolerance: number): Point[] {
       furthestIndex = index;
     }
   }
-  if (furthestDistance <= tolerance) return [points[0]!, points.at(-1)!];
-  const left = simplifyOpenPath(points.slice(0, furthestIndex + 1), tolerance);
-  const right = simplifyOpenPath(points.slice(furthestIndex), tolerance);
+  if (furthestDistance <= tolerance) {
+    const chord = Math.hypot(points.at(-1)!.x - points[0]!.x, points.at(-1)!.y - points[0]!.y);
+    if (chord <= maximumSegmentLength) return [points[0]!, points.at(-1)!];
+    // A low-curvature silhouette can be visually important even when RDP's
+    // perpendicular error is small. Split a long arc at half of its original
+    // path length so deformation retains enough control points to preserve
+    // head volume instead of turning the arc into one rigid chord.
+    furthestIndex = halfLengthIndex(points);
+  }
+  const left = simplifyOpenPath(points.slice(0, furthestIndex + 1), tolerance, maximumSegmentLength);
+  const right = simplifyOpenPath(points.slice(furthestIndex), tolerance, maximumSegmentLength);
   return [...left.slice(0, -1), ...right];
 }
 
@@ -121,7 +157,7 @@ function pathBetween(points: Point[], start: number, end: number): Point[] {
   return output;
 }
 
-function simplifyClosedLoop(points: Point[], tolerance: number): Point[] {
+function simplifyClosedLoop(points: Point[], tolerance: number, maximumSegmentLength = Number.POSITIVE_INFINITY): Point[] {
   if (points.length <= 4 || tolerance <= 0) return points;
   let first = 0;
   let second = 1;
@@ -142,9 +178,9 @@ function simplifyClosedLoop(points: Point[], tolerance: number): Point[] {
       bestDistance = distance;
     }
   }
-  const forward = simplifyOpenPath(pathBetween(points, first, second), tolerance);
-  const backward = simplifyOpenPath(pathBetween(points, second, first), tolerance);
-  const simplified = removeCollinear([...forward.slice(0, -1), ...backward.slice(0, -1)]);
+  const forward = simplifyOpenPath(pathBetween(points, first, second), tolerance, maximumSegmentLength);
+  const backward = simplifyOpenPath(pathBetween(points, second, first), tolerance, maximumSegmentLength);
+  const simplified = removeCollinear([...forward.slice(0, -1), ...backward.slice(0, -1)], maximumSegmentLength);
   return simplified.length >= 3 ? simplified : points;
 }
 
@@ -162,30 +198,36 @@ function cornerRemovalError(points: Point[], index: number): number {
  * triangles visible in the editor. Remove the less significant endpoint of
  * every undersized edge until the contour has a useful, even spacing.
  */
-function pruneCloseLoopPoints(points: Point[], minimumSpacing: number): Point[] {
+function pruneCloseLoopPoints(points: Point[], minimumSpacing: number, maximumSegmentLength = Number.POSITIVE_INFINITY): Point[] {
   const output = [...points];
   if (output.length <= 4 || minimumSpacing <= 0) return output;
   const maximumPasses = output.length * 2;
   for (let pass = 0; pass < maximumPasses && output.length > 4; pass += 1) {
-    let shortestIndex = -1;
+    let removeIndex = -1;
     let shortestDistance = minimumSpacing;
     for (let index = 0; index < output.length; index += 1) {
       const current = output[index]!;
       const next = output[(index + 1) % output.length]!;
       const distance = Math.hypot(next.x - current.x, next.y - current.y);
-      if (distance < shortestDistance) {
+      if (distance >= shortestDistance) continue;
+      const nextIndex = (index + 1) % output.length;
+      const candidates = cornerRemovalError(output, index) <= cornerRemovalError(output, nextIndex)
+        ? [index, nextIndex]
+        : [nextIndex, index];
+      const removable = candidates.find((candidate) => {
+        const previous = output[(candidate - 1 + output.length) % output.length]!;
+        const following = output[(candidate + 1) % output.length]!;
+        return Math.hypot(following.x - previous.x, following.y - previous.y) <= maximumSegmentLength;
+      });
+      if (removable !== undefined) {
         shortestDistance = distance;
-        shortestIndex = index;
+        removeIndex = removable;
       }
     }
-    if (shortestIndex < 0) break;
-    const nextIndex = (shortestIndex + 1) % output.length;
-    const removeIndex = cornerRemovalError(output, shortestIndex) <= cornerRemovalError(output, nextIndex)
-      ? shortestIndex
-      : nextIndex;
+    if (removeIndex < 0) break;
     output.splice(removeIndex, 1);
   }
-  return removeCollinear(output);
+  return removeCollinear(output, maximumSegmentLength);
 }
 
 function labelComponents(mask: Uint8Array, width: number, height: number): PixelComponent[] {
@@ -228,7 +270,7 @@ function chooseNextEdge(incoming: RasterEdge, candidateIndices: number[], edges:
   return available.sort((left, right) => priority(edges[left]!) - priority(edges[right]!))[0];
 }
 
-function traceComponentLoops(component: PixelComponent, width: number, height: number, labels: Int32Array): RasterPoint[][] {
+function traceComponentLoops(component: PixelComponent, width: number, height: number, labels: Int32Array, maximumSegmentLength: number): RasterPoint[][] {
   const edges: RasterEdge[] = [];
   const add = (start: RasterPoint, end: RasterPoint, direction: number): void => { edges.push({ start, end, direction }); };
   for (const pixel of component.pixels) {
@@ -262,7 +304,7 @@ function traceComponentLoops(component: PixelComponent, width: number, height: n
       if (next === undefined) break;
       currentIndex = next;
     }
-    const clean = removeCollinear(loop);
+    const clean = removeCollinear(loop, maximumSegmentLength);
     if (closed && clean.length >= 3 && Math.abs(signedArea(clean)) >= 1) loops.push(clean);
   }
   return loops;
@@ -327,12 +369,18 @@ export function traceArtMeshSource(pixels: PixelBuffer, alphaThreshold = 8, deta
   const labels = new Int32Array(mask.length);
   for (const component of components) for (const pixel of component.pixels) labels[pixel] = component.label;
   const minimumPixels = Math.max(4, Math.floor(opaquePixels * 0.0001));
+  const sourceMaximumSegmentLength = Math.max(6, detail * 1.8);
   const regions: ArtMeshRegion[] = [];
   for (const component of components.filter((candidate) => candidate.pixels.length >= minimumPixels
     && isMeaningfulComponent(candidate, pixels, detail, alphaThreshold))) {
-    for (const region of groupLoops(traceComponentLoops(component, pixels.width, pixels.height, labels))) {
-      const outer = simplifyClosedLoop(region.outer, 0.65);
-      const holes = region.holes.map((hole) => simplifyClosedLoop(hole, 0.65)).filter((hole) => hole.length >= 3);
+    for (const region of groupLoops(traceComponentLoops(component, pixels.width, pixels.height, labels, sourceMaximumSegmentLength))) {
+      // The stored source is reused by later remesh operations. Preserve
+      // samples along long, perfectly straight alpha boundaries as well as
+      // curved ones; otherwise a later detail pass cannot recreate vertices
+      // that were already discarded here (notably artwork clipped by a
+      // texture edge).
+      const outer = simplifyClosedLoop(region.outer, 0.65, sourceMaximumSegmentLength);
+      const holes = region.holes.map((hole) => simplifyClosedLoop(hole, 0.65, sourceMaximumSegmentLength)).filter((hole) => hole.length >= 3);
       if (outer.length >= 3) regions.push({ outer: toUv(outer, pixels.width, pixels.height), holes: holes.map((hole) => toUv(hole, pixels.width, pixels.height)) });
     }
   }
@@ -354,8 +402,9 @@ function pixelLoop(loop: Point[], source: ArtMeshSource, tolerance: number): Poi
     const box = [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }];
     return signedArea(points) < 0 ? box.reverse() : box;
   }
-  const simplified = simplifyClosedLoop(points, tolerance);
-  return pruneCloseLoopPoints(simplified, Math.max(1.5, tolerance * 0.82));
+  const maximumSegmentLength = Math.max(6, tolerance * 4);
+  const simplified = simplifyClosedLoop(points, tolerance, maximumSegmentLength);
+  return pruneCloseLoopPoints(simplified, Math.max(1.5, tolerance * 0.82), maximumSegmentLength);
 }
 
 function triangulateRegion(region: ArtMeshRegion, source: ArtMeshSource, detail: number): { points: Point[]; triangles: number[] } {
@@ -482,8 +531,7 @@ export function makeAdaptiveMesh(options: AdaptiveMeshOptions): MeshBinding {
   const coverage = options.pixels.width * options.pixels.height > 0 ? opaquePixels / (options.pixels.width * options.pixels.height) : 0;
   const rectangular = coverage >= 0.985
     && source.regions.length === 1
-    && source.regions[0]!.holes.length === 0
-    && source.regions[0]!.outer.length <= 4;
+    && source.regions[0]!.holes.length === 0;
   if (rectangular || source.regions.length === 0) return makeGridMesh(options.bounds, options.fallbackRows, options.fallbackCols);
   try {
     return buildArtMesh(options.bounds, source, options.detail);

@@ -22,6 +22,10 @@ export interface FrontHairIntentSpecification extends PrimaryPartIntentSpecifica
   lagResponse: number;
   lagDamping: number;
   deformationScale: number;
+  /** Additional neutral crown fullness, as a fraction of the layer width. */
+  crownOutset?: number;
+  /** Visible hinge range for the short central fringe. */
+  bangLagDegrees?: number;
 }
 
 export interface SecondaryPartIntentSpecification extends PrimaryPartIntentSpecification {
@@ -148,7 +152,13 @@ function partSpecification(value: unknown, index: number): ModelAgentPartSpecifi
         ahogeStability: numberIn(source, "ahogeStability", 0.1, 1.5, `${path}.intent`),
         lagResponse: numberIn(source, "lagResponse", 0.1, 30, `${path}.intent`),
         lagDamping: numberIn(source, "lagDamping", 0.1, 3, `${path}.intent`),
-        deformationScale: numberIn(source, "deformationScale", 0.1, 2, `${path}.intent`)
+        deformationScale: numberIn(source, "deformationScale", 0.1, 2, `${path}.intent`),
+        ...(source.crownOutset === undefined ? {} : {
+          crownOutset: numberIn(source, "crownOutset", 0, 0.08, `${path}.intent`)
+        }),
+        ...(source.bangLagDegrees === undefined ? {} : {
+          bangLagDegrees: numberIn(source, "bangLagDegrees", 1, 12, `${path}.intent`)
+        })
       }
     };
   }
@@ -209,7 +219,9 @@ function defaultPartSpecification(part: ModelAgentPart): ModelAgentPartSpecifica
       ahogeStability: 0.38,
       lagResponse: 8.2,
       lagDamping: 0.78,
-      deformationScale: 0.88
+      deformationScale: 0.88,
+      crownOutset: 0,
+      bangLagDegrees: 3.2
     },
     rationale: ["自然、克制的前发基线；外部 Agent 应在看图后调整。"]
   };

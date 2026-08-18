@@ -17,9 +17,38 @@ export interface AgentMeshAssessment {
   expectedComponents: number;
   tinyComponentCount: number;
   crowdedVertexCount: number;
+  maximumBoundaryEdgePixels: number;
   orphanVertexIndices: number[];
   issues: string[];
   shouldRebuild: boolean;
+}
+
+function maximumBoundaryEdgePixels(mesh: MeshBinding): number {
+  if (!mesh.art) return 0;
+  const counts = new Map<string, { from: number; to: number; count: number }>();
+  for (let index = 0; index < mesh.triangles.length; index += 3) {
+    const first = mesh.triangles[index];
+    const second = mesh.triangles[index + 1];
+    const third = mesh.triangles[index + 2];
+    if (first === undefined || second === undefined || third === undefined) continue;
+    const edges: Array<[number, number]> = [[first, second], [second, third], [third, first]];
+    for (const [from, to] of edges) {
+      const key = from < to ? `${from},${to}` : `${to},${from}`;
+      const current = counts.get(key);
+      if (current) current.count += 1;
+      else counts.set(key, { from, to, count: 1 });
+    }
+  }
+  return Math.max(0, ...[...counts.values()].flatMap(({ from, to, count }) => {
+    if (count !== 1) return [];
+    const a = mesh.uvs[from];
+    const b = mesh.uvs[to];
+    if (!a || !b) return [];
+    return [Math.hypot(
+      (b.x - a.x) * mesh.art!.textureSize.width,
+      (b.y - a.y) * mesh.art!.textureSize.height
+    )];
+  }));
 }
 
 export interface PreparedAgentMeshes {
@@ -88,6 +117,7 @@ export function assessAgentMesh(layer: LayerBinding): AgentMeshAssessment {
   const expectedComponents = Math.max(1, mesh.art?.regions.length ?? 1);
   const tinyComponentCount = components.sizes.filter((size) => size < 6).length;
   const crowdedVertices = crowdedVertexCount(mesh);
+  const longestBoundaryEdge = maximumBoundaryEdgePixels(mesh);
   const issues: string[] = [];
   if (mesh.topology !== "art" || !mesh.art) issues.push("仍是矩形网格，未贴合 Alpha 轮廓");
   if (mesh.points.length !== mesh.uvs.length) issues.push("顶点与 UV 数量不一致");
@@ -101,6 +131,7 @@ export function assessAgentMesh(layer: LayerBinding): AgentMeshAssessment {
   // the generated replacement must reduce it below eight percent (or twelve
   // vertices for small meshes), while still preserving the silhouette.
   if (crowdedVertices > Math.max(12, Math.ceil(mesh.points.length * 0.08))) issues.push(`存在 ${crowdedVertices} 个间距过密的轮廓顶点`);
+  if (mesh.art && longestBoundaryEdge > mesh.art.detail * 2.2) issues.push(`存在 ${longestBoundaryEdge.toFixed(1)} 像素的过长轮廓边，无法保持平滑体积弧线`);
   if (mesh.points.length > maximumUsefulPoints(layer)) issues.push(`顶点数 ${mesh.points.length} 超出该部位的可维护范围`);
   return {
     layerId: layer.id,
@@ -112,6 +143,7 @@ export function assessAgentMesh(layer: LayerBinding): AgentMeshAssessment {
     expectedComponents,
     tinyComponentCount,
     crowdedVertexCount: crowdedVertices,
+    maximumBoundaryEdgePixels: longestBoundaryEdge,
     orphanVertexIndices: components.orphanVertexIndices,
     issues,
     shouldRebuild: issues.length > 0

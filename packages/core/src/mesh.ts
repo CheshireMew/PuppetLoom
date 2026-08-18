@@ -52,17 +52,23 @@ interface BarycentricSample {
   weights: [number, number, number];
 }
 
-function barycentric(point: Point, a: Point, b: Point, c: Point): [number, number, number] | undefined {
+function barycentricWeights(point: Point, a: Point, b: Point, c: Point): [number, number, number] | undefined {
   const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
   if (Math.abs(denominator) < 1e-12) return undefined;
   const wa = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
   const wb = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
   const wc = 1 - wa - wb;
-  return wa >= -1e-7 && wb >= -1e-7 && wc >= -1e-7 ? [wa, wb, wc] : undefined;
+  return [wa, wb, wc];
+}
+
+function barycentric(point: Point, a: Point, b: Point, c: Point): [number, number, number] | undefined {
+  const weights = barycentricWeights(point, a, b, c);
+  return weights?.every((weight) => weight >= -1e-7) ? weights : undefined;
 }
 
 function sampleLocation(mesh: MeshBinding, uv: Point): BarycentricSample {
   let closest: BarycentricSample | undefined;
+  let closestTriangle: { indices: [number, number, number]; vertices: [Point, Point, Point] } | undefined;
   let closestDistance = Number.POSITIVE_INFINITY;
   for (let triangle = 0; triangle < mesh.triangles.length; triangle += 3) {
     const ia = mesh.triangles[triangle];
@@ -90,10 +96,20 @@ function sampleLocation(mesh: MeshBinding, uv: Point): BarycentricSample {
       edgeWeights[edge] = 1 - amount;
       edgeWeights[(edge + 1) % 3] = amount;
       closest = { indices: [ids[0], ids[1], ids[2]], weights: edgeWeights };
+      closestTriangle = { indices: [ids[0], ids[1], ids[2]], vertices: [vertices[0], vertices[1], vertices[2]] };
       closestDistance = distance;
     }
   }
 
+  if (closestTriangle) {
+    const weights = barycentricWeights(uv, ...closestTriangle.vertices);
+    // A denser remesh can place a new silhouette vertex just outside the old
+    // polygonal chord. A small affine extrapolation preserves smooth authored
+    // weights there; large extrapolations remain clamped to the nearest edge.
+    if (weights?.every((weight) => weight >= -0.35 && weight <= 1.35)) {
+      return { indices: closestTriangle.indices, weights };
+    }
+  }
   if (closest) return closest;
 
   let nearest = 0;
