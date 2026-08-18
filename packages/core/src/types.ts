@@ -722,6 +722,29 @@ export interface MigrationResult {
 
 export type RenderSuiteKind = "calibration" | "poses" | "motion";
 
+export type RenderFocusScope =
+  | "whole"
+  | "headFace"
+  | "eyes"
+  | "mouth"
+  | "frontHair"
+  | "backHair"
+  | "ahoge"
+  | "ears"
+  | "headwear"
+  | "body"
+  | "topCloth"
+  | "skirt"
+  | "tail"
+  | "accessory";
+
+export interface RenderSuiteOptions {
+  /** Native output width and height. The CLI accepts 300..1600. */
+  size?: number;
+  /** Also produce close-up evidence for this stable semantic scope. */
+  focus?: RenderFocusScope;
+}
+
 export interface RenderArtifact {
   id: string;
   kind: "pose" | "motion" | "sheet" | "difference";
@@ -734,6 +757,12 @@ export interface RenderSuiteResult {
   project: string;
   revision: number;
   suite: RenderSuiteKind;
+  renderSize: number;
+  focus?: {
+    scope: RenderFocusScope;
+    targetLayerIds: string[];
+    region: Rect;
+  };
   outputDirectory: string;
   artifacts: RenderArtifact[];
 }

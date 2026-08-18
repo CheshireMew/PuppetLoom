@@ -213,9 +213,11 @@ describe("CLI contract", () => {
     const completeSession = (JSON.parse(fullHistory.stdout) as { sessions: Array<Record<string, unknown>> }).sessions[0]!;
     expect(completeSession).toHaveProperty("patch");
     expect(completeSession).toHaveProperty("afterOverrides");
-    const rendered = await cli(["render", "--project", cliProject, "--suite", "poses", "--output", resolve(files, "render"), "--json"]);
+    const rendered = await cli(["render", "--project", cliProject, "--suite", "poses", "--size", "640", "--focus", "headFace", "--output", resolve(files, "render"), "--json"]);
     expect(rendered.code).toBe(0);
+    expect(JSON.parse(rendered.stdout)).toMatchObject({ renderSize: 640, focus: { scope: "headFace" } });
     expect((await stat(resolve(files, "render", "pose-sheet.png"))).isFile()).toBe(true);
+    expect((await stat(resolve(files, "render", "focus-pose-sheet.png"))).isFile()).toBe(true);
     const compared = await cli(["compare", "--project", cliProject, "--from", "0", "--to", "1", "--output", resolve(files, "compare"), "--json"]);
     expect(compared.code).toBe(0);
     expect((await stat(resolve(files, "compare", "before-after.png"))).isFile()).toBe(true);

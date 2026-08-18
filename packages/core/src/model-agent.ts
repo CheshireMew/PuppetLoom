@@ -4,10 +4,12 @@ import { join, resolve } from "node:path";
 import { modelAgentCapabilities, modelAgentPartDefinitions, requestedModelAgentParts, type ModelAgentCheck, type ModelAgentPart, type ModelAgentRepair } from "./agent.js";
 import { parseModelAgentSpecification, type ModelAgentPartSpecification, type ModelAgentSpecification, type PrimaryPartSpecification, type SecondaryPartSpecification } from "./agent-spec.js";
 import { applyCalibrationOverrides } from "./calibration.js";
+import { renderAgentFocusEvidence, type AgentFocusEvidence } from "./agent-evidence.js";
 import { PuppetLoomError } from "./errors.js";
 import { planFrontHairAgent, runFrontHairAgent } from "./front-hair-agent.js";
 import { planPrimaryPartAgent, runPrimaryPartAgent, type PrimaryModelAgentPart } from "./primary-part-agent.js";
-import { clearCalibrationDraft, loadCalibration, loadCalibrationDraft, loadProject, saveCalibrationPatch } from "./project.js";
+import { evaluateModelAgentCoherence, modelAgentConstraints, type ModelAgentConstraint } from "./model-agent-coherence.js";
+import { clearCalibrationDraft, loadCalibration, loadCalibrationDraft, loadProject, loadProjectRevision, saveCalibrationPatch } from "./project.js";
 import { planSecondaryPartAgent, runSecondaryPartAgent, type SecondaryModelAgentPart } from "./secondary-part-agent.js";
 import type { AssetRequest, CalibrationDraftDocument, PuppetLoomProject, VerifyResult } from "./types.js";
 import { verifyProject } from "./verify.js";
@@ -44,6 +46,7 @@ export interface ModelAgentPlan {
   specification?: ModelAgentSpecification;
   scope: ModelAgentScope;
   requestedParts: ModelAgentPart[];
+  constraints: ModelAgentConstraint[];
   draft: { found: boolean; label?: string; willAdopt: boolean; blockers: string[] };
   parts: ModelAgentPartPlanSummary[];
   canApply: boolean;
@@ -77,6 +80,9 @@ export interface ModelAgentRunResult {
   status: "completed" | "needs-assets" | "blocked";
   blockers: string[];
   parts: ModelAgentPartRunSummary[];
+  constraints: ModelAgentConstraint[];
+  coherenceChecks: ModelAgentCheck[];
+  coherenceEvidence?: AgentFocusEvidence;
   verification: VerifyResult;
   reportPath: string;
 }
@@ -232,6 +238,7 @@ export async function planModelAgent(projectDirectory: string, options: ModelAge
     ...(specification ? { specification } : {}),
     scope,
     requestedParts: partOrder(requested),
+    constraints: modelAgentConstraints(partOrder(requested)),
     draft: draftState,
     parts,
     canApply: blockers.length === 0 && parts.some((part) => part.status === "ready"),
@@ -281,6 +288,7 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
   if (initial.blockers.length > 0 || (!initial.canApply && !initial.parts.some((part) => part.status === "needs-assets"))) {
     throw new PuppetLoomError("INVALID_INPUT", `整模 Agent 计划未通过：${initial.blockers.join("；") || "没有可执行的部位。"}`);
   }
+  const beforeProject = await loadProjectRevision(root, initial.baseRevision);
   let revision = initial.baseRevision;
   let adoptedDraftRevision: number | undefined;
   const draft = await loadCalibrationDraft(root);
@@ -301,15 +309,22 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
     parts.push(await runOne(root, planned.part, initial.instruction, partSpecifications.get(planned.part)));
   }
   const calibration = await loadCalibration(root);
+  const afterProject = await loadProject(root);
+  const coherenceChecks = evaluateModelAgentCoherence(beforeProject, afterProject, initial.requestedParts);
   const verification = await verifyProject(root);
-  const status: ModelAgentRunResult["status"] = !verification.valid || parts.some((part) => part.status === "blocked")
+  const status: ModelAgentRunResult["status"] = !verification.valid || coherenceChecks.some((check) => !check.passed) || parts.some((part) => part.status === "blocked")
     ? "blocked"
     : parts.some((part) => part.status === "needs-assets") ? "needs-assets" : "completed";
   const blockers = [
     ...parts.filter((part) => part.status === "blocked").flatMap((part) => part.blockers.map((blocker) => `${part.label}：${blocker}`)),
+    ...coherenceChecks.filter((check) => !check.passed).map((check) => `跨部位检查：${check.label}`),
     ...(!verification.valid ? verification.warnings.map((warning) => `整模验证：${warning}`) : [])
   ];
   const taskId = randomUUID();
+  const targetLayerIds = [...new Set(initial.parts.filter((part) => part.status !== "not-present").flatMap((part) => part.targetLayerIds))];
+  const coherenceEvidence = targetLayerIds.length > 0 && parts.some((part) => part.status === "completed")
+    ? await renderAgentFocusEvidence(root, beforeProject, afterProject, targetLayerIds, [], join(root, "reports", "agent-tasks", taskId, "evidence"))
+    : undefined;
   const baseResult: Omit<ModelAgentRunResult, "reportPath"> = {
     ok: status === "completed",
     task: "model-agent",
@@ -326,6 +341,9 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
     status,
     blockers,
     parts,
+    constraints: initial.constraints,
+    coherenceChecks,
+    ...(coherenceEvidence ? { coherenceEvidence } : {}),
     verification
   };
   return { ...baseResult, reportPath: await writeTaskReport(root, baseResult) };

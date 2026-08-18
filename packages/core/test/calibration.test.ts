@@ -116,6 +116,17 @@ describe("project calibration", () => {
     expect(comparison.visualDifference.significantPixelRatio).toBeLessThanOrEqual(comparison.visualDifference.changedPixelRatio);
   });
 
+  it("renders native high-resolution semantic close-ups for external Agents", async () => {
+    const evidence = resolve(output, "reports", "calibration", "high-resolution-head");
+    const suite = await renderProjectSuite(output, evidence, "poses", 1, { size: 640, focus: "headFace" });
+    expect(suite).toMatchObject({ renderSize: 640, focus: { scope: "headFace" } });
+    expect(suite.focus!.targetLayerIds.length).toBeGreaterThan(0);
+    const focus = suite.artifacts.find((artifact) => artifact.id === "focus-neutral")!;
+    const metadata = await sharp(focus.path).metadata();
+    expect(metadata).toMatchObject({ width: 640, height: 640 });
+    expect((await stat(resolve(evidence, "focus-pose-sheet.png"))).isFile()).toBe(true);
+  }, 120_000);
+
   it("rejects rebuilding more than one layer mesh in a calibration", async () => {
     const project = await loadProject(output);
     const artLayers = project.layers.filter((layer) => layer.mesh.topology === "art" && layer.mesh.art).slice(0, 2);

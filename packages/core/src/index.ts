@@ -19,6 +19,7 @@ export * from "./mesh.js";
 export * from "./migration.js";
 export * from "./model.js";
 export * from "./model-agent.js";
+export * from "./model-agent-coherence.js";
 export * from "./offline-render.js";
 export * from "./portable.js";
 export * from "./project.js";

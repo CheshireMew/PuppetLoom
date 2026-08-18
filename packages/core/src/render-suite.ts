@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import sharp from "sharp";
+import { agentRegionCrop, agentTargetRegion } from "./agent-evidence.js";
+import { modelAgentPartDefinitions } from "./agent.js";
 import { neutralMotionState } from "./deform.js";
 import { ModelPhysicsController } from "./model.js";
 import { loadProjectTextureSources, renderProjectPoseWithSources } from "./offline-render.js";
@@ -11,7 +13,9 @@ import type {
   MotionState,
   AuthoringPreview,
   RenderArtifact,
+  RenderFocusScope,
   RenderSuiteKind,
+  RenderSuiteOptions,
   RenderSuiteResult,
   RevisionComparisonResult
 } from "./types.js";
@@ -85,24 +89,27 @@ function escapeXml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-async function renderSheet(samples: Sample[], imagePaths: string[], output: string, title: string): Promise<void> {
+async function renderSheet(samples: Sample[], imagePaths: string[], output: string, title: string, imageSize: number): Promise<void> {
   const columns = 3;
-  const cellWidth = 300;
-  const cellHeight = 330;
+  const labelHeight = Math.max(30, Math.round(imageSize * 0.075));
+  const headingHeight = Math.max(44, Math.round(imageSize * 0.11));
+  const cellWidth = imageSize;
+  const cellHeight = imageSize + labelHeight;
   const rows = Math.ceil(samples.length / columns);
   const overlays: sharp.OverlayOptions[] = [];
   for (let index = 0; index < samples.length; index += 1) {
     const column = index % columns;
     const row = Math.floor(index / columns);
     const left = column * cellWidth;
-    const top = row * cellHeight + 44;
+    const top = row * cellHeight + headingHeight;
     overlays.push({ input: await readFile(imagePaths[index]!), left, top });
-    const label = Buffer.from(`<svg width="${cellWidth}" height="30" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#141b27"/><text x="12" y="20" fill="#edf2fa" font-family="Segoe UI, Microsoft YaHei" font-size="14">${escapeXml(samples[index]!.label)}</text></svg>`);
-    overlays.push({ input: label, left, top: top + 300 });
+    const fontSize = Math.max(14, Math.round(imageSize * 0.035));
+    const label = Buffer.from(`<svg width="${cellWidth}" height="${labelHeight}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#141b27"/><text x="${Math.round(imageSize * 0.04)}" y="${Math.round(labelHeight * 0.68)}" fill="#edf2fa" font-family="Segoe UI, Microsoft YaHei" font-size="${fontSize}">${escapeXml(samples[index]!.label)}</text></svg>`);
+    overlays.push({ input: label, left, top: top + imageSize });
   }
-  const heading = Buffer.from(`<svg width="${cellWidth * columns}" height="44" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#0d121b"/><text x="16" y="29" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei" font-size="20" font-weight="700">${title}</text></svg>`);
+  const heading = Buffer.from(`<svg width="${cellWidth * columns}" height="${headingHeight}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#0d121b"/><text x="${Math.round(imageSize * 0.05)}" y="${Math.round(headingHeight * 0.68)}" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei" font-size="${Math.max(20, Math.round(imageSize * 0.05))}" font-weight="700">${title}</text></svg>`);
   overlays.unshift({ input: heading, left: 0, top: 0 });
-  await sharp({ create: { width: cellWidth * columns, height: rows * cellHeight + 44, channels: 4, background: { r: 8, g: 12, b: 18, alpha: 1 } } })
+  await sharp({ create: { width: cellWidth * columns, height: rows * cellHeight + headingHeight, channels: 4, background: { r: 8, g: 12, b: 18, alpha: 1 } } })
     .composite(overlays)
     .png()
     .toFile(output);
@@ -112,13 +119,21 @@ export async function renderProjectSuite(
   projectDirectory: string,
   outputDirectory: string,
   suite: RenderSuiteKind = "calibration",
-  requestedRevision?: number
+  requestedRevision?: number,
+  options: RenderSuiteOptions = {}
 ): Promise<RenderSuiteResult> {
   const root = resolve(projectDirectory);
   const output = resolve(outputDirectory);
   const revision = requestedRevision ?? (await loadCalibration(root)).revision;
   const project = await loadProjectRevision(root, revision);
-  return renderProjectSuiteFromProject(root, project, output, suite, revision);
+  return renderProjectSuiteFromProject(root, project, output, suite, revision, [], options);
+}
+
+function focusLayerIds(project: import("./types.js").PuppetLoomProject, focus: RenderFocusScope): string[] {
+  if (focus === "whole") return project.layers.map((layer) => layer.id);
+  const definition = modelAgentPartDefinitions.find((entry) => entry.part === focus);
+  if (!definition) return [];
+  return project.layers.filter((layer) => definition.roles.includes(layer.role)).map((layer) => layer.id);
 }
 
 export async function renderProjectSuiteFromProject(
@@ -127,13 +142,23 @@ export async function renderProjectSuiteFromProject(
   outputDirectory: string,
   suite: RenderSuiteKind,
   revision: number,
-  previews: AuthoringPreview[] = []
+  previews: AuthoringPreview[] = [],
+  options: RenderSuiteOptions = {}
 ): Promise<RenderSuiteResult> {
   const root = resolve(projectDirectory);
   const output = resolve(outputDirectory);
   const sources = await loadProjectTextureSources(root, project);
   const samples = samplesFor(project, suite, previews);
   const artifacts: RenderArtifact[] = [];
+  const renderSize = options.size ?? 300;
+  if (!Number.isInteger(renderSize) || renderSize < 300 || renderSize > 1600) throw new Error("证据尺寸必须是 300 到 1600 之间的整数。");
+  const targetLayerIds = options.focus ? focusLayerIds(project, options.focus) : [];
+  if (options.focus && targetLayerIds.length === 0) throw new Error(`项目中没有可用于 ${options.focus} 局部证据的图层。`);
+  const region = options.focus ? agentTargetRegion(project, project, targetLayerIds) : undefined;
+  // Render the close-up from a larger source instead of enlarging a thumbnail.
+  const focusSourceSize = region
+    ? Math.min(2400, Math.max(renderSize, Math.ceil(renderSize / Math.max(region.width, region.height))))
+    : renderSize;
   await mkdir(output, { recursive: true });
   const byKind = new Map<"pose" | "motion", Sample[]>();
   for (const sample of samples) byKind.set(sample.kind, [...(byKind.get(sample.kind) ?? []), sample]);
@@ -141,18 +166,46 @@ export async function renderProjectSuiteFromProject(
     const directory = join(output, kind === "pose" ? "poses" : "motion");
     await mkdir(directory, { recursive: true });
     const paths: string[] = [];
+    const focusPaths: string[] = [];
+    const focusDirectory = region ? join(output, "focus", kind === "pose" ? "poses" : "motion") : undefined;
+    if (focusDirectory) await mkdir(focusDirectory, { recursive: true });
     for (const sample of kindSamples) {
-      const pixels = renderProjectPoseWithSources(project, sources, sample.state, 300, 300);
+      const pixels = renderProjectPoseWithSources(project, sources, sample.state, renderSize, renderSize);
       const path = join(directory, `${sample.id}.png`);
-      await sharp(Buffer.from(pixels.data), { raw: { width: 300, height: 300, channels: 4 } }).png().toFile(path);
+      await sharp(Buffer.from(pixels.data), { raw: { width: renderSize, height: renderSize, channels: 4 } }).png().toFile(path);
       paths.push(path);
       artifacts.push({ id: sample.id, kind, path, state: sample.state, sha256: await fileSha256(path) });
+      if (region && focusDirectory) {
+        const focusPixels = focusSourceSize === renderSize ? pixels : renderProjectPoseWithSources(project, sources, sample.state, focusSourceSize, focusSourceSize);
+        const crop = agentRegionCrop(project, region, focusSourceSize, focusSourceSize);
+        const focusPath = join(focusDirectory, `${sample.id}.png`);
+        await sharp(Buffer.from(focusPixels.data), { raw: { width: focusSourceSize, height: focusSourceSize, channels: 4 } })
+          .extract(crop)
+          .resize(renderSize, renderSize, { fit: "contain" })
+          .png()
+          .toFile(focusPath);
+        focusPaths.push(focusPath);
+        artifacts.push({ id: `focus-${sample.id}`, kind, path: focusPath, state: sample.state, sha256: await fileSha256(focusPath) });
+      }
     }
     const sheet = join(output, `${kind}-sheet.png`);
-    await renderSheet(kindSamples, paths, sheet, kind === "pose" ? `姿态校准 · revision ${revision}` : `次级运动校准 · revision ${revision}`);
+    await renderSheet(kindSamples, paths, sheet, kind === "pose" ? `姿态校准 · revision ${revision}` : `次级运动校准 · revision ${revision}`, renderSize);
     artifacts.push({ id: `${kind}-sheet`, kind: "sheet", path: sheet, sha256: await fileSha256(sheet) });
+    if (region && focusPaths.length > 0) {
+      const focusSheet = join(output, `focus-${kind}-sheet.png`);
+      await renderSheet(kindSamples, focusPaths, focusSheet, `${options.focus} 局部${kind === "pose" ? "姿态" : "运动"} · revision ${revision}`, renderSize);
+      artifacts.push({ id: `focus-${kind}-sheet`, kind: "sheet", path: focusSheet, sha256: await fileSha256(focusSheet) });
+    }
   }
-  const result: RenderSuiteResult = { project: project.name, revision, suite, outputDirectory: output, artifacts };
+  const result: RenderSuiteResult = {
+    project: project.name,
+    revision,
+    suite,
+    renderSize,
+    ...(region && options.focus ? { focus: { scope: options.focus, targetLayerIds, region } } : {}),
+    outputDirectory: output,
+    artifacts
+  };
   await writeFile(join(output, "manifest.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return result;
 }

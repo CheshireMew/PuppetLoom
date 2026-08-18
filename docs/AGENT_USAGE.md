@@ -13,11 +13,11 @@ Codex 一类外部 Agent 通过 CLI 完成从 PSD 到可运行角色的工作，
 ```powershell
 node $cli verify --project E:\Puppets\CharacterName --json
 node $cli describe --project E:\Puppets\CharacterName --json
-node $cli render --project E:\Puppets\CharacterName --output E:\Puppets\CharacterName\reports\agent-baseline --suite calibration --json
+node $cli render --project E:\Puppets\CharacterName --output E:\Puppets\CharacterName\reports\agent-baseline --suite calibration --size 960 --focus whole --json
 node $cli record --project E:\Puppets\CharacterName --output E:\Puppets\CharacterName\reports\agent-motion --mode autonomous --json
 ```
 
-`verify.valid` 证明文件和安全约束通过，不能代替视觉检查。Agent 必须实际查看 `pose-sheet.png`、`motion-sheet.png` 和 `record` 生成的动态接触表或 WebM，重点比较中立、左右转、上下看、四个组合方向，以及前后发、呆毛、耳朵、衣摆和尾巴的独立运动。需要把主运动冻结后单看惯性时，另运行 `record --mode secondary`；报告中的 `headAndBodyFrozen` 和主运动极值必须证明冻结真实发生。
+`verify.valid` 证明文件和安全约束通过，不能代替视觉检查。Agent 必须实际查看 `pose-sheet.png` 和 `motion-sheet.png`，重点比较中立、左右转、上下看、四个组合方向，以及前后发、呆毛、耳朵、衣摆和尾巴的独立运动。需要检查脸、眼睛或局部轮廓时，把 `--focus` 换成对应部位，并使用 960 或 1200 的 `--size`；局部图会从更高分辨率源图重新渲染和裁切，不是放大低清缩略图。只有确实需要连续时间证据时才运行 `record`，不应拿低清视频代替高清姿态图。需要把主运动冻结后单看惯性时，另运行 `record --mode secondary`；报告中的 `headAndBodyFrozen` 和主运动极值必须证明冻结真实发生。
 
 ## 整模与分部自动制作
 
@@ -37,7 +37,7 @@ node $cli agent plan --project E:\Puppets\CharacterName --spec E:\Puppets\front-
 node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\front-hair-spec-r0.json --json
 ```
 
-模板只是安全起点，不能原样执行。`plan` 不写项目。正式规格计划返回 `inputMode: structured-specification`、当前 `baseRevision`、请求范围、草稿接管情况、各部位目标图层、检查、自动返修、素材请求、`canApply` 和 `blockers`。规格过期或数值越界时应重新看当前画面并生成新规格，不能只改 revision 绕过。确认范围和基线后才运行 `apply`。执行时，每个存在且通过计划的部位单独形成可恢复 revision；最终 JSON 返回总 `status`、from/to revision、各部位结果、最终 `verification`、总 `blockers` 和 `reportPath`。
+模板只是安全起点，不能原样执行。`plan` 不写项目。正式规格计划返回 `inputMode: structured-specification`、当前 `baseRevision`、请求范围、草稿接管情况、各部位目标图层、检查、自动返修、素材请求、`canApply` 和 `blockers`。规格过期或数值越界时应重新看当前画面并生成新规格，不能只改 revision 绕过。确认范围和基线后才运行 `apply`。执行时，每个存在且通过计划的部位单独形成可恢复 revision；最终 JSON 返回总 `status`、from/to revision、各部位结果、最终 `verification`、跨部位 `coherenceChecks`、总 `blockers` 和 `reportPath`。整模任务会声明并检查与实际范围有关的结构约束：头脸、眼睛和头饰必须保持同一转头关系；已有前发制作不得被头脸任务静默清除；上衣与裙子连接处、身体与尾根不得出现相对滑动。任一必需检查失败时，结果会阻断而不是伪装成完成。
 
 部位状态必须按原义报告：`completed` 是已经写入并产生证据，`not-present` 是项目没有相应语义图层，`needs-assets` 是闭眼或嘴形等可选素材尚缺，`blocked` 是自检、草稿、修订或最终验证阻止继续。不能新建不存在的假图层，也不能把缺素材或不存在说成制作完成。
 

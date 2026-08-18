@@ -63,7 +63,7 @@ node apps\cli\dist\index.js agent plan --project E:\Puppets\MyCharacter --spec E
 node apps\cli\dist\index.js agent apply --project E:\Puppets\MyCharacter --spec E:\Puppets\rig-spec-r0.json --json
 node apps\cli\dist\index.js author inspect --project E:\Puppets\MyCharacter --json
 node apps\cli\dist\index.js author apply --project E:\Puppets\MyCharacter --patch E:\Puppets\authoring.json --json
-node apps\cli\dist\index.js render --project E:\Puppets\MyCharacter --output E:\Puppets\Evidence --suite calibration --json
+node apps\cli\dist\index.js render --project E:\Puppets\MyCharacter --output E:\Puppets\Evidence --suite calibration --size 960 --focus headFace --json
 node apps\cli\dist\index.js record --project E:\Puppets\MyCharacter --output E:\Puppets\MotionEvidence --mode autonomous --revision 0 --json
 node apps\cli\dist\index.js calibrate --project E:\Puppets\MyCharacter --patch E:\Puppets\change.json --json
 node apps\cli\dist\index.js compare --project E:\Puppets\MyCharacter --from 0 --to 1 --output E:\Puppets\Compare --json
@@ -83,7 +83,7 @@ node apps\cli\dist\index.js cubism verify --model E:\Puppets\MyCharacter-cubism-
 node apps\cli\dist\index.js play --project E:\Puppets\MyCharacter --revision 0
 ```
 
-所有确定性命令都能返回 JSON。`agent specification` 生成外部 Agent 要结合画面填写的 revision 固定模板；`agent plan --spec` 只读返回整模或分部计划，`agent apply --spec` 为每个存在的部位建立独立可恢复 revision，并返回局部证据和最终 `verification`；`describe` 提供可调整的稳定 ID 和坐标；`author` 提供当前参数图和带 `baseRevision` 的高层事务；`calibrate` 只接受经过结构、安全和并发基线验证的稀疏修改；`restore` 同样要求 `--base-revision`。`history` 默认只输出适合人和 Agent 浏览的修订摘要，需要完整补丁时再使用 `--full`。`render` 与 `compare` 为 Agent 和用户生成同一套视觉证据。只要成功生成任一绑定等级，`create` 就返回 0；无效输入或校准补丁返回 2；文件系统、项目或运行时错误返回 3。详细流程见 [Agent 调用说明](docs/AGENT_USAGE.md) 和 [版本与产物管理](docs/VERSIONING.md)。
+所有确定性命令都能返回 JSON。`agent specification` 生成外部 Agent 要结合画面填写的 revision 固定模板；`agent plan --spec` 只读返回整模或分部计划，`agent apply --spec` 为每个存在的部位建立独立可恢复 revision，并返回局部证据、跨部位一致性检查和最终 `verification`；已接受的前发、头脸—眼睛—头饰结构链、腰部连接和尾根连接会作为整模约束，违反时不会把结果当作完成。`describe` 提供可调整的稳定 ID 和坐标；`author` 提供当前参数图和带 `baseRevision` 的高层事务；`calibrate` 只接受经过结构、安全和并发基线验证的稀疏修改；`restore` 同样要求 `--base-revision`。`history` 默认只输出适合人和 Agent 浏览的修订摘要，需要完整补丁时再使用 `--full`。`render` 与 `compare` 为 Agent 和用户生成同一套视觉证据；`render --size 300..1600 --focus <scope>` 可额外生成原生高清局部姿态证据，避免从低清整图放大后判断细节。只要成功生成任一绑定等级，`create` 就返回 0；无效输入或校准补丁返回 2；文件系统、项目或运行时错误返回 3。详细流程见 [Agent 调用说明](docs/AGENT_USAGE.md) 和 [版本与产物管理](docs/VERSIONING.md)。
 
 ## 项目目录
 

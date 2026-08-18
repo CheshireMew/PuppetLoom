@@ -41,7 +41,7 @@ import {
   verifyCubismModel,
   verifyProject
 } from "@puppetloom/core";
-import type { AuthoringPatch, CalibrationPatch, CubismPreviewPose, ModelAgentOptions, ModelAgentPart, ModelAgentRequestScope, RenderSuiteKind, SecondaryModelAgentPart } from "@puppetloom/core";
+import type { AuthoringPatch, CalibrationPatch, CubismPreviewPose, ModelAgentOptions, ModelAgentPart, ModelAgentRequestScope, RenderFocusScope, RenderSuiteKind, SecondaryModelAgentPart } from "@puppetloom/core";
 import { Command, CommanderError } from "commander";
 
 type OutputOptions = { json?: boolean };
@@ -562,13 +562,21 @@ program
   .requiredOption("--output <directory>", "证据输出目录")
   .option("--suite <kind>", "calibration、poses 或 motion", "calibration")
   .option("--revision <number>", "指定校准修订")
+  .option("--size <pixels>", "原生证据尺寸，300 到 1600", "600")
+  .option("--focus <scope>", "同时生成 whole 或指定部位的高清局部证据")
   .option("--json", "输出 JSON")
-  .action(async (options: { project: string; output: string; suite: string; revision?: string; json?: boolean }) => {
+  .action(async (options: { project: string; output: string; suite: string; revision?: string; size: string; focus?: string; json?: boolean }) => {
     await run(async () => {
       if (!["calibration", "poses", "motion"].includes(options.suite)) throw new PuppetLoomError("INVALID_INPUT", "suite 必须是 calibration、poses 或 motion。" );
       const revision = options.revision === undefined ? undefined : Number(options.revision);
       if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) throw new PuppetLoomError("INVALID_INPUT", "revision 必须是非负整数。" );
-      const result = await renderProjectSuite(resolve(options.project), resolve(options.output), options.suite as RenderSuiteKind, revision);
+      const size = Number(options.size);
+      if (!Number.isInteger(size) || size < 300 || size > 1600) throw new PuppetLoomError("INVALID_INPUT", "size 必须是 300 到 1600 之间的整数。" );
+      if (options.focus && !(modelAgentScopes as readonly string[]).includes(options.focus)) throw new PuppetLoomError("INVALID_INPUT", `不支持的证据范围：${options.focus}`);
+      const result = await renderProjectSuite(resolve(options.project), resolve(options.output), options.suite as RenderSuiteKind, revision, {
+        size,
+        ...(options.focus ? { focus: options.focus as RenderFocusScope } : {})
+      });
       print(result, options);
     }, options);
   });

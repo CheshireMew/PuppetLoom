@@ -17,8 +17,10 @@ export interface AgentFocusEvidence {
   artifactSha256: Record<"comparisonSheet" | "motionSheet" | "motionManifest", string>;
 }
 
-const renderSize = 540;
-const panelSize = 330;
+// Evidence is a review surface for the external Agent, not a thumbnail. Keep
+// enough native pixels for hair contours, eye perspective and mesh artefacts.
+const renderSize = 1080;
+const panelSize = 600;
 
 function rounded(value: number): number {
   return Number(value.toFixed(6));
@@ -36,9 +38,10 @@ function union(left: Rect, right: Rect): Rect {
   return { x, y, width: endX - x, height: endY - y };
 }
 
-function targetRegion(before: PuppetLoomProject, after: PuppetLoomProject, targetLayerIds: string[]): Rect {
+export function agentTargetRegion(before: PuppetLoomProject, after: PuppetLoomProject, targetLayerIds: string[]): Rect {
   const ids = new Set(targetLayerIds);
   const bounds = [...before.layers, ...after.layers].filter((layer) => ids.has(layer.id)).map((layer) => layer.bounds);
+  if (bounds.length === 0) throw new Error("局部证据没有可用的目标图层。");
   let region = bounds.slice(1).reduce(union, bounds[0]!);
   const centerX = region.x + region.width * 0.5;
   const centerY = region.y + region.height * 0.5;
@@ -56,14 +59,14 @@ function targetRegion(before: PuppetLoomProject, after: PuppetLoomProject, targe
   return Object.fromEntries(Object.entries(region).map(([key, value]) => [key, rounded(value)])) as unknown as Rect;
 }
 
-function cropPixels(project: PuppetLoomProject, region: Rect): { left: number; top: number; width: number; height: number } {
-  const scale = Math.min(renderSize / project.canvas.width, renderSize / project.canvas.height);
-  const offsetX = (renderSize - project.canvas.width * scale) * 0.5;
-  const offsetY = (renderSize - project.canvas.height * scale) * 0.5;
+export function agentRegionCrop(project: PuppetLoomProject, region: Rect, width = renderSize, height = renderSize): { left: number; top: number; width: number; height: number } {
+  const scale = Math.min(width / project.canvas.width, height / project.canvas.height);
+  const offsetX = (width - project.canvas.width * scale) * 0.5;
+  const offsetY = (height - project.canvas.height * scale) * 0.5;
   const left = Math.max(0, Math.floor(offsetX + region.x * project.canvas.width * scale));
   const top = Math.max(0, Math.floor(offsetY + region.y * project.canvas.height * scale));
-  const right = Math.min(renderSize, Math.ceil(offsetX + (region.x + region.width) * project.canvas.width * scale));
-  const bottom = Math.min(renderSize, Math.ceil(offsetY + (region.y + region.height) * project.canvas.height * scale));
+  const right = Math.min(width, Math.ceil(offsetX + (region.x + region.width) * project.canvas.width * scale));
+  const bottom = Math.min(height, Math.ceil(offsetY + (region.y + region.height) * project.canvas.height * scale));
   return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
 }
 
@@ -102,7 +105,7 @@ async function checkerboard(): Promise<Buffer> {
 
 async function renderFocus(project: PuppetLoomProject, sources: Awaited<ReturnType<typeof loadProjectTextureSources>>, state: MotionState, region: Rect, background: Buffer): Promise<Buffer> {
   const pixels = renderProjectPoseWithSources(project, sources, state, renderSize, renderSize);
-  const crop = cropPixels(project, region);
+  const crop = agentRegionCrop(project, region);
   const image = await sharp(Buffer.from(pixels.data), { raw: { width: renderSize, height: renderSize, channels: 4 } })
     .extract(crop)
     .resize(panelSize, panelSize, { fit: "contain" })
@@ -180,7 +183,7 @@ export async function renderAgentFocusEvidence(
   previews: AuthoringPreview[],
   outputDirectory: string
 ): Promise<AgentFocusEvidence> {
-  const region = targetRegion(before, after, targetLayerIds);
+  const region = agentTargetRegion(before, after, targetLayerIds);
   const [beforeSources, afterSources, background] = await Promise.all([
     loadProjectTextureSources(projectDirectory, before),
     loadProjectTextureSources(projectDirectory, after),

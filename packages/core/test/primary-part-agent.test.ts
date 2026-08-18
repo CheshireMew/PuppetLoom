@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeGridMesh } from "../src/mesh.js";
 import { createDefaultAuthoringModel } from "../src/model.js";
+import { evaluateModelAgentCoherence, modelAgentConstraints } from "../src/model-agent-coherence.js";
 import { createPrimaryPartAgentProposal, type PrimaryModelAgentPart } from "../src/primary-part-agent.js";
 import type { LayerBinding, MouthVariant, PuppetLoomProject, SemanticRole, Side } from "../src/types.js";
 
@@ -77,5 +78,44 @@ describe("primary model Agent", () => {
     const mouth = createPrimaryPartAgentProposal(project(), { part: "mouth", instruction: "自然" });
     expect(eyes.operations).toEqual(expect.arrayContaining([expect.objectContaining({ op: "upsert-expression" })]));
     expect(mouth.operations.filter((operation) => operation.op === "upsert-expression")).toHaveLength(3);
+  });
+
+  it("does not erase accepted front-hair authoring while improving the head", () => {
+    const value = project();
+    value.layers.push(layer("front-hair", "frontHair", "center", { x: 0.3, y: 0.08, width: 0.4, height: 0.34 }));
+    value.model.parameters.push({ id: "param-agent-front-hair-follow-main", name: "前发跟随", group: "hair", kind: "continuous", min: -1, default: 0, max: 1 });
+    value.model.bindings.push({
+      id: "agent-front-hair-lag-follow-main",
+      parameterIds: ["param-agent-front-hair-follow-main"],
+      target: { kind: "layer", id: "front-hair" },
+      keyforms: [{ values: [-1] }, { values: [0] }, { values: [1] }]
+    });
+    value.model.physics.push({
+      id: "agent-front-hair-physics-main",
+      name: "前发物理",
+      inputParameterId: value.model.parameters.find((parameter) => parameter.semantic === "head-yaw")!.id,
+      outputParameterId: "param-agent-front-hair-follow-main",
+      inputScale: 1,
+      outputScale: 1,
+      response: 8,
+      damping: 0.82
+    });
+    const before = JSON.stringify(value.model);
+    const proposal = createPrimaryPartAgentProposal(value, { part: "headFace", instruction: "改善头部透视，但保留前发" });
+    expect(JSON.stringify(proposal.overrides.model)).toBe(before);
+  });
+
+  it("declares and verifies cross-part preservation for a selected head task", () => {
+    const before = project();
+    before.layers.push(layer("front-hair", "frontHair", "center", { x: 0.3, y: 0.08, width: 0.4, height: 0.34 }));
+    before.model.bindings.push({ id: "agent-front-hair-lag-main", parameterIds: [before.model.parameters.find((parameter) => parameter.semantic === "head-yaw")!.id], target: { kind: "layer", id: "front-hair" }, keyforms: [{ values: [-1] }, { values: [1] }] });
+    const requested = ["headFace", "eyes", "headwear"] as const;
+    expect(modelAgentConstraints([...requested]).map((constraint) => constraint.id)).toEqual(expect.arrayContaining(["head-chain-coherence", "accepted-front-hair-preserved"]));
+    const preserved = evaluateModelAgentCoherence(before, JSON.parse(JSON.stringify(before)) as PuppetLoomProject, [...requested]);
+    expect(preserved.find((check) => check.id === "accepted-front-hair-preserved")?.passed).toBe(true);
+    const changed = JSON.parse(JSON.stringify(before)) as PuppetLoomProject;
+    changed.model.bindings.find((binding) => binding.id === "agent-front-hair-lag-main")!.keyforms.push({ values: [0] });
+    const rejected = evaluateModelAgentCoherence(before, changed, [...requested]);
+    expect(rejected.find((check) => check.id === "accepted-front-hair-preserved")?.passed).toBe(false);
   });
 });

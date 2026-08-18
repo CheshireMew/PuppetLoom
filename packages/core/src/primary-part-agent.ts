@@ -152,13 +152,10 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
     const pitchDownDegrees = clamp(intent.pitchDownDegrees ?? 14, 8, 20);
     return {
       model: {
-        ...clone(project.model),
-        // The unified head surface owns primary front-hair perspective. Older
-        // Agent revisions authored an additional pose binding to compensate
-        // for the former shallow field; keeping both would double-deform it.
-        parameters: project.model.parameters.filter((parameter) => !parameter.id.startsWith("param-agent-front-hair-follow-")),
-        bindings: project.model.bindings.filter((binding) => !binding.id.startsWith("agent-front-hair-")),
-        physics: project.model.physics.filter((physics) => !physics.id.startsWith("agent-front-hair-physics-"))
+        // Head/face work is additive. It may update the shared pose field below,
+        // but it must not silently erase any accepted front-hair pose, lag or
+        // physics authoring from an earlier revision.
+        ...clone(project.model)
       },
       layers: patches,
       runtime: {
