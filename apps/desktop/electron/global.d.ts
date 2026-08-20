@@ -18,12 +18,24 @@ import type {
 import type { PointerLookTarget } from "@puppetloom/renderer";
 
 export interface DesktopCreateRequest {
+  operationId?: string;
   input: string;
   output: string;
   reference?: string;
   seed?: number;
   name?: string;
-  preserveAlphaNoise?: boolean;
+  alphaCleanup?: "preserve-all" | "automatic" | "remove-all-tiny";
+}
+
+export type DesktopCreatePhase = "importing" | "rigging" | "writing" | "validating" | "publishing";
+
+export interface ViewerLaunchOptions {
+  project?: PuppetLoomProject;
+  sourceLabel?: string;
+}
+
+export interface ViewerCapabilities {
+  hotkeys: Record<string, boolean>;
 }
 
 export interface DesktopCreateResponse {
@@ -101,8 +113,10 @@ export interface PuppetLoomDesktopApi {
   chooseOutput(): Promise<string | null>;
   chooseProject(): Promise<string | null>;
   pathForFile(file: File): string;
-  inspect(input: string): Promise<InspectionReport>;
+  inspect(input: string, alphaCleanup?: DesktopCreateRequest["alphaCleanup"]): Promise<InspectionReport>;
   create(request: DesktopCreateRequest): Promise<DesktopCreateResponse>;
+  cancelCreate(operationId: string): Promise<boolean>;
+  onCreateProgress(listener: (progress: { operationId: string; phase: DesktopCreatePhase }) => void): () => void;
   recentProjects(): Promise<RecentProject[]>;
   readProject(projectDirectory: string, revision?: number): Promise<PuppetLoomProject>;
   readEditorWorkspace(projectDirectory: string): Promise<EditorWorkspace>;
@@ -121,7 +135,11 @@ export interface PuppetLoomDesktopApi {
   onPrepareEditorClose(listener: () => void | Promise<void>): () => void;
   readAsset(projectDirectory: string, layer: LayerBinding): Promise<Blob>;
   readProjectFile(projectDirectory: string, relative: string): Promise<Blob>;
-  launchViewer(projectDirectory: string): Promise<{ id: number; state: ViewerState }>;
+  launchViewer(projectDirectory: string, options?: ViewerLaunchOptions): Promise<{ id: number; state: ViewerState }>;
+  viewerProject(): Promise<{ project: PuppetLoomProject; sourceLabel: string }>;
+  viewerCapabilities(): Promise<ViewerCapabilities>;
+  revealPath(path: string): Promise<boolean>;
+  copyText(text: string): Promise<boolean>;
   controlViewer(id: number, action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   viewerAction(action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   pointerTarget(): Promise<PointerLookTarget>;
@@ -134,6 +152,8 @@ export interface PuppetLoomDesktopApi {
   inputRecording(action: "start" | "stop"): Promise<{ recording: boolean; output?: string; durationMs?: number; events?: number }>;
   inputReplay(action: "start" | "stop"): Promise<{ replaying: boolean; canceled?: boolean; input?: string }>;
   onRuntimeControl(listener: (snapshot: RuntimeControlSnapshot) => void): () => void;
+  onViewerProject(listener: (payload: { project: PuppetLoomProject; sourceLabel: string }) => void): () => void;
+  onInputReplayState(listener: (state: { replaying: boolean; reason: "started" | "finished" | "stopped" }) => void): () => void;
   startPerformanceRecording(metadata: PerformanceRecordingMetadata): Promise<{ id: string; viewerId: number; output: string; report: string }>;
   appendPerformanceRecording(id: string, bytes: Uint8Array): Promise<{ id: string; bytes: number }>;
   stopPerformanceRecording(id: string, durationMs: number): Promise<PerformanceRecordingResult>;

@@ -1004,6 +1004,10 @@ export interface CreateOptions {
   alphaCleanup?: AlphaCleanupMode;
   /** @deprecated Use alphaCleanup. true removes every tiny component; false preserves every component. */
   cleanAlpha?: boolean;
+  /** Allows desktop and CLI callers to stop before the atomic publish step. */
+  signal?: AbortSignal;
+  /** Coarse deterministic phases suitable for user-facing progress. */
+  onProgress?: (phase: "importing" | "rigging" | "writing" | "validating" | "publishing") => void;
 }
 
 export interface EnhanceOptions {

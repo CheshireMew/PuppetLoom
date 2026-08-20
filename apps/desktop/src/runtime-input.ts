@@ -20,7 +20,7 @@ interface FaceAxes {
 }
 
 export interface InputAdapterStatus {
-  state: "starting" | "active" | "lost" | "error" | "stopped";
+  state: "starting" | "calibrating" | "active" | "lost" | "error" | "stopped";
   message: string;
 }
 
@@ -157,9 +157,11 @@ export async function startFaceInput(
   video.muted = true;
   video.playsInline = true;
   video.srcObject = stream;
-  await video.play();
-  const { FaceLandmarker, FilesetResolver } = await import("@mediapipe/tasks-vision");
-  const fileset = await FilesetResolver.forVisionTasks(assets.wasmBaseUrl);
+  let landmarker: { detectForVideo: (video: HTMLVideoElement, now: number) => { faceLandmarks: FacePoint[][]; faceBlendshapes?: Array<{ categories: Array<{ categoryName?: string; score: number }> }> }; close: () => void } | undefined;
+  try {
+    await video.play();
+    const { FaceLandmarker, FilesetResolver } = await import("@mediapipe/tasks-vision");
+    const fileset = await FilesetResolver.forVisionTasks(assets.wasmBaseUrl);
   const options = {
     baseOptions: { modelAssetPath: assets.faceLandmarkerModelUrl, delegate: "GPU" as const },
     runningMode: "VIDEO" as const,
@@ -169,11 +171,16 @@ export async function startFaceInput(
     minFacePresenceConfidence: 0.55,
     minTrackingConfidence: 0.5
   };
-  let landmarker;
-  try {
-    landmarker = await FaceLandmarker.createFromOptions(fileset, options);
-  } catch {
-    landmarker = await FaceLandmarker.createFromOptions(fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: "CPU" } });
+    try {
+      landmarker = await FaceLandmarker.createFromOptions(fileset, options);
+    } catch {
+      landmarker = await FaceLandmarker.createFromOptions(fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: "CPU" } });
+    }
+  } catch (cause) {
+    landmarker?.close();
+    stream.getTracks().forEach((track) => track.stop());
+    video.srcObject = null;
+    throw cause;
   }
   const mapper = new FaceInputMapper();
   let active = true;
@@ -184,12 +191,12 @@ export async function startFaceInput(
     if (!active) return;
     if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime !== lastVideoTime) {
       lastVideoTime = video.currentTime;
-      const result = landmarker.detectForVideo(video, performance.now());
+      const result = landmarker!.detectForVideo(video, performance.now());
       const landmarks = result.faceLandmarks[0];
       const motion = mapper.sample(landmarks ? { landmarks, blendshapes: blendshapes(result) } : undefined, performance.now());
       if (motion) {
         onMotion(motion);
-        if (!hadFace || mapper.calibrated) onStatus({ state: "active", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然看向摄像头，正在校准…" });
+        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然看向摄像头，正在校准…" });
         hadFace = true;
       } else if (hadFace) {
         onStatus({ state: "lost", message: "暂时没有检测到面部，角色已回到自主动作" });
@@ -204,7 +211,7 @@ export async function startFaceInput(
     async stop() {
       active = false;
       cancelAnimationFrame(frame);
-      landmarker.close();
+      landmarker?.close();
       stream.getTracks().forEach((track) => track.stop());
       video.srcObject = null;
       onStatus({ state: "stopped", message: "摄像头面捕已关闭" });
@@ -218,9 +225,18 @@ export async function startMicrophoneInput(
 ): Promise<RuntimeInputAdapter> {
   onStatus({ state: "starting", message: "正在启动麦克风…" });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }, video: false });
-  const context = new AudioContext({ latencyHint: "interactive" });
-  const source = context.createMediaStreamSource(stream);
-  const analyser = context.createAnalyser();
+  let context: AudioContext | undefined;
+  let source: MediaStreamAudioSourceNode | undefined;
+  let analyser: AnalyserNode | undefined;
+  try {
+    context = new AudioContext({ latencyHint: "interactive" });
+    source = context.createMediaStreamSource(stream);
+    analyser = context.createAnalyser();
+  } catch (cause) {
+    stream.getTracks().forEach((track) => track.stop());
+    await context?.close().catch(() => undefined);
+    throw cause;
+  }
   analyser.fftSize = 1024;
   analyser.smoothingTimeConstant = 0;
   source.connect(analyser);
@@ -231,7 +247,7 @@ export async function startMicrophoneInput(
   let previous = performance.now();
   const tick = (now: number) => {
     if (!active) return;
-    analyser.getFloatTimeDomainData(samples);
+    analyser!.getFloatTimeDomainData(samples);
     onMouthOpen(mapper.sample(samples, now - previous));
     previous = now;
     frame = requestAnimationFrame(tick);
@@ -243,10 +259,10 @@ export async function startMicrophoneInput(
     async stop() {
       active = false;
       cancelAnimationFrame(frame);
-      source.disconnect();
-      analyser.disconnect();
+      source?.disconnect();
+      analyser?.disconnect();
       stream.getTracks().forEach((track) => track.stop());
-      await context.close();
+      await context?.close();
       onStatus({ state: "stopped", message: "麦克风口型已关闭" });
     }
   };

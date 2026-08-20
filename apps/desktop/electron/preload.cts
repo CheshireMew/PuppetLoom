@@ -6,8 +6,14 @@ contextBridge.exposeInMainWorld("puppetloom", {
   chooseOutput: () => ipcRenderer.invoke("dialog:output"),
   chooseProject: () => ipcRenderer.invoke("dialog:project"),
   pathForFile: (file: File) => webUtils.getPathForFile(file),
-  inspect: (input: string) => ipcRenderer.invoke("project:inspect", input),
+  inspect: (input: string, alphaCleanup?: string) => ipcRenderer.invoke("project:inspect", input, alphaCleanup),
   create: (request: unknown) => ipcRenderer.invoke("project:create", request),
+  cancelCreate: (operationId: string) => ipcRenderer.invoke("project:create-cancel", operationId),
+  onCreateProgress: (listener: (progress: unknown) => void) => {
+    const handler = (_event: unknown, progress: unknown) => listener(progress);
+    ipcRenderer.on("project:create-progress", handler);
+    return () => ipcRenderer.removeListener("project:create-progress", handler);
+  },
   recentProjects: () => ipcRenderer.invoke("project:recent"),
   readProject: (projectDirectory: string, revision?: number) => ipcRenderer.invoke("project:read", projectDirectory, revision),
   readEditorWorkspace: (projectDirectory: string) => ipcRenderer.invoke("editor:read", projectDirectory),
@@ -40,7 +46,11 @@ contextBridge.exposeInMainWorld("puppetloom", {
     const result = (await ipcRenderer.invoke("project:asset", projectDirectory, relative)) as { mime: string; bytes: Uint8Array };
     return new Blob([result.bytes], { type: result.mime });
   },
-  launchViewer: (projectDirectory: string) => ipcRenderer.invoke("viewer:launch", projectDirectory),
+  launchViewer: (projectDirectory: string, options?: unknown) => ipcRenderer.invoke("viewer:launch", projectDirectory, options),
+  viewerProject: () => ipcRenderer.invoke("viewer:project"),
+  viewerCapabilities: () => ipcRenderer.invoke("viewer:capabilities"),
+  revealPath: (path: string) => ipcRenderer.invoke("system:reveal-path", path),
+  copyText: (text: string) => ipcRenderer.invoke("system:copy-text", text),
   controlViewer: (id: number, action: string) => ipcRenderer.invoke("viewer:control", id, action),
   viewerAction: (action: string) => ipcRenderer.invoke("viewer:self-control", action),
   pointerTarget: () => ipcRenderer.invoke("viewer:pointer-target"),
@@ -56,6 +66,16 @@ contextBridge.exposeInMainWorld("puppetloom", {
     const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);
     ipcRenderer.on("viewer:runtime-control-changed", handler);
     return () => ipcRenderer.removeListener("viewer:runtime-control-changed", handler);
+  },
+  onViewerProject: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("viewer:project-changed", handler);
+    return () => ipcRenderer.removeListener("viewer:project-changed", handler);
+  },
+  onInputReplayState: (listener: (state: unknown) => void) => {
+    const handler = (_event: unknown, state: unknown) => listener(state);
+    ipcRenderer.on("viewer:input-replay-state", handler);
+    return () => ipcRenderer.removeListener("viewer:input-replay-state", handler);
   },
   startPerformanceRecording: (metadata: unknown) => ipcRenderer.invoke("viewer:performance-recording-start", metadata),
   appendPerformanceRecording: (id: string, bytes: Uint8Array) => ipcRenderer.invoke("viewer:performance-recording-append", id, bytes),

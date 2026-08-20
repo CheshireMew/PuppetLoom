@@ -118,6 +118,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const drag = useRef<{ target: DragTarget; before: CalibrationOverrides; mesh?: MeshDragSnapshot } | undefined>(undefined);
+  const operationLock = useRef(false);
+  const historyGroup = useRef<{ key: string; at: number } | undefined>(undefined);
   const [workspace, setWorkspace] = useState<EditorWorkspaceData>();
   const [pending, setPending] = useState<CalibrationOverrides>({});
   const [undoStack, setUndoStack] = useState<CalibrationOverrides[]>([]);
@@ -192,6 +194,12 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [projectDirectory]);
 
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 7000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
     void window.puppetloom.setEditorMode(true, projectDirectory);
     return () => { void window.puppetloom.setEditorMode(false); };
   }, [projectDirectory]);
@@ -203,6 +211,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const project = useMemo(() => workspace ? applyCalibrationOverrides(workspace.baseProject, effectiveOverrides) : undefined, [workspace, effectiveOverrides]);
   const selectedLayer = project?.layers.find((layer) => layer.id === selectedLayerId);
   const hasPending = Object.keys(pending).length > 0;
+  const interactionLocked = busy || meshUpgrading;
   const renderProject = useMemo(() => {
     const source = showDraftBefore ? workspace?.project : project;
     if (!source || !soloSelectedLayer || section !== "rig") return source;
@@ -288,15 +297,20 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     for (const url of comparison ? [comparison.before, comparison.after, comparison.difference] : []) URL.revokeObjectURL(url);
   }, [comparison]);
 
-  function commit(next: CalibrationOverrides): void {
+  function commit(next: CalibrationOverrides, group?: string, internal = false): void {
+    if (operationLock.current && !internal) return;
     if (JSON.stringify(next) === JSON.stringify(pending)) return;
-    setUndoStack((items) => [...items, clone(pending)]);
+    const now = Date.now();
+    const grouped = Boolean(group && historyGroup.current?.key === group && now - historyGroup.current.at < 750);
+    if (!grouped) setUndoStack((items) => [...items, clone(pending)]);
+    historyGroup.current = group ? { key: group, at: now } : undefined;
     setRedoStack([]);
     pendingRef.current = next;
     setPending(next);
   }
 
   function undo(): void {
+    if (operationLock.current) return;
     const previous = undoStack.at(-1);
     if (!previous) return;
     setRedoStack((items) => [...items, clone(pending)]);
@@ -306,6 +320,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }
 
   function redo(): void {
+    if (operationLock.current) return;
     const next = redoStack.at(-1);
     if (!next) return;
     setUndoStack((items) => [...items, clone(pending)]);
@@ -319,6 +334,11 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       if (event.key === "Escape" && drag.current) {
         event.preventDefault();
         cancelDrag();
+        return;
+      }
+      if (event.key === "Escape" && focusedPreview) {
+        event.preventDefault();
+        setFocusedPreview(false);
         return;
       }
       if (event.defaultPrevented || event.repeat || event.altKey || (!event.ctrlKey && !event.metaKey) || isTextEditingTarget(event.target)) return;
@@ -336,7 +356,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
     window.addEventListener("keydown", handleHistoryShortcut);
     return () => window.removeEventListener("keydown", handleHistoryShortcut);
-  }, [pending, redoStack, undoStack]);
+  }, [focusedPreview, pending, redoStack, undoStack]);
 
   function meshBaseline(layerId: string): LayerBinding | undefined {
     if (!workspace) return undefined;
@@ -379,7 +399,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }
 
   function beginDrag(event: React.PointerEvent<SVGElement>, target: DragTarget): void {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || operationLock.current) return;
     const meshTarget = target.kind === "mesh" || target.kind === "mesh-move" || target.kind === "mesh-scale" || target.kind === "mesh-rotate";
     if ((meshTarget || target.kind === "pivot" || target.kind === "secondary") && selectedLayer?.locked) return;
     event.preventDefault();
@@ -561,11 +581,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         next = mergeCalibrationOverrides(next, { model: setPoseCorrectionPointDeltas(project!.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
       }
     }
-    commit(next);
+    const targetKey = target.kind === "semantic" || target.kind === "anchor" || target.kind === "secondary" ? String(target.key) : target.kind === "mesh" ? String(target.index) : target.kind;
+    commit(next, `nudge:${target.kind}:${targetKey}`);
   }
 
   function patchLayer(layerId: string, patch: NonNullable<CalibrationOverrides["layers"]>[string]): void {
-    commit(layerOverride(pending, layerId, patch));
+    const detail = patch.weights ? `weights:${Object.keys(patch.weights).sort().join(",")}`
+      : patch.vertexInfluences ? `influences:${Object.keys(patch.vertexInfluences).sort().join(",")}`
+        : Object.keys(patch).sort().join(",");
+    commit(layerOverride(pending, layerId, patch), `layer:${layerId}:${detail}`);
   }
 
   function setLayerProperty(patch: NonNullable<CalibrationOverrides["layers"]>[string]): void {
@@ -576,11 +600,11 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   function setRuntimeTuning(kind: "motionTuning" | "envelope", key: string, value: number): void {
     const runtimePatch = kind === "motionTuning" ? { motionTuning: { [key]: value } } : { envelope: { [key]: value } };
-    commit(mergeCalibrationOverrides(pending, { runtime: runtimePatch } as CalibrationOverrides));
+    commit(mergeCalibrationOverrides(pending, { runtime: runtimePatch } as CalibrationOverrides), `runtime:${kind}:${key}`);
   }
 
   function setSecondaryTuning(part: SecondaryMotionPart, key: "amplitude" | "response" | "stability", value: number): void {
-    commit(mergeCalibrationOverrides(pending, { runtime: { secondaryMotionTuning: { [part]: { [key]: value } } } }));
+    commit(mergeCalibrationOverrides(pending, { runtime: { secondaryMotionTuning: { [part]: { [key]: value } } } }), `secondary:${part}:${key}`);
   }
 
   function setFaceDepth(landmark: FaceDepthLandmark, depth: number): void {
@@ -595,14 +619,14 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           }
         }
       }
-    }));
+    }), `face-depth:${landmark}`);
   }
 
   function setTorsoVolume(landmark: TorsoVolumeLandmark | "strength", value: number): void {
     const profile: TorsoVolumeProfile = clone(project?.runtime.torsoVolumeProfile ?? defaultTorsoVolumeProfile(1));
     if (landmark === "strength") profile.strength = value;
     else profile.points = profile.points.map((point) => point.id === landmark ? { ...point, depth: value } : point);
-    commit(mergeCalibrationOverrides(pending, { runtime: { torsoVolumeProfile: profile } }));
+    commit(mergeCalibrationOverrides(pending, { runtime: { torsoVolumeProfile: profile } }), `torso:${landmark}`);
   }
 
   function setVertexInfluence(channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin" | "headAttachment" | "physicsRelease", value: number): void {
@@ -671,7 +695,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     const index = model.physics.findIndex((physics) => physics.id === physicsId);
     if (index < 0) return;
     model.physics[index] = { ...model.physics[index]!, ...patch };
-    commit(mergeCalibrationOverrides(pending, { model }));
+    commit(mergeCalibrationOverrides(pending, { model }), `physics:${physicsId}:${Object.keys(patch).sort().join(",")}`);
   }
 
   function createStarterDynamics(): void {
@@ -713,6 +737,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     const previousTopology = selectedLayer.mesh.topology;
     const previousPoints = selectedLayer.mesh.points.length;
     const previousTriangles = Math.floor(selectedLayer.mesh.triangles.length / 3);
+    operationLock.current = true;
     setMeshUpgrading(true);
     setError("");
     try {
@@ -731,9 +756,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       const candidate = applyCalibrationOverrides(workspace!.baseProject, mergeCalibrationOverrides(workspace!.calibration.overrides, next));
       const failed = validateProjectPoses(candidate).filter((check) => !check.passed);
       if (failed.length > 0) {
-        throw new Error(`AI 重建结果未通过全姿态质量门：${failed[0]!.issues[0]?.message ?? failed[0]!.id}。原网格和当前草稿均未改动。`);
+        throw new Error(`网格重建结果未通过全姿态质量门：${failed[0]!.issues[0]?.message ?? failed[0]!.id}。原网格和当前草稿均未改动。`);
       }
-      commit(next);
+      commit(next, undefined, true);
       setSelectedVertex(undefined);
       setSelectedVertices([]);
       setMode("mesh");
@@ -745,6 +770,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       setError(`当前图层网格升级失败：${messageOf(cause)}`);
     } finally {
       setMeshUpgrading(false);
+      operationLock.current = false;
     }
   }
 
@@ -771,10 +797,10 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }
 
   async function showSessionEvidence(sessionId: string): Promise<void> {
-    setBusy(true); setError("");
+    operationLock.current = true; setBusy(true); setError("");
     try { await loadComparison(await window.puppetloom.calibrationEvidence(projectDirectory, sessionId)); }
     catch (cause) { setError(messageOf(cause)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); operationLock.current = false; }
   }
 
   async function save(): Promise<void> {
@@ -783,45 +809,61 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     if (failed.length > 0) {
       const firstIssue = failed[0]?.issues[0]?.message ?? "存在不安全姿态";
       setError(`当前草稿未保存：${failed.length} 个安全姿态未通过。${firstIssue} 请先微调或撤销这次改动。`);
+      setSection("rig"); setMode("mesh"); setEditorOverlayVisible(true);
+      if (failed[0]?.id && editorPoses[failed[0].id]) selectPose(failed[0].id);
       return;
     }
     cancelScheduled();
-    setBusy(true); setError(""); setNotice("");
+    operationLock.current = true; setBusy(true); setError(""); setNotice("");
     try {
       const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: label.trim() || "用户界面校准", overrides: pending });
-      await showEvidence(result);
-      setNotice(`已保存 revision ${result.calibration.revision}，安全系数 ${result.project.quality.safetyScale.toFixed(2)}。`);
       pendingRef.current = {}; setPending({}); setUndoStack([]); setRedoStack([]); setLabel(""); setDraftStatus("idle");
       await reload();
+      try {
+        await showEvidence(result);
+        setNotice(`已保存版本 ${result.calibration.revision}，安全系数 ${result.project.quality.safetyScale.toFixed(2)}。`);
+      } catch (cause) {
+        setNotice(`版本 ${result.calibration.revision} 已保存，但对比图暂时无法显示：${messageOf(cause)}`);
+      }
     } catch (cause) { setError(messageOf(cause)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); operationLock.current = false; }
   }
 
   async function restoreRevision(revision: number, restoreLabel: string): Promise<void> {
-    setBusy(true); setError("");
+    if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复历史版本。草稿仍然保留。" ); return; }
+    if (!window.confirm(`把版本 ${revision} 恢复为一个新的当前版本？现有历史不会删除。`)) return;
+    operationLock.current = true; setBusy(true); setError("");
     try {
-      if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复历史版本。草稿仍然保留。" ); return; }
       const result = await window.puppetloom.restoreCalibration(projectDirectory, revision, workspace!.calibration.revision, restoreLabel);
-      await showEvidence(result);
       pendingRef.current = {}; setPending({}); setUndoStack([]); setRedoStack([]); setLabel("");
-      setNotice(`已把 revision ${revision} 恢复为新的 revision ${result.calibration.revision}。`);
       await reload();
+      try {
+        await showEvidence(result);
+        setNotice(`已把版本 ${revision} 恢复为新的版本 ${result.calibration.revision}。`);
+      } catch (cause) {
+        setNotice(`版本 ${result.calibration.revision} 已恢复，但对比图暂时无法显示：${messageOf(cause)}`);
+      }
     } catch (cause) { setError(messageOf(cause)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); operationLock.current = false; }
   }
 
   async function resetSelectedLayer(): Promise<void> {
     if (!selectedLayer) return;
-    setBusy(true); setError("");
+    if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复自动绑定。草稿仍然保留。" ); return; }
+    if (!window.confirm(`恢复“${selectedLayer.sourceName}”的自动绑定？其它图层不会改变。`)) return;
+    operationLock.current = true; setBusy(true); setError("");
     try {
-      if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复自动绑定。草稿仍然保留。" ); return; }
       const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: `恢复 ${selectedLayer.sourceName} 的自动绑定`, overrides: {}, clear: { layers: [selectedLayer.id] } });
-      await showEvidence(result);
       pendingRef.current = {}; setPending({}); setUndoStack([]); setRedoStack([]);
-      setNotice(`已恢复 ${selectedLayer.sourceName}，其它校准保持不变。`);
       await reload();
+      try {
+        await showEvidence(result);
+        setNotice(`已恢复 ${selectedLayer.sourceName}，其它校准保持不变。`);
+      } catch (cause) {
+        setNotice(`已恢复 ${selectedLayer.sourceName}，但对比图暂时无法显示：${messageOf(cause)}`);
+      }
     } catch (cause) { setError(messageOf(cause)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); operationLock.current = false; }
   }
 
   async function markEvidence(sessionId: string, status: "accepted" | "rejected"): Promise<void> {
@@ -849,8 +891,11 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   async function launchViewer(): Promise<void> {
     setError("");
     try {
-      await window.puppetloom.launchViewer(projectDirectory);
-      setNotice("角色窗口已打开；重复运行会唤回同一个窗口。");
+      await window.puppetloom.launchViewer(projectDirectory, {
+        ...(project ? { project } : {}),
+        sourceLabel: hasPending ? "未保存草稿预览" : `已保存 revision ${workspace?.calibration.revision ?? 0}`
+      });
+      setNotice(hasPending ? "角色窗口已更新为当前未保存草稿；保存前仅用于预览。" : "角色窗口已打开并同步到当前版本。重复运行会更新同一个窗口。");
     } catch (cause) {
       setError(`无法打开角色窗口：${messageOf(cause)}`);
     }
@@ -870,16 +915,18 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   return (
     <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
       {focusedPreview && <button className="exit-focus-preview icon-only" aria-label="退出沉浸预览" title="退出沉浸预览" onClick={() => setFocusedPreview(false)}><Minimize2 aria-hidden="true" /></button>}
+      {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button aria-label="关闭提示" onClick={() => { setError(""); setNotice(""); }}>关闭</button></div>}
+      {interactionLocked && <div className="editor-operation-shield" role="status" aria-live="polite"><div className="spinner"/><strong>{meshUpgrading ? "正在生成并验证轮廓网格…" : "正在完成校准事务…"}</strong><span>完成前编辑已暂时锁定，当前草稿不会被覆盖。</span></div>}
       <header className="editor-header">
-        <button className="with-icon" onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" />返回主页</button>
-        <div><h1>{project.name}</h1><p>revision {workspace.calibration.revision} · {project.rigLevel} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
+        <button className="with-icon" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" />返回主页</button>
+        <div><h1>{project.name}</h1><p>版本 {workspace.calibration.revision} · {project.rigLevel === "semantic" ? "完整语义绑定" : project.rigLevel === "grouped" ? "分组绑定" : "基础绑定"} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
         <div className="editor-history-actions">
           <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
-          <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
-          <button className="with-icon" onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={busy}><RotateCcw aria-hidden="true" />恢复全部自动绑定</button>
-          <button className="header-save with-icon" disabled={!hasPending || busy} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存更改"}</button>
-          <button className="with-icon" onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行角色窗口</button>
+          <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
+          <button className="with-icon" onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked}><RotateCcw aria-hidden="true" />恢复全部自动绑定</button>
+          <button className="header-save with-icon" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存更改"}</button>
+          <button className="with-icon" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行角色窗口</button>
         </div>
       </header>
 
@@ -952,6 +999,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onNudge={nudgeWithKeyboard}
           onComparisonMode={setComparisonMode}
           onSplitPercent={setSplitPercent}
+          onCloseComparison={() => setComparison(undefined)}
         />
         {section === "overview" ? <OverviewInspector project={project} revision={workspace.calibration.revision} sessionCount={sessions.length} /> : section === "rig" ? <EditorInspectorPanel
           project={project}
@@ -964,8 +1012,6 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           label={label}
           hasPending={hasPending}
           busy={busy}
-          notice={notice}
-          error={error}
           sessions={sessions}
           comparison={comparison}
           meshUpgrading={meshUpgrading}

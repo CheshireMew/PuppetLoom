@@ -70,6 +70,7 @@ export interface RuntimeControlServiceOptions {
   port?: number;
   log?: (event: string, details?: Record<string, unknown>) => void;
   onChange?: (viewerId: number, snapshot: RuntimeControlSnapshot) => void;
+  onReplayState?: (viewerId: number, state: { replaying: boolean; reason: "started" | "finished" | "stopped" }) => void;
 }
 
 /** Loopback-only JSON service used by Agent CLIs and local input adapters. */
@@ -79,6 +80,7 @@ export class RuntimeControlService {
   private readonly preferredPort: number;
   private readonly log: NonNullable<RuntimeControlServiceOptions["log"]>;
   private readonly onChange: NonNullable<RuntimeControlServiceOptions["onChange"]>;
+  private readonly onReplayState: NonNullable<RuntimeControlServiceOptions["onReplayState"]>;
   private server: Server | undefined;
   private manifest: RuntimeControlManifest | undefined;
   private readonly recordings = new Map<number, ActiveRecording>();
@@ -89,6 +91,7 @@ export class RuntimeControlService {
     this.preferredPort = options.port ?? 31_987;
     this.log = options.log ?? (() => undefined);
     this.onChange = options.onChange ?? (() => undefined);
+    this.onReplayState = options.onReplayState ?? (() => undefined);
   }
 
   async start(): Promise<RuntimeControlManifest> {
@@ -250,8 +253,9 @@ export class RuntimeControlService {
     const replay = { session: input, speed, loop, startedAtMs: nowMs, cursor: 0, sourceIds: new Set<string>(), timer: undefined as unknown as ReturnType<typeof setInterval> };
     replay.timer = setInterval(() => this.tickReplay(viewerId), 8);
     this.replays.set(viewerId, replay);
-    this.tickReplay(viewerId, nowMs);
     this.log("runtime-input-replay-started", { viewerId, sessionId: input.id, speed, loop });
+    this.onReplayState(viewerId, { replaying: true, reason: "started" });
+    this.tickReplay(viewerId, nowMs);
     return { viewerId, replaying: true, sessionId: input.id, speed, loop, durationMs: input.durationMs };
   }
 
@@ -290,6 +294,7 @@ export class RuntimeControlService {
     clearInterval(replay.timer);
     this.replays.delete(viewerId);
     this.log("runtime-input-replay-finished", { viewerId, sessionId: replay.session.id });
+    this.onReplayState(viewerId, { replaying: false, reason: "finished" });
   }
 
   private stopReplay(viewerId: number): boolean {
@@ -299,6 +304,7 @@ export class RuntimeControlService {
     this.releaseReplaySources(viewerId, replay, Date.now());
     this.replays.delete(viewerId);
     this.log("runtime-input-replay-stopped", { viewerId, sessionId: replay.session.id });
+    this.onReplayState(viewerId, { replaying: false, reason: "stopped" });
     return true;
   }
 

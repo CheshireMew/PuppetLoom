@@ -15,7 +15,7 @@ import type {
   Side,
   TorsoVolumeLandmark
 } from "@puppetloom/core";
-import { ArrowDown, ArrowUp, Ban, Check, Eye, EyeOff, Lock, LockOpen, RotateCcw, Save, Scan, ScanEye, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowDown, ArrowUp, Ban, Check, Eye, EyeOff, Lock, LockOpen, RotateCcw, Save, Scan, ScanEye, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useViewportNavigation } from "./useViewportNavigation.js";
 
 export type EditMode = "semantic" | "anchors" | "layer" | "mesh";
@@ -107,6 +107,13 @@ function artMeshQuality(layer: LayerBinding): { balanced: boolean; label: string
 const semanticRoles: SemanticRole[] = [
   "backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "tail", "accessory", "unknown"
 ];
+const semanticRoleLabels: Record<SemanticRole, string> = {
+  backHair: "后发", frontHair: "前发", sideHair: "侧发", face: "脸部", eyeWhite: "眼白", iris: "虹膜", eyelash: "睫毛", eyeClosed: "闭眼", eyebrow: "眉毛", nose: "鼻子", mouth: "嘴部", ear: "耳朵", neck: "颈部", topWear: "上装", bottomWear: "下装", arm: "手臂", hand: "手", leg: "腿", foot: "脚", headwear: "头饰", tail: "尾巴", accessory: "配饰", unknown: "未识别"
+};
+const tuningLabels = { amplitude: "动作幅度", response: "响应速度", stability: "稳定程度" } as const;
+const weightLabels = { head: "头部跟随", body: "身体跟随", gaze: "视线跟随", physics: "次级运动" } as const;
+const faceDepthLabels: Record<FaceDepthLandmark, string> = { forehead: "额头", noseRoot: "鼻根", noseTip: "鼻尖", upperLip: "上唇", lowerLip: "下唇", chin: "下巴" };
+const torsoLabels: Record<TorsoVolumeLandmark, string> = { upperChest: "上胸", chest: "胸部", waist: "腰部", hip: "髋部" };
 
 const secondaryParts: Array<{ id: SecondaryMotionPart; label: string }> = [
   { id: "frontHair", label: "前发" }, { id: "backHair", label: "后发" }, { id: "ahoge", label: "呆毛" },
@@ -173,14 +180,14 @@ export function EditorLayerPanel({
   const ordered = (orderMode === "hierarchy" ? hierarchyOrdered : drawOrdered).filter((layer) => !normalizedQuery || [layer.sourceName, layer.role, layer.side, layer.deformerId, layer.parentGroup].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery)));
   return (
     <aside className="layer-panel">
-      <div className="layer-panel-heading"><div><div className="panel-eyebrow">RIG TREE</div><h2>图层结构</h2></div><output>{ordered.length}/{project.layers.length}</output></div>
+      <div className="layer-panel-heading"><div><div className="panel-eyebrow">绑定结构</div><h2>图层结构</h2></div><output>{ordered.length}/{project.layers.length}</output></div>
       <input className="layer-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、语义或变形器" />
       <div className="layer-order-tabs"><button className={orderMode === "hierarchy" ? "active" : ""} onClick={() => setOrderMode("hierarchy")}>结构层级</button><button className={orderMode === "draw" ? "active" : ""} onClick={() => setOrderMode("draw")}>绘制顺序</button></div>
       <div className="layer-list">
         {ordered.map((layer) => (
           <div key={layer.id} className={`layer-row ${selectedLayerId === layer.id ? "selected" : ""} ${layer.visible === false ? "hidden" : ""} ${soloSelectedLayer && selectedLayerId === layer.id ? "solo" : ""}`} style={{ paddingLeft: `${8 + layerDepth(layer, byId) * 16}px` }}>
             <button className="layer-select" onClick={() => onSelect(layer.id)}>
-              <span>{layer.sourceName}</span><small>{layer.role} · {layer.side} · #{layer.order}{layer.deformerId ? ` · ${layer.deformerId}` : ""}</small>
+              <span>{layer.sourceName}</span><small>{semanticRoleLabels[layer.role]} · {layer.side === "left" ? "角色左侧" : layer.side === "right" ? "角色右侧" : "中间"} · #{layer.order}{layer.deformerId ? ` · ${layer.deformerId}` : ""}</small>
             </button>
             <button className={`layer-icon ${layer.visible === false ? "is-off" : ""}`} title={layer.visible === false ? "显示图层" : "隐藏图层"} aria-label={`${layer.sourceName} ${layer.visible === false ? "显示" : "隐藏"}`} onClick={() => onPatchLayer(layer.id, { visible: layer.visible === false })}>{layer.visible === false ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</button>
             <button className={`layer-icon ${layer.locked ? "is-off" : ""}`} title={layer.locked ? "解锁图层" : "锁定图层"} aria-label={`${layer.sourceName} ${layer.locked ? "解锁" : "锁定"}`} onClick={() => onPatchLayer(layer.id, { locked: !layer.locked })}>{layer.locked ? <Lock aria-hidden="true" /> : <LockOpen aria-hidden="true" />}</button>
@@ -217,7 +224,8 @@ export function EditorViewportPanel({
   onSelectMeshVertices,
   onNudge,
   onComparisonMode,
-  onSplitPercent
+  onSplitPercent,
+  onCloseComparison
 }: {
   canvas: React.RefObject<HTMLCanvasElement | null>;
   project: PuppetLoomProject;
@@ -244,6 +252,7 @@ export function EditorViewportPanel({
   onNudge: (event: React.KeyboardEvent<SVGCircleElement>, target: DragTarget) => void;
   onComparisonMode: (mode: ComparisonMode) => void;
   onSplitPercent: (percent: number) => void;
+  onCloseComparison: () => void;
 }): React.JSX.Element {
   const cage = project.runtime.semanticCage;
   const meshTriangles = selectedLayer?.mesh.triangles ?? [];
@@ -518,7 +527,7 @@ export function EditorViewportPanel({
       <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? selectedVertices.length > 1 ? `已选择 ${selectedVertices.length} 个点；拖动任意一个黄色节点即可整体移动。单击空白取消选择，Shift+拖动框选更多节点，Shift+单击可增减单点。` : "鼠标靠近节点会自动高亮，按下即可直接拖动。单击空白取消选择；按住 Shift 拖动可框选，Shift+单击可增减单点。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
 
       {comparison && <section className="evidence-preview" data-testid="comparison-view">
-        <div className="comparison-header"><h3>revision {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => <button key={item} className={comparisonMode === item ? "active" : ""} onClick={() => onComparisonMode(item)}>{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>)}</div></div>
+        <div className="comparison-header"><h3>版本 {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => <button key={item} className={comparisonMode === item ? "active" : ""} onClick={() => onComparisonMode(item)}>{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>)}</div><button className="icon-only comparison-close" aria-label="关闭版本对比" title="关闭版本对比" onClick={onCloseComparison}><X aria-hidden="true" /></button></div>
         {comparisonMode === "split" && <label className="split-control">分割位置 <input type="range" min="0" max="100" value={splitPercent} onChange={(event) => onSplitPercent(Number(event.target.value))} /></label>}
         <div className={`comparison-canvas ${comparisonMode}`}>
           {comparisonMode === "before" && <img src={comparison.before} alt="校准修改前" />}
@@ -543,8 +552,6 @@ export function EditorInspectorPanel({
   label,
   hasPending,
   busy,
-  notice,
-  error,
   sessions,
   comparison,
   meshUpgrading,
@@ -577,8 +584,6 @@ export function EditorInspectorPanel({
   label: string;
   hasPending: boolean;
   busy: boolean;
-  notice: string;
-  error: string;
   sessions: CalibrationSessionDocument[];
   comparison: ComparisonImages | undefined;
   meshUpgrading: boolean;
@@ -608,7 +613,7 @@ export function EditorInspectorPanel({
   const layerMap = new Map(project.layers.map((layer) => [layer.id, layer]));
   return (
     <aside className="inspector-panel">
-      <div className="layer-panel-heading"><div><div className="panel-eyebrow">INSPECTOR</div><h2>属性</h2></div></div>
+      <div className="layer-panel-heading"><div><div className="panel-eyebrow">属性检查</div><h2>属性</h2></div></div>
       <div className="inspector-tabs"><button className={inspectorTab === "layer" ? "active" : ""} onClick={() => setInspectorTab("layer")}>图层</button><button className={inspectorTab === "motion" ? "active" : ""} onClick={() => setInspectorTab("motion")}>动作</button><button className={inspectorTab === "history" ? "active" : ""} onClick={() => setInspectorTab("history")}>版本</button></div>
       <div hidden={inspectorTab !== "layer"}>
       {selectedLayer ? <>
@@ -621,12 +626,12 @@ export function EditorInspectorPanel({
         </dl>
         <label className="check-row"><input type="checkbox" checked={selectedLayer.visible !== false} onChange={(event) => onLayerProperty({ visible: event.target.checked })} />参与渲染</label>
         <label className="check-row"><input type="checkbox" checked={locked} onChange={(event) => onLayerProperty({ locked: event.target.checked })} />锁定编辑</label>
-        <label>语义<select disabled={locked} value={selectedLayer.role} onChange={(event) => onLayerProperty({ role: event.target.value as SemanticRole })}>{semanticRoles.map((role) => <option key={role}>{role}</option>)}</select></label>
+        <label>语义<select disabled={locked} value={selectedLayer.role} onChange={(event) => onLayerProperty({ role: event.target.value as SemanticRole })}>{semanticRoles.map((role) => <option key={role} value={role}>{semanticRoleLabels[role]}</option>)}</select></label>
         <label>侧别<select disabled={locked} value={selectedLayer.side} onChange={(event) => onLayerProperty({ side: event.target.value as Side })}><option value="left">角色左侧</option><option value="right">角色右侧</option><option value="center">中间 / 整体</option></select></label>
         <label>运动归属<select disabled={locked} value={selectedLayer.parentGroup} onChange={(event) => onLayerProperty({ parentGroup: event.target.value as LayerBinding["parentGroup"] })}><option value="head">头部</option><option value="body">身体</option><option value="root">根节点</option></select></label>
         <label>父图层<select disabled={locked} value={selectedLayer.parentLayerId ?? ""} onChange={(event) => onLayerProperty({ parentLayerId: event.target.value || null })}><option value="">无父图层</option>{project.layers.filter((layer) => canUseAsParent(selectedLayer.id, layer, layerMap)).map((layer) => <option key={layer.id} value={layer.id}>{layer.sourceName}</option>)}</select></label>
         <div className="order-row"><span>绘制顺序 #{selectedLayer.order}</span><button className="icon-only" aria-label="向后移动一层" title="向后移动一层" disabled={locked} onClick={() => onMoveLayer(-1)}><ArrowDown aria-hidden="true" /></button><button className="icon-only" aria-label="向前移动一层" title="向前移动一层" disabled={locked} onClick={() => onMoveLayer(1)}><ArrowUp aria-hidden="true" /></button></div>
-        {(["head", "body", "gaze", "physics"] as const).map((key) => <label className="range-row" key={key}><span>{key} {selectedLayer.weights[key].toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.01" value={selectedLayer.weights[key]} onChange={(event) => onLayerProperty({ weights: { [key]: Number(event.target.value) } })} /></label>)}
+        {(["head", "body", "gaze", "physics"] as const).map((key) => <label className="range-row" key={key}><span>{weightLabels[key]} {selectedLayer.weights[key].toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.01" value={selectedLayer.weights[key]} onChange={(event) => onLayerProperty({ weights: { [key]: Number(event.target.value) } })} /></label>)}
 
         <section className="mesh-density">
           <h3>网格密度</h3>
@@ -687,35 +692,34 @@ export function EditorInspectorPanel({
 
       <section className="save-panel">
         <h3>整体动作</h3>
-        {(["amplitude", "response", "stability"] as const).map((key) => { const value = project.runtime.motionTuning?.[key] ?? ({ amplitude: 1, response: 0.72, stability: 0.42 }[key]); return <label className="range-row" key={key}><span>{key} {value.toFixed(2)}</span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={value} onChange={(event) => onRuntimeTuning("motionTuning", key, Number(event.target.value))} /></label>; })}
-        {(["headYaw", "headPitch", "breath"] as const).map((key) => { const value = project.runtime.envelope[key]; const maximum = key === "breath" ? 0.08 : 1; return <label className="range-row" key={key}><span>{key} {value.toFixed(3)}</span><input type="range" min="0" max={maximum} step={key === "breath" ? "0.001" : "0.01"} value={value} onChange={(event) => onRuntimeTuning("envelope", key, Number(event.target.value))} /></label>; })}
+        {(["amplitude", "response", "stability"] as const).map((key) => { const value = project.runtime.motionTuning?.[key] ?? ({ amplitude: 1, response: 0.72, stability: 0.42 }[key]); return <label className="range-row" key={key}><span>{tuningLabels[key]} {value.toFixed(2)}</span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={value} onChange={(event) => onRuntimeTuning("motionTuning", key, Number(event.target.value))} /></label>; })}
+        {(["headYaw", "headPitch", "breath"] as const).map((key) => { const value = project.runtime.envelope[key]; const maximum = key === "breath" ? 0.08 : 1; const keyLabel = key === "headYaw" ? "左右转头" : key === "headPitch" ? "上下抬头" : "呼吸幅度"; return <label className="range-row" key={key}><span>{keyLabel} {value.toFixed(3)}</span><input type="range" min="0" max={maximum} step={key === "breath" ? "0.001" : "0.01"} value={value} onChange={(event) => onRuntimeTuning("envelope", key, Number(event.target.value))} /></label>; })}
 
         {project.runtime.poseField?.faceDepthProfile && <>
           <h3>侧脸深度</h3>
           <small>按额头、鼻根、鼻尖、上下唇和下巴控制转头时的前后层次；正面中立状态不受影响。</small>
-          {project.runtime.poseField.faceDepthProfile.points.map((point) => <label className="range-row" key={point.id}><span>{point.id} {point.depth.toFixed(3)}</span><input type="range" min="-0.2" max="0.35" step="0.005" value={point.depth} onChange={(event) => onFaceDepth(point.id, Number(event.target.value))} /></label>)}
+          {project.runtime.poseField.faceDepthProfile.points.map((point) => <label className="range-row" key={point.id}><span>{faceDepthLabels[point.id]} {point.depth.toFixed(3)}</span><input type="range" min="-0.2" max="0.35" step="0.005" value={point.depth} onChange={(event) => onFaceDepth(point.id, Number(event.target.value))} /></label>)}
         </>}
 
         <h3>躯干体积（可选）</h3>
         <label className="range-row"><span>作用强度 {(project.runtime.torsoVolumeProfile?.strength ?? 0).toFixed(2)}</span><input type="range" min="0" max="2" step="0.05" value={project.runtime.torsoVolumeProfile?.strength ?? 0} onChange={(event) => onTorsoVolume("strength", Number(event.target.value))} /></label>
-        {project.runtime.torsoVolumeProfile?.points.map((point) => <label className="range-row" key={point.id}><span>{point.id} {point.depth.toFixed(3)}</span><input type="range" min="-0.3" max="0.3" step="0.005" value={point.depth} onChange={(event) => onTorsoVolume(point.id, Number(event.target.value))} /></label>)}
+        {project.runtime.torsoVolumeProfile?.points.map((point) => <label className="range-row" key={point.id}><span>{torsoLabels[point.id]} {point.depth.toFixed(3)}</span><input type="range" min="-0.3" max="0.3" step="0.005" value={point.depth} onChange={(event) => onTorsoVolume(point.id, Number(event.target.value))} /></label>)}
 
         <h3>分部响应</h3>
         <label>部件<select value={secondaryPart} onChange={(event) => onSecondaryPart(event.target.value as SecondaryMotionPart)}>{secondaryParts.map((part) => <option key={part.id} value={part.id}>{part.label}</option>)}</select></label>
-        {(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{key} {selectedTuning[key].toFixed(2)}</span><input data-testid={`secondary-${key}`} type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={selectedTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}
+        {(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{tuningLabels[key]} {selectedTuning[key].toFixed(2)}</span><input data-testid={`secondary-${key}`} type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={selectedTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}
 
         <label>校准说明<input value={label} onChange={(event) => onLabel(event.target.value)} placeholder="例如：固定耳根并调整右眼外角" /></label>
         <button className="primary with-icon" disabled={!hasPending || busy} onClick={onSave}><Save aria-hidden="true" />{busy ? "正在验证并生成证据…" : "保存校准"}</button>
         <button className="with-icon" disabled={!hasPending || busy} onClick={onDiscard}><Trash2 aria-hidden="true" />放弃当前草稿</button>
-        {notice && <p className="success">{notice}</p>}{error && <p className="error">{error}</p>}
       </section>
       </div>
 
       <div hidden={inspectorTab !== "history"}>
       <section className="session-panel">
         <h3>校准历史</h3>{sessions.length === 0 && <p>还没有保存过校准。</p>}
-        {sessions.slice(0, 12).map((session) => <article key={session.id} className={comparison?.result.toRevision === session.toRevision ? "active" : ""}>
-          <strong>r{session.toRevision} · {session.label}</strong><small>{session.evidenceStatus}</small>
+        {sessions.map((session) => <article key={session.id} className={comparison?.result.toRevision === session.toRevision ? "active" : ""}>
+          <strong>版本 {session.toRevision} · {session.label}</strong><small><time dateTime={session.createdAt}>{new Date(session.createdAt).toLocaleString("zh-CN")}</time> · {session.evidenceStatus === "accepted" ? "已确认" : session.evidenceStatus === "rejected" ? "已标记无效" : "待检查"}</small>
           <div><button className="with-icon" onClick={() => onShowEvidence(session.id)}><Eye aria-hidden="true" />查看对比</button><button className="with-icon" onClick={() => onRestore(session.toRevision, `恢复到 ${session.label}`)}><RotateCcw aria-hidden="true" />恢复</button><button className="with-icon" onClick={() => onMarkEvidence(session.id, "accepted")}><Check aria-hidden="true" />确认</button><button className="with-icon" onClick={() => onMarkEvidence(session.id, "rejected")}><Ban aria-hidden="true" />无效</button></div>
         </article>)}
       </section>

@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject, loadProjectRevision, parseRuntimeControlRequest, parseRuntimeControlServiceRequest, parseRuntimeInputSession } from "@puppetloom/core";
-import type { RuntimeControlSetRequest, RuntimeInputSession } from "@puppetloom/core";
+import type { PuppetLoomProject, RuntimeControlSetRequest, RuntimeInputSession, RuntimeViewerDescriptor } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, protocol, screen, session } from "electron";
-import type { ViewerState, WindowShellAction, WindowShellState } from "./global.js";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, protocol, screen, session, shell } from "electron";
+import type { ViewerLaunchOptions, ViewerState, WindowShellAction, WindowShellState } from "./global.js";
 import { CalibrationIpcService } from "./calibration-ipc.js";
 import { ProjectIpcService } from "./project-ipc.js";
 import { PerformanceRecordingService } from "./performance-recording-service.js";
@@ -18,6 +18,8 @@ const rendererPage = resolve(electronDirectory, "../renderer/index.html");
 const viewerStates = new Map<number, ViewerState>();
 const viewerProjects = new Map<number, string>();
 const viewerRevisions = new Map<number, number | undefined>();
+const viewerProjectSnapshots = new Map<number, PuppetLoomProject>();
+const viewerSourceLabels = new Map<number, string>();
 const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 const viewerAspectRatios = new Map<number, number>();
 let runtimeLogPath: string | undefined;
@@ -30,8 +32,9 @@ const RUNTIME_LOG_ROTATE_BYTES = 5 * 1024 ** 2;
 const RUNTIME_LOG_MAX_TOTAL_BYTES = Number(process.env.PUPPETLOOM_RUNTIME_LOG_MAX_BYTES ?? 64 * 1024 ** 2);
 const CONTROL_WINDOW_WIDTH = 1440;
 const CONTROL_WINDOW_HEIGHT = 900;
-const CONTROL_WINDOW_MIN_WIDTH = 1100;
-const CONTROL_WINDOW_MIN_HEIGHT = 700;
+const CONTROL_WINDOW_MIN_WIDTH = 900;
+const CONTROL_WINDOW_MIN_HEIGHT = 640;
+const runtimeHotkeys: Record<string, boolean> = {};
 const CONTROL_WINDOW_SHELL = { strategy: "integrated", frame: false } as const;
 const MEDIAPIPE_WASM_FILES = new Set([
   "vision_wasm_internal.js", "vision_wasm_internal.wasm",
@@ -248,6 +251,10 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
     next = { ...current, alwaysOnTop: !current.alwaysOnTop };
   }
   if (action === "click-through") {
+    if (!current.clickThrough && runtimeHotkeys["CommandOrControl+Shift+P"] === false) {
+      runtimeLog("viewer-click-through-refused", { id: window.id, reason: "recovery-hotkey-unavailable" });
+      return current;
+    }
     window.setIgnoreMouseEvents(!current.clickThrough, { forward: true });
     next = { ...current, clickThrough: !current.clickThrough };
   }
@@ -280,17 +287,49 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
   return publishState(window, next);
 }
 
-async function createViewer(projectDirectory: string, revision?: number, capture = false): Promise<BrowserWindow> {
+function runtimeDescriptor(windowId: number, projectDirectory: string, project: PuppetLoomProject, revision?: number): RuntimeViewerDescriptor {
+  return {
+    id: windowId,
+    projectDirectory,
+    projectName: project.name,
+    ...(revision === undefined ? {} : { revision }),
+    parameters: project.model.parameters.map(({ id, name, min, default: defaultValue, max, semantic }) => ({ id, name, min, default: defaultValue, max, ...(semantic ? { semantic } : {}) })),
+    expressions: project.model.expressions.map(({ id, name }) => ({ id, name })),
+    behaviors: project.model.behaviors.map(({ id, name, duration, loop }) => ({ id, name, duration, loop }))
+  };
+}
+
+function rememberViewerProject(window: BrowserWindow, projectDirectory: string, project: PuppetLoomProject, revision: number | undefined, sourceLabel: string): void {
+  const aspectRatio = project.canvas.width / project.canvas.height;
+  viewerProjects.set(window.id, projectDirectory);
+  viewerRevisions.set(window.id, revision);
+  viewerProjectSnapshots.set(window.id, structuredClone(project));
+  viewerSourceLabels.set(window.id, sourceLabel);
+  viewerAspectRatios.set(window.id, aspectRatio);
+  viewerLookOrigins.set(window.id, project.anchors.nose ?? {
+    x: 0.5,
+    y: ((project.anchors.headTop?.y ?? 0.04) + (project.anchors.chin?.y ?? 0.36)) * 0.5
+  });
+  window.setAspectRatio(aspectRatio);
+  window.setTitle(project.name);
+  runtimeControlService?.registerViewer(runtimeDescriptor(window.id, projectDirectory, project, revision));
+}
+
+async function createViewer(projectDirectory: string, revision?: number, capture = false, projectOverride?: PuppetLoomProject, sourceLabel?: string): Promise<BrowserWindow> {
   const resolvedProject = resolve(projectDirectory);
   runtimeLog("viewer-create-request", { project: resolvedProject, revision: revision ?? "current", capture });
+  const project = projectOverride ?? (revision === undefined ? await loadProject(resolvedProject) : await loadProjectRevision(resolvedProject, revision));
+  const resolvedSourceLabel = sourceLabel ?? (revision === undefined ? "已保存项目" : `历史 revision ${revision}`);
   for (const [id, directory] of viewerProjects) {
     const existing = BrowserWindow.fromId(id);
     if (existing && samePath(directory, resolvedProject) && viewerRevisions.get(id) === revision) {
+      rememberViewerProject(existing, resolvedProject, project, revision, resolvedSourceLabel);
+      if (!existing.webContents.isDestroyed()) existing.webContents.send("viewer:project-changed", { project, sourceLabel: resolvedSourceLabel });
+      runtimeLog("viewer-project-refreshed", { id, project: resolvedProject, revision: revision ?? "current", sourceLabel: resolvedSourceLabel });
       bringForward(existing);
       return existing;
     }
   }
-  const project = revision === undefined ? await loadProject(resolvedProject) : await loadProjectRevision(resolvedProject, revision);
   runtimeLog("project-loaded", { project: resolvedProject, revision: revision ?? "current", name: project.name, layers: project.layers.length });
   const height = 720;
   const width = Math.max(300, Math.round(height * project.canvas.width / project.canvas.height));
@@ -308,27 +347,13 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     skipTaskbar: capture,
     show: !capture,
     title: project.name,
-    webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
+    // A click-through desktop puppet normally runs without focus. Chromium's
+    // default background throttling would otherwise turn a healthy 60 FPS
+    // render loop into intermittent 30/15 FPS motion when another app is used.
+    webPreferences: { preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
   });
-  const aspectRatio = project.canvas.width / project.canvas.height;
-  window.setAspectRatio(aspectRatio);
   stateFor(window);
-  viewerProjects.set(window.id, resolvedProject);
-  viewerRevisions.set(window.id, revision);
-  viewerAspectRatios.set(window.id, aspectRatio);
-  viewerLookOrigins.set(window.id, project.anchors.nose ?? {
-    x: 0.5,
-    y: ((project.anchors.headTop?.y ?? 0.04) + (project.anchors.chin?.y ?? 0.36)) * 0.5
-  });
-  runtimeControlService?.registerViewer({
-    id: window.id,
-    projectDirectory: resolvedProject,
-    projectName: project.name,
-    ...(revision === undefined ? {} : { revision }),
-    parameters: project.model.parameters.map(({ id, name, min, default: defaultValue, max, semantic }) => ({ id, name, min, default: defaultValue, max, ...(semantic ? { semantic } : {}) })),
-    expressions: project.model.expressions.map(({ id, name }) => ({ id, name })),
-    behaviors: project.model.behaviors.map(({ id, name, duration, loop }) => ({ id, name, duration, loop }))
-  });
+  rememberViewerProject(window, resolvedProject, project, revision, resolvedSourceLabel);
   runtimeLog("viewer-window-created", { id: window.id, width, height });
   window.once("ready-to-show", () => runtimeLog("viewer-ready-to-show", { id: window.id }));
   window.webContents.on("did-finish-load", () => {
@@ -343,6 +368,8 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
     viewerRevisions.delete(window.id);
+    viewerProjectSnapshots.delete(window.id);
+    viewerSourceLabels.delete(window.id);
     viewerLookOrigins.delete(window.id);
     viewerAspectRatios.delete(window.id);
     runtimeControlService?.unregisterViewer(window.id);
@@ -358,6 +385,8 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
     viewerRevisions.delete(window.id);
+    viewerProjectSnapshots.delete(window.id);
+    viewerSourceLabels.delete(window.id);
     viewerLookOrigins.delete(window.id);
     viewerAspectRatios.delete(window.id);
     runtimeControlService?.unregisterViewer(window.id);
@@ -453,6 +482,10 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     onChange: (viewerId, snapshot) => {
       const viewer = BrowserWindow.fromId(viewerId);
       if (viewer && !viewer.isDestroyed() && !viewer.webContents.isDestroyed()) viewer.webContents.send("viewer:runtime-control-changed", snapshot);
+    },
+    onReplayState: (viewerId, state) => {
+      const viewer = BrowserWindow.fromId(viewerId);
+      if (viewer && !viewer.isDestroyed() && !viewer.webContents.isDestroyed()) viewer.webContents.send("viewer:input-replay-state", state);
     }
   });
   await runtimeControlService.start();
@@ -470,8 +503,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       if (!window.isVisible()) window.show();
       window.focus();
       window.setMinimumSize(CONTROL_WINDOW_MIN_WIDTH, CONTROL_WINDOW_MIN_HEIGHT);
+      const workArea = screen.getDisplayMatching(window.getBounds()).workAreaSize;
       const [width = CONTROL_WINDOW_MIN_WIDTH, height = CONTROL_WINDOW_MIN_HEIGHT] = window.getSize();
-      if (width < 1320 || height < 820) window.setSize(Math.max(width, CONTROL_WINDOW_WIDTH), Math.max(height, CONTROL_WINDOW_HEIGHT), true);
+      const targetWidth = Math.min(workArea.width, Math.max(width, Math.min(CONTROL_WINDOW_WIDTH, workArea.width)));
+      const targetHeight = Math.min(workArea.height, Math.max(height, Math.min(CONTROL_WINDOW_HEIGHT, workArea.height)));
+      if (width !== targetWidth || height !== targetHeight) window.setSize(targetWidth, targetHeight, true);
       window.setTitle("PuppetLoom 编辑器");
     } else {
       editorWindows.delete(window.id);
@@ -509,11 +545,27 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     window.close();
     return true;
   });
-  ipcMain.handle("viewer:launch", async (_event, directory: string) => {
+  ipcMain.handle("viewer:launch", async (_event, directory: string, options?: ViewerLaunchOptions) => {
     const projectDirectory = resolve(directory);
     await projectIpc.rememberProject(projectDirectory);
-    const window = await createViewer(projectDirectory);
+    const window = await createViewer(projectDirectory, undefined, false, options?.project, options?.sourceLabel);
     return { id: window.id, state: stateFor(window) };
+  });
+  ipcMain.handle("viewer:project", (event) => {
+    const window = ownerWindow(event);
+    const project = window ? viewerProjectSnapshots.get(window.id) : undefined;
+    if (!window || !project) throw new Error("当前窗口没有可显示的角色项目。");
+    return { project, sourceLabel: viewerSourceLabels.get(window.id) ?? "已保存项目" };
+  });
+  ipcMain.handle("viewer:capabilities", () => ({ hotkeys: { ...runtimeHotkeys } }));
+  ipcMain.handle("system:reveal-path", (_event, path: string) => {
+    if (!path) return false;
+    shell.showItemInFolder(resolve(path));
+    return true;
+  });
+  ipcMain.handle("system:copy-text", (_event, value: string) => {
+    clipboard.writeText(value);
+    return true;
   });
   ipcMain.handle("viewer:control", (_event, id: number, action: string) => {
     const window = BrowserWindow.fromId(id);
@@ -631,12 +683,13 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     return true;
   });
 
-  globalShortcut.register("CommandOrControl+Shift+P", () => {
+  runtimeHotkeys["CommandOrControl+Shift+P"] = globalShortcut.register("CommandOrControl+Shift+P", () => {
     for (const id of viewerStates.keys()) {
       const window = BrowserWindow.fromId(id);
       if (window && stateFor(window).clickThrough) controlViewer(window, "click-through");
     }
   });
+  runtimeLog("runtime-hotkey-register", { accelerator: "CommandOrControl+Shift+P", registered: runtimeHotkeys["CommandOrControl+Shift+P"] });
   for (let index = 0; index < 4; index += 1) {
     const accelerator = `CommandOrControl+Shift+${index + 1}`;
     const registered = globalShortcut.register(accelerator, () => {
@@ -656,6 +709,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
         }));
       }
     });
+    runtimeHotkeys[accelerator] = registered;
     runtimeLog("runtime-hotkey-register", { accelerator, registered });
   }
   for (let index = 0; index < 4; index += 1) {
@@ -676,6 +730,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
         }));
       }
     });
+    runtimeHotkeys[accelerator] = registered;
     runtimeLog("runtime-hotkey-register", { accelerator, registered });
   }
 

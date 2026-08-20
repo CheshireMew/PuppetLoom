@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createProject, inspectPsd, loadProject, loadProjectRevision, verifyProject } from "@puppetloom/core";
@@ -26,6 +27,7 @@ function isWithin(root: string, target: string): boolean {
 }
 
 export class ProjectIpcService {
+  private readonly createControllers = new Map<string, AbortController>();
   constructor(private readonly applicationProfile: string) {}
 
   async recentProjects(): Promise<RecentProject[]> {
@@ -69,18 +71,34 @@ export class ProjectIpcService {
       const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
-    ipcMain.handle("project:inspect", (_event, input: string) => inspectPsd(resolve(input)));
-    ipcMain.handle("project:create", async (_event, request: DesktopCreateRequest) => {
-      const result = await createProject({
-        input: resolve(request.input),
-        output: resolve(request.output),
-        seed: request.seed ?? 42,
-        ...(request.preserveAlphaNoise ? { alphaCleanup: "preserve-all" as const } : {}),
-        ...(request.reference ? { reference: resolve(request.reference) } : {}),
-        ...(request.name ? { name: request.name } : {})
-      });
-      await this.rememberProject(result.outputDirectory);
-      return { outputDirectory: result.outputDirectory, report: result.report, verify: await verifyProject(result.outputDirectory) };
+    ipcMain.handle("project:inspect", (_event, input: string, alphaCleanup: DesktopCreateRequest["alphaCleanup"] = "preserve-all") => inspectPsd(resolve(input), { alphaCleanup }));
+    ipcMain.handle("project:create", async (event, request: DesktopCreateRequest) => {
+      const operationId = request.operationId ?? randomUUID();
+      if (this.createControllers.has(operationId)) throw new Error("同一个创建操作已经在运行。");
+      const controller = new AbortController();
+      this.createControllers.set(operationId, controller);
+      try {
+        const result = await createProject({
+          input: resolve(request.input),
+          output: resolve(request.output),
+          seed: request.seed ?? 42,
+          alphaCleanup: request.alphaCleanup ?? "preserve-all",
+          signal: controller.signal,
+          onProgress: (phase) => { if (!event.sender.isDestroyed()) event.sender.send("project:create-progress", { operationId, phase }); },
+          ...(request.reference ? { reference: resolve(request.reference) } : {}),
+          ...(request.name ? { name: request.name } : {})
+        });
+        await this.rememberProject(result.outputDirectory);
+        return { outputDirectory: result.outputDirectory, report: result.report, verify: await verifyProject(result.outputDirectory) };
+      } finally {
+        this.createControllers.delete(operationId);
+      }
+    });
+    ipcMain.handle("project:create-cancel", (_event, operationId: string) => {
+      const controller = this.createControllers.get(operationId);
+      if (!controller) return false;
+      controller.abort(new Error("用户已停止创建；最终项目目录没有被发布。"));
+      return true;
     });
     ipcMain.handle("project:recent", () => this.recentProjects());
     ipcMain.handle("project:read", async (_event, directory: string, revision?: number) => {

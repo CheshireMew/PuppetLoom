@@ -183,6 +183,26 @@ try {
   if (Math.abs(stageBeforeNavigation.width / stageBeforeNavigation.height - expectedAspectRatio) > 0.01) {
     throw new Error(`编辑画布没有保持项目原始比例：${JSON.stringify({ stageBeforeNavigation, expectedAspectRatio })}`);
   }
+  await controlWindow.evaluate((window) => window.setSize(940, 700));
+  await control.waitForFunction(() => window.innerWidth <= 940 && window.innerHeight <= 700);
+  const compactLayout = await control.evaluate(() => {
+    const shell = document.querySelector(".editor-shell");
+    const workspace = document.querySelector(".editor-workspace");
+    const panels = [...document.querySelectorAll(".editor-workspace > *")].map((element) => element.getBoundingClientRect());
+    const lastHeaderButton = document.querySelector(".editor-history-actions button:last-child")?.getBoundingClientRect();
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      shell: shell ? { clientWidth: shell.clientWidth, scrollWidth: shell.scrollWidth } : undefined,
+      workspace: workspace?.getBoundingClientRect(),
+      panels,
+      lastHeaderButton
+    };
+  });
+  if (!compactLayout.shell || compactLayout.shell.scrollWidth > compactLayout.shell.clientWidth || compactLayout.panels.length !== 3 || compactLayout.panels.some((panel) => panel.left < -1 || panel.right > compactLayout.viewport.width + 1) || !compactLayout.lastHeaderButton || compactLayout.lastHeaderButton.right > compactLayout.viewport.width + 1) {
+    throw new Error(`紧凑窗口布局发生横向裁切：${JSON.stringify(compactLayout)}`);
+  }
+  await controlWindow.evaluate((window, size) => window.setSize(size[0], size[1]), editorWindowSize);
+  await control.waitForFunction((size) => window.innerWidth === size[0] && window.innerHeight === size[1], editorWindowSize);
   const zoomAnchor = {
     x: stageBeforeNavigation.x + stageBeforeNavigation.width * 0.3,
     y: stageBeforeNavigation.y + stageBeforeNavigation.height * 0.36
@@ -529,7 +549,7 @@ try {
   await saveButton.scrollIntoViewIfNeeded();
   if (await saveButton.isDisabled()) throw new Error("恢复并重做草稿后保存校准仍不可用。" );
   await saveButton.click();
-  await control.getByText(/已保存 revision 1/).waitFor({ timeout: 30_000 });
+  await control.getByText(/已保存版本 1/).waitFor({ timeout: 30_000 });
   const calibratedWorkspace = await control.evaluate((projectDirectory) => window.puppetloom.readEditorWorkspace(projectDirectory), output);
   if (calibratedWorkspace.calibration.revision !== 1) throw new Error("桌面编辑器没有持久化校准修订。" );
   if (calibratedWorkspace.draft) throw new Error("保存校准后草稿仍被当作未提交内容恢复。" );
@@ -554,6 +574,8 @@ try {
   }));
   const editorNativeEvidence = await captureNativeWindow(electronApp, controlWindow, editorNativeScreenshot);
   await control.screenshot({ path: editorContentScreenshot, fullPage: true });
+  await control.getByRole("button", { name: "关闭版本对比" }).click();
+  await control.getByTestId("comparison-view").waitFor({ state: "detached" });
   await control.locator(".layer-select").filter({ hasText: frontHair.sourceName }).click();
   await control.getByRole("button", { name: "网格与权重" }).click();
   const artMeshHandles = control.locator(".mesh-handle");
@@ -596,6 +618,8 @@ try {
 
   await viewer.getByRole("button", { name: "打开表情动作面板" }).click();
   await viewer.getByRole("complementary", { name: "表情与动作" }).waitFor();
+  const viewerCapabilities = await viewer.evaluate(() => window.puppetloom.viewerCapabilities());
+  if (Object.entries(viewerCapabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available)) await viewer.getByText(/部分系统快捷键已被其它软件占用/).waitFor();
   await viewer.getByRole("button", { name: "关闭表情动作面板" }).click();
 
   await viewer.getByRole("button", { name: "录制驱动输入" }).click();
@@ -630,8 +654,28 @@ try {
 
   const duplicate = await control.evaluate((projectDirectory) => window.puppetloom.launchViewer(projectDirectory), output);
   if (duplicate.id !== viewerId) throw new Error(`重复打开同一项目创建了多个窗口：${JSON.stringify({ first: viewerId, duplicate: duplicate.id })}`);
+  const refreshed = await control.evaluate(async (projectDirectory) => {
+    const project = await window.puppetloom.readProject(projectDirectory);
+    return window.puppetloom.launchViewer(projectDirectory, { project: { ...project, name: `${project.name} · 草稿热更新` }, sourceLabel: "未保存草稿预览" });
+  }, output);
+  if (refreshed.id !== viewerId) throw new Error("草稿预览没有复用并更新现有角色窗口。" );
+  await viewer.getByText("未保存草稿预览", { exact: true }).waitFor();
+  await viewer.getByText(/草稿热更新/, { exact: false }).waitFor();
+  const restoredViewer = await control.evaluate((projectDirectory) => window.puppetloom.launchViewer(projectDirectory), output);
+  if (restoredViewer.id !== viewerId) throw new Error("恢复已保存预览时创建了重复角色窗口。" );
+  await viewer.getByText("已保存项目", { exact: true }).waitFor();
 
   const browserWindow = viewerWindow;
+  await browserWindow.evaluate((window) => window.setSize(300, 300));
+  await viewer.waitForFunction(() => window.innerWidth <= 300 && window.innerHeight <= 300);
+  await viewer.hover(".viewer");
+  const compactViewerControls = await viewer.locator(".viewer-controls button").evaluateAll((buttons) => ({
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    boxes: buttons.map((button) => button.getBoundingClientRect())
+  }));
+  if (compactViewerControls.boxes.some((box) => box.left < -1 || box.right > compactViewerControls.viewport.width + 1 || box.top < -1 || box.bottom > compactViewerControls.viewport.height + 1)) throw new Error(`紧凑角色窗口控制发生裁切：${JSON.stringify(compactViewerControls)}`);
+  await browserWindow.evaluate((window) => window.setSize(720, 720));
+  await viewer.waitForFunction(() => window.innerWidth === 720 && window.innerHeight === 720);
   const nativeState = await browserWindow.evaluate((window) => ({
     top: window.isAlwaysOnTop(),
     resizable: window.isResizable(),
@@ -708,9 +752,13 @@ try {
   const paused = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pause"), { id: viewerId });
   if (!paused?.paused) throw new Error("桌面端未能暂停角色窗口。" );
   const through = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "click-through"), { id: viewerId });
-  if (!through?.clickThrough) throw new Error("桌面端未能启用鼠标穿透。" );
-  const restored = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "click-through"), { id: viewerId });
-  if (restored?.clickThrough) throw new Error("桌面端未能恢复鼠标交互。" );
+  if (viewerCapabilities.hotkeys["CommandOrControl+Shift+P"] === false) {
+    if (through?.clickThrough) throw new Error("恢复快捷键不可用时仍允许进入鼠标穿透。" );
+  } else {
+    if (!through?.clickThrough) throw new Error("桌面端未能启用鼠标穿透。" );
+    const restored = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "click-through"), { id: viewerId });
+    if (restored?.clickThrough) throw new Error("桌面端未能恢复鼠标交互。" );
+  }
   const resumed = await control.evaluate(({ id }) => window.puppetloom.controlViewer(id, "pause"), { id: viewerId });
   if (resumed?.paused) throw new Error("桌面端未能恢复自主运动。" );
 

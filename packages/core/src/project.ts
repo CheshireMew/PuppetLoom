@@ -271,13 +271,19 @@ function buildReport(project: PuppetLoomProject, recognized: number, warnings: s
 }
 
 export async function createProject(options: CreateOptions): Promise<BuildResult> {
+  const checkpoint = (phase: "importing" | "rigging" | "writing" | "validating" | "publishing"): void => {
+    options.signal?.throwIfAborted();
+    options.onProgress?.(phase);
+  };
   const input = resolve(options.input);
   const finalOutput = resolve(options.output);
   const outputExisted = await ensureWritableOutput(finalOutput);
+  checkpoint("importing");
   const imported = await importPsd(input, {
     ...(options.alphaCleanup ? { alphaCleanup: options.alphaCleanup } : {}),
     ...(options.cleanAlpha !== undefined ? { cleanAlpha: options.cleanAlpha } : {})
   });
+  checkpoint("rigging");
   const inspection = inspectionFromImported(imported);
   const name = options.name?.trim() || parse(input).name;
   const referencePng = options.reference ? await sharp(resolve(options.reference)).png().toBuffer() : undefined;
@@ -313,6 +319,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
     target: finalOutput, staging: stagingOutput, processId: process.pid
   });
   try {
+    checkpoint("writing");
     const output = stagingOutput;
     for (const directory of ["source", "textures", "reports", "requests", "supplements", "calibration", "calibration/sessions", "reports/calibration"]) await mkdir(join(output, directory), { recursive: true });
     await copyFile(input, join(output, "source", "source.psd"));
@@ -340,9 +347,11 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
     await writeFile(join(output, "reports", "build-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
     await writeFile(join(output, "reports", "import-preflight.json"), `${JSON.stringify(inspection, null, 2)}\n`, "utf8");
     await writeFile(join(output, "requests", "asset-requests.json"), `${JSON.stringify(requests, null, 2)}\n`, "utf8");
+    checkpoint("validating");
     const verification = await (await import("./verify.js")).verifyProject(output);
     if (!verification.valid) throw new PuppetLoomError("INVALID_PROJECT", `生成项目未通过发布前验证：${verification.warnings.join("；")}`);
 
+    checkpoint("publishing");
     if (outputExisted) await rename(finalOutput, reservation);
     try {
       await rename(stagingOutput, finalOutput);
