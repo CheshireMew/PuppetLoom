@@ -1,0 +1,15 @@
+name: Update Star History
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    permissions:
+      contents: write
+    uses: CheshireMew/project-steward/.github/workflows/star-history.yml@main

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">PuppetLoom PL mark</title>
+  <desc id="desc">A compact PL monogram derived from the PuppetLoom desktop title-bar identity.</desc>
+  <rect x="4" y="4" width="56" height="56" rx="17" fill="#292645" stroke="#8e82ff" stroke-width="2"/>
+  <text x="32" y="39" text-anchor="middle" fill="#b7afff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="800" letter-spacing="1">PL</text>
+</svg>

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
+  <title id="title">PuppetLoom project flow</title>
+  <desc id="desc">Layered PSD artwork becomes a structured mesh, moves through revisioned evidence, and runs as an autonomous 2D puppet.</desc>
+  <defs>
+    <linearGradient id="thread" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#48d9ff"/>
+      <stop offset="0.52" stop-color="#9187ff"/>
+      <stop offset="1" stop-color="#46d6c8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="380" rx="28" fill="#11131a"/>
+  <path d="M122 190 C240 82 328 296 448 190 S650 84 766 190 S958 292 1080 190" fill="none" stroke="url(#thread)" stroke-width="5" stroke-linecap="round"/>
+  <g id="layered-psd" transform="translate(66 82)">
+    <rect x="36" y="34" width="136" height="144" rx="15" fill="#171a23" stroke="#4a5061" stroke-width="3"/>
+    <rect x="20" y="18" width="136" height="144" rx="15" fill="#1d202b" stroke="#6f68c9" stroke-width="3"/>
+    <rect x="4" y="2" width="136" height="144" rx="15" fill="#292645" stroke="#8e82ff" stroke-width="3"/>
+    <path d="M36 52h72M36 82h54M36 112h82" stroke="#b7afff" stroke-width="8" stroke-linecap="round" opacity=".78"/>
+    <text x="88" y="214" text-anchor="middle" fill="#e8ebf2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="700">LAYERED PSD</text>
+  </g>
+  <g id="rig-mesh" transform="translate(356 74)">
+    <path d="M96 10 184 62 168 166 90 214 18 158 10 62Z" fill="#171a23" stroke="#9187ff" stroke-width="4"/>
+    <path d="M96 10 90 214M10 62 168 166M184 62 18 158M10 62 96 110 184 62M18 158 96 110 168 166" fill="none" stroke="#48d9ff" stroke-width="2" opacity=".72"/>
+    <g fill="#ffc857" stroke="#3b2a08" stroke-width="2">
+      <circle cx="96" cy="10" r="7"/><circle cx="184" cy="62" r="7"/><circle cx="168" cy="166" r="7"/>
+      <circle cx="90" cy="214" r="7"/><circle cx="18" cy="158" r="7"/><circle cx="10" cy="62" r="7"/><circle cx="96" cy="110" r="8"/>
+    </g>
+    <text x="96" y="260" text-anchor="middle" fill="#e8ebf2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="700">RIG + MESH</text>
+  </g>
+  <g id="revision-evidence" transform="translate(650 86)">
+    <path d="M34 92H194" stroke="#6f68c9" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="34" cy="92" r="20" fill="#292645" stroke="#8e82ff" stroke-width="4"/>
+    <circle cx="114" cy="92" r="20" fill="#292645" stroke="#8e82ff" stroke-width="4"/>
+    <circle cx="194" cy="92" r="20" fill="#292645" stroke="#46d6c8" stroke-width="4"/>
+    <text x="34" y="100" text-anchor="middle" fill="#b7afff" font-family="Consolas, monospace" font-size="20" font-weight="700">0</text>
+    <text x="114" y="100" text-anchor="middle" fill="#b7afff" font-family="Consolas, monospace" font-size="20" font-weight="700">1</text>
+    <text x="194" y="100" text-anchor="middle" fill="#bff8e8" font-family="Consolas, monospace" font-size="20" font-weight="700">2</text>
+    <path d="M58 158h112M58 180h78" stroke="#a8adbc" stroke-width="9" stroke-linecap="round" opacity=".68"/>
+    <path d="M114 142v56" stroke="#9187ff" stroke-width="3" stroke-dasharray="7 7"/>
+    <text x="114" y="248" text-anchor="middle" fill="#e8ebf2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="700">REVISION + EVIDENCE</text>
+  </g>
+  <g id="autonomous-puppet" transform="translate(974 58)">
+    <rect x="0" y="0" width="170" height="224" rx="20" fill="#171a23" stroke="#46d6c8" stroke-width="4"/>
+    <circle cx="85" cy="69" r="35" fill="#292645" stroke="#8e82ff" stroke-width="4"/>
+    <circle cx="73" cy="66" r="4" fill="#48d9ff"/><circle cx="97" cy="66" r="4" fill="#48d9ff"/>
+    <path d="M74 84q11 10 22 0M85 104v55M85 122 47 148M85 122l38 26M85 159l-28 42M85 159l28 42" fill="none" stroke="#b7afff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M28 44q57-36 114 0" fill="none" stroke="#48d9ff" stroke-width="3" stroke-dasharray="8 8"/>
+    <circle cx="28" cy="44" r="5" fill="#48d9ff"/><circle cx="142" cy="44" r="5" fill="#48d9ff"/>
+    <text x="85" y="270" text-anchor="middle" fill="#e8ebf2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="700">AUTONOMOUS PUPPET</text>
+  </g>
+</svg>
