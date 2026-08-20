@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="650" viewBox="0 0 1000 650" role="img" aria-labelledby="title description">
+  <title id="title">Star history for CheshireMew/PuppetLoom</title>
+  <desc id="description">Cumulative GitHub stars through 2026-08-14. Total: 0.</desc>
+  <rect width="100%" height="100%" rx="12" fill="#ffffff"/>
+  <g data-style="hand-drawn" font-family="Comic Sans MS,Segoe Print,Bradley Hand,cursive" fill="#111111">
+    <text x="500.0" y="58" text-anchor="middle" font-size="34" font-weight="700">Star History</text>
+    <path data-role="y-axis" d="M 105.00 560.00 C 102.00 446.25, 107.00 368.90, 104.00 296.10 C 101.00 218.75, 108.00 186.90, 105.00 105.00" fill="none" stroke="#111111" stroke-width="4" stroke-linecap="round"/>
+    <path data-role="x-axis" d="M 105.00 560.00 C 250.35 557.00, 370.05 563.00, 515.40 560.00 C 660.75 558.00, 806.10 562.00, 960.00 560.00" fill="none" stroke="#111111" stroke-width="4" stroke-linecap="round"/>
+    <text x="42" y="332.5" text-anchor="middle" font-size="22" font-weight="600" transform="rotate(-90 42 332.5)">GitHub Stars</text>
+    <text x="532.5" y="625" text-anchor="middle" font-size="22" font-weight="600">Date</text>
+    <path data-role="legend-box" d="M 128 119 Q 119 119, 119 128 L 119 158 Q 119 167, 128 167 L 410 167 Q 419 167, 419 158 L 419 128 Q 419 119, 410 119 Z" fill="#ffffff" stroke="#111111" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="136" y="135" width="17" height="17" rx="4" fill="#f2380f"/>
+    <text x="163" y="144.0" dominant-baseline="middle" font-size="19" font-weight="600">CheshireMew/PuppetLoom</text>
+    <path d="M 98 106.00 L 109 105.00" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="91" y="105.00" text-anchor="end" dominant-baseline="middle" font-size="17">1</text>
+    <path d="M 105.00 557 L 106.00 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="105.00" y="594" text-anchor="start" font-size="17">08-14</text>
+    <path d="M 960.00 557 L 961.00 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="960.00" y="594" text-anchor="end" font-size="17">08-15</text>
+    <path data-role="star-line" d="M 105.00 560.00 L 960.00 560.00" fill="none" stroke="#f2380f" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    <g data-role="signature" transform="translate(786 608)">
+      <path d="M 12 0 L 15 9 L 25 6 L 18 14 L 26 21 L 16 18 L 12 28 L 9 18 L 0 22 L 7 14 L 0 7 L 9 10 Z" fill="none" stroke="#00a83f" stroke-width="2.5" stroke-linejoin="round"/>
+      <text x="34" y="18" fill="#59636e" font-size="15">project-steward</text>
+    </g>
+  </g>
+</svg>
