@@ -19,6 +19,14 @@ The MIT license text is reproduced in `docs/licenses/Anime2.5DRig-MIT.txt`.
 
 AutoLive2d is not vendored as an application. PuppetLoom does not include its Cubism, face-tracking, microphone, editor, or See-through integration code.
 
+## MediaPipe Tasks Vision and Face Landmarker
+
+- Project: Google MediaPipe Tasks Vision (`@mediapipe/tasks-vision`)
+- Use: local camera face landmarks and blendshapes in the desktop character window
+- License: Apache License 2.0
+
+PuppetLoom uses the published JavaScript/Wasm package and downloads the official Face Landmarker task model to `D:\Tools\PuppetLoom\runtime-assets\mediapipe` with a pinned SHA-256 check. The model is not committed to this repository. Camera frames stay in the local renderer and are converted to short-lived motion values; PuppetLoom does not upload or save video frames. The Apache License 2.0 text is available in the repository root `LICENSE`; MediaPipe's package also links its privacy notice at <https://goo.gle/mediapipe-privacy>.
+
 ## ag-psd
 
 - Project: `Agamnentzar/ag-psd`

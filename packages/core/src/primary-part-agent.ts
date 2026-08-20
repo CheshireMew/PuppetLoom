@@ -37,6 +37,14 @@ export interface PrimaryPartIntent {
   yawDegrees?: number;
   pitchUpDegrees?: number;
   pitchDownDegrees?: number;
+  contourStrength?: number;
+  depthStrength?: number;
+  farEyeOpacity?: number;
+  farBrowOpacity?: number;
+  farEarOpacity?: number;
+  farSideHairOpacity?: number;
+  occlusionFadeStart?: number;
+  sideHairDepthSwap?: boolean;
   explanation: string[];
 }
 
@@ -117,6 +125,14 @@ function intentFor(_instruction: string): PrimaryPartIntent {
     yawDegrees: 12,
     pitchUpDegrees: 12,
     pitchDownDegrees: 14,
+    contourStrength: 1,
+    depthStrength: 1,
+    farEyeOpacity: 0.68,
+    farBrowOpacity: 0.76,
+    farEarOpacity: 0.55,
+    farSideHairOpacity: 0.72,
+    occlusionFadeStart: 0.58,
+    sideHairDepthSwap: true,
     explanation: ["旧调用兼容入口使用固定安全基线；自然语言意图应由外部 Agent 写入结构化规格。"]
   };
 }
@@ -172,9 +188,19 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
             maxPitchRadians: rounded(degreesToRadians(Math.max(pitchUpDegrees, pitchDownDegrees))),
             maxPitchUpRadians: rounded(degreesToRadians(pitchUpDegrees)),
             maxPitchDownRadians: rounded(degreesToRadians(pitchDownDegrees)),
-            perspective: rounded(clamp(Math.max(project.runtime.poseField.perspective, 0.12), 0.1, 0.18))
+            perspective: rounded(clamp(Math.max(project.runtime.poseField.perspective, 0.12), 0.1, 0.18)),
+            contourStrength: rounded(clamp(intent.contourStrength ?? 1, 0.4, 1.6)),
+            depthStrength: rounded(clamp(intent.depthStrength ?? 1, 0.4, 1.6))
           }
         } : {}),
+        poseOcclusion: {
+          fadeStart: rounded(clamp(intent.occlusionFadeStart ?? 0.58, 0, 0.95)),
+          farEyeOpacity: rounded(clamp(intent.farEyeOpacity ?? 0.68, 0, 1)),
+          farBrowOpacity: rounded(clamp(intent.farBrowOpacity ?? 0.76, 0, 1)),
+          farEarOpacity: rounded(clamp(intent.farEarOpacity ?? 0.55, 0, 1)),
+          farSideHairOpacity: rounded(clamp(intent.farSideHairOpacity ?? 0.72, 0, 1)),
+          sideHairDepthSwap: intent.sideHairDepthSwap ?? true
+        },
         motionTuning: { amplitude, response: intent.response, stability: intent.stability }
       }
     };

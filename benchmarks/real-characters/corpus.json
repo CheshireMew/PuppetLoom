@@ -1,0 +1,7 @@
+{
+  "$schema": "./manifest.schema.json",
+  "version": 1,
+  "name": "PuppetLoom 真实角色基准库",
+  "description": "真实分层角色素材到位后在这里登记；项目文件保留在各自授权的位置。",
+  "characters": []
+}

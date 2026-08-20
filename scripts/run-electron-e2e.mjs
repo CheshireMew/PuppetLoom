@@ -1,10 +1,16 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PUPPETLOOM_PROJECT_VERSION } from "@puppetloom/core";
 import { _electron as electron } from "playwright";
+import sharp from "sharp";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 
 const root = resolve(".");
+
+async function visibleVariation(image) {
+  const statistics = await sharp(image).stats();
+  return statistics.channels.slice(0, 3).reduce((sum, channel) => sum + channel.stdev, 0);
+}
 
 function assertIntegratedShell(state, label) {
   const horizontalNonClient = state.outerBounds.width - state.contentBounds.width;
@@ -64,7 +70,7 @@ const applicationProfile = artifactRun.path("user-data");
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js")],
   cwd: root,
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1", PUPPETLOOM_E2E_USER_DATA: applicationProfile }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1", PUPPETLOOM_INCLUDE_TEST_PROJECTS: "1", PUPPETLOOM_E2E_USER_DATA: applicationProfile }
 });
 
 try {
@@ -150,7 +156,10 @@ try {
   await control.getByTestId("editor").waitFor();
   await control.getByText("PuppetLoom · 绑定与校准编辑器", { exact: true }).waitFor();
   const controlWindow = await electronApp.browserWindow(control);
-  await control.waitForFunction(() => window.innerWidth >= 1300 && window.innerHeight >= 800);
+  await control.waitForFunction(async () => {
+    const state = await window.puppetloom.windowShellState();
+    return !state.minimized && state.contentBounds.width >= 1300 && state.contentBounds.height >= 800;
+  });
   const editorWindowSize = await controlWindow.evaluate((window) => window.getSize());
   if (editorWindowSize[0] < 1300 || editorWindowSize[1] < 800) throw new Error(`编辑器窗口没有扩展到可操作尺寸：${JSON.stringify(editorWindowSize)}`);
   if (editorWindowSize[0] !== launcherWindowSize[0] || editorWindowSize[1] !== launcherWindowSize[1]) throw new Error(`启动界面与完整工作区尺寸不一致：${JSON.stringify({ launcherWindowSize, editorWindowSize })}`);
@@ -158,14 +167,10 @@ try {
   assertIntegratedShell(editorShell, "编辑器");
   await control.waitForFunction(() => {
     const canvas = document.querySelector(".editor-canvas");
-    if (!(canvas instanceof HTMLCanvasElement) || canvas.width < 2 || canvas.height < 2) return false;
-    const gl = canvas.getContext("webgl2");
-    if (!gl) return false;
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
-    return false;
+    return canvas instanceof HTMLCanvasElement && canvas.width >= 2 && canvas.height >= 2 && canvas.getContext("webgl2") !== null;
   }, undefined, { timeout: 30_000 });
+  await control.waitForTimeout(250);
+  if (await visibleVariation(await control.locator(".editor-canvas").screenshot()) < 4) throw new Error("编辑画布没有显示角色纹理。" );
   const editorStage = control.getByTestId("editor-stage");
   const viewportButtons = control.locator(".viewport-navigation button");
   if (await viewportButtons.count() !== 3 || await viewportButtons.locator("svg").count() !== 3) throw new Error("视图缩放控制没有统一使用图标。" );
@@ -470,7 +475,7 @@ try {
   await control.locator(".pose-tabs").getByRole("button", { name: /中立/ }).click();
 
   await control.getByRole("button", { name: "动作", exact: true }).click();
-  const secondaryAmplitude = control.locator('.save-panel .range-row input[type="range"]').nth(6);
+  const secondaryAmplitude = control.getByTestId("secondary-amplitude");
   await secondaryAmplitude.evaluate((element) => {
     const input = element;
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -507,7 +512,7 @@ try {
   await control.getByText(/已恢复 .*自动保存的草稿/).waitFor();
   if (await saveButton.isDisabled()) throw new Error("恢复草稿后保存校准仍不可用。" );
 
-  const restoredSecondaryAmplitude = control.locator('.save-panel .range-row input[type="range"]').nth(6);
+  const restoredSecondaryAmplitude = control.getByTestId("secondary-amplitude");
   await restoredSecondaryAmplitude.evaluate((element) => {
     const input = element;
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -568,14 +573,15 @@ try {
   await viewer.getByTestId("viewer").waitFor();
   await viewer.locator("canvas").waitFor({ state: "visible" });
   const viewerControlButtons = viewer.locator(".viewer-controls button");
-  if (await viewerControlButtons.count() !== 7 || await viewerControlButtons.locator("svg").count() !== 7) throw new Error("角色窗口控制栏没有完整使用图标。" );
+  if (await viewerControlButtons.count() !== 13 || await viewerControlButtons.locator("svg").count() !== 13) throw new Error("角色窗口控制栏没有完整使用图标。" );
   if ((await viewerControlButtons.allInnerTexts()).some((text) => text.trim().length > 0)) throw new Error("角色窗口控制栏仍包含拥挤的文字按钮。" );
-  await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
+  await viewer.waitForFunction(() => typeof window.puppetloomRenderCurrentFrame === "function", undefined, { timeout: 30_000 });
   const viewerReady = await viewer.evaluate(() => {
     const canvas = document.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement) || !canvas.width || !canvas.height) return false;
     const gl = canvas.getContext("webgl2");
     if (!gl) return false;
+    if (!window.puppetloomRenderCurrentFrame?.()) return false;
     const pixels = new Uint8Array(canvas.width * canvas.height * 4);
     gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
@@ -583,21 +589,41 @@ try {
   });
   if (!viewerReady) throw new Error(`角色窗口没有渲染可见像素：${await viewer.locator(".viewer-error").textContent() ?? "无界面错误"}`);
 
-  const liveFrameSignature = () => {
-    const canvas = document.querySelector("canvas");
-    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("角色窗口缺少画布。");
-    const gl = canvas.getContext("webgl2");
-    if (!gl) throw new Error("角色窗口缺少 WebGL2 上下文。");
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    let hash = 2166136261;
-    for (const value of pixels) hash = Math.imul(hash ^ value, 16777619) >>> 0;
-    return hash;
-  };
-  const firstLiveFrame = await viewer.evaluate(liveFrameSignature);
+  const firstLiveFrame = await viewer.locator("canvas").screenshot();
   await viewer.waitForTimeout(1_200);
-  const secondLiveFrame = await viewer.evaluate(liveFrameSignature);
-  if (firstLiveFrame === secondLiveFrame) throw new Error("角色窗口默认启动后画面没有自主运动。" );
+  const secondLiveFrame = await viewer.locator("canvas").screenshot();
+  if (firstLiveFrame.equals(secondLiveFrame)) throw new Error("角色窗口默认启动后画面没有自主运动。" );
+
+  await viewer.getByRole("button", { name: "打开表情动作面板" }).click();
+  await viewer.getByRole("complementary", { name: "表情与动作" }).waitFor();
+  await viewer.getByRole("button", { name: "关闭表情动作面板" }).click();
+
+  await viewer.getByRole("button", { name: "录制驱动输入" }).click();
+  await viewer.getByText("正在录制驱动输入", { exact: true }).waitFor();
+  await viewer.evaluate(() => window.puppetloom.setRuntimeSource({ id: "e2e-control", priority: 90, ttlMs: 500, motion: { headYaw: 0.65, gazeX: 0.8 } }));
+  await viewer.waitForTimeout(250);
+  await viewer.getByRole("button", { name: "停止并保存输入录制" }).click();
+  await viewer.getByText(/输入会话已保存/).waitFor();
+  const inputSessionDirectory = resolve(output, "reports", "input-sessions");
+  const inputSessions = (await readdir(inputSessionDirectory)).filter((name) => name.endsWith(".runtime-input.json"));
+  if (inputSessions.length !== 1) throw new Error(`驱动输入没有保存为唯一会话：${JSON.stringify(inputSessions)}`);
+  const inputSession = JSON.parse(await readFile(resolve(inputSessionDirectory, inputSessions[0]), "utf8"));
+  if (inputSession.events.length < 1 || !inputSession.events.some((event) => event.source?.id === "e2e-control")) throw new Error(`驱动输入会话缺少外部控制事件：${JSON.stringify(inputSession)}`);
+
+  await viewer.getByRole("button", { name: "录制 WebM 表演" }).click();
+  await viewer.getByText("正在录制 WebM 表演", { exact: true }).waitFor();
+  await viewer.waitForTimeout(2_200);
+  await viewer.getByRole("button", { name: "停止并保存 WebM 表演" }).click();
+  await viewer.getByText(/WebM 表演已保存/).waitFor({ timeout: 15_000 });
+  const performanceDirectory = resolve(output, "reports", "performances");
+  const performanceFiles = await readdir(performanceDirectory);
+  const webmName = performanceFiles.find((name) => name.endsWith(".webm") && !name.endsWith(".partial.webm"));
+  const reportName = performanceFiles.find((name) => name.endsWith(".performance.json"));
+  if (!webmName || !reportName || performanceFiles.some((name) => name.endsWith(".partial.webm"))) throw new Error(`WebM 表演没有形成完整文件和报告：${JSON.stringify(performanceFiles)}`);
+  const performanceReport = JSON.parse(await readFile(resolve(performanceDirectory, reportName), "utf8"));
+  const webmHeader = await readFile(resolve(performanceDirectory, webmName));
+  if (performanceReport.status !== "completed" || performanceReport.media?.bytes < 1 || (await stat(resolve(performanceDirectory, webmName))).size !== performanceReport.media.bytes) throw new Error(`WebM 报告与视频不一致：${JSON.stringify(performanceReport)}`);
+  if (!webmHeader.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) throw new Error("录制结果没有 WebM EBML 文件头。" );
 
   const viewerWindow = await electronApp.browserWindow(viewer);
   const viewerId = await viewerWindow.evaluate((window) => window.id);
@@ -623,6 +649,7 @@ try {
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error("角色窗口缺少画布。");
     const gl = canvas.getContext("webgl2");
     if (!gl) throw new Error("角色窗口缺少 WebGL2 上下文。");
+    if (!window.puppetloomRenderCurrentFrame?.()) throw new Error("角色窗口不能刷新当前帧。");
     const pixels = new Uint8Array(canvas.width * canvas.height * 4);
     gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     let minimumX = canvas.width;
@@ -648,13 +675,7 @@ try {
   });
   await viewer.waitForFunction(() => {
     const canvas = document.querySelector("canvas");
-    if (!(canvas instanceof HTMLCanvasElement) || canvas.width / canvas.height <= 1.45) return false;
-    const gl = canvas.getContext("webgl2");
-    if (!gl) return false;
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
-    return false;
+    return canvas instanceof HTMLCanvasElement && canvas.width / canvas.height > 1.45;
   });
   const windowedPixelRatio = await viewer.evaluate(visiblePixelRatio);
   if (Math.abs(windowedPixelRatio / baselinePixelRatio - 1) > 0.06) {
@@ -708,7 +729,7 @@ try {
   await control.getByRole("button", { name: "动作", exact: true }).click();
   await calibrationLabel.scrollIntoViewIfNeeded();
   await calibrationLabel.fill("直接关窗草稿复验");
-  const closeDraftAmplitude = control.locator('.save-panel .range-row input[type="range"]').nth(6);
+  const closeDraftAmplitude = control.getByTestId("secondary-amplitude");
   await closeDraftAmplitude.evaluate((element) => {
     const input = element;
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deformPoint, invertDeformedPoint, neutralMotionState } from "../src/deform.js";
+import { deformPoint, invertDeformedPoint, neutralMotionState, torsoVolumeAt } from "../src/deform.js";
 import { makeGridMesh } from "../src/rig.js";
 import type { LayerBinding, PuppetLoomProject, SemanticRole } from "../src/types.js";
 
@@ -305,6 +305,28 @@ describe("connected head and upper-body motion", () => {
       }
     }
   } as PuppetLoomProject;
+
+  it("applies an optional semantic torso volume curve only while the body turns", () => {
+    const profile = {
+      kind: "torso-volume-v1" as const,
+      strength: 1,
+      points: [
+        { id: "upperChest" as const, position: 0.08, depth: 0.02 },
+        { id: "chest" as const, position: 0.3, depth: 0.1 },
+        { id: "waist" as const, position: 0.62, depth: -0.03 },
+        { id: "hip" as const, position: 0.92, depth: 0.04 }
+      ]
+    };
+    expect(torsoVolumeAt(profile, 0.3)).toBeCloseTo(0.1, 8);
+    const volumeProject = { ...connectedProject, runtime: { ...connectedProject.runtime, torsoVolumeProfile: profile } } as PuppetLoomProject;
+    const top = secondaryLayer("topWear", { x: 0.4, y: 0.34, width: 0.2, height: 0.28 });
+    top.weights = { head: 0, body: 1, gaze: 0, physics: 0 };
+    const point = { x: 0.5, y: 0.42 };
+    const neutral = deformPoint(volumeProject, top, point, neutralMotionState);
+    expect(neutral).toEqual(deformPoint(connectedProject, top, point, neutralMotionState));
+    const state = { ...neutralMotionState, bodySway: 0.7 };
+    expect(Math.abs(deformPoint(volumeProject, top, point, state).x - deformPoint(connectedProject, top, point, state).x)).toBeGreaterThan(0.0001);
+  });
 
   it("keeps the neck connected between the moving head and the upper body", () => {
     const face = secondaryLayer("face", { x: 0.4, y: 0.1, width: 0.2, height: 0.2 });

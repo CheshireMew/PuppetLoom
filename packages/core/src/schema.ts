@@ -27,8 +27,26 @@ const meshSchema = z.object({
     body: z.array(z.number().min(0).max(1)).optional(),
     gaze: z.array(z.number().min(0).max(1)).optional(),
     physics: z.array(z.number().min(0).max(1)).optional(),
-    pin: z.array(z.number().min(0).max(1)).optional()
+    pin: z.array(z.number().min(0).max(1)).optional(),
+    headAttachment: z.array(z.number().min(0).max(1)).optional(),
+    physicsRelease: z.array(z.number().min(0).max(1)).optional()
   }).optional()
+});
+const hairStrandSchema = z.object({
+  id: z.string().min(1),
+  root: pointSchema,
+  tip: pointSchema,
+  width: z.number().positive().max(1),
+  confidence: z.number().min(0).max(1),
+  source: z.enum(["alpha-contour", "corrected"]),
+  physics: z.object({
+    stiffness: z.number().min(1).max(100),
+    damping: z.number().min(0).max(40),
+    segments: z.number().int().min(2).max(12),
+    maxDisplacement: z.number().positive().max(0.5)
+  }),
+  weights: z.array(z.number().min(0).max(1)),
+  release: z.array(z.number().min(0).max(1))
 });
 const semanticCagePointSchema = z.object({
   position: pointSchema,
@@ -67,6 +85,42 @@ const semanticCagePointsSchema = z.object({
   neckRight: semanticCagePointSchema
 });
 const semanticCageTriangleSchema = z.tuple([semanticCagePointIdSchema, semanticCagePointIdSchema, semanticCagePointIdSchema]);
+const faceDepthLandmarkSchema = z.enum(["forehead", "noseRoot", "noseTip", "upperLip", "lowerLip", "chin"]);
+const faceDepthProfileSchema = z.object({
+  kind: z.literal("semantic-depth-v1"),
+  points: z.array(z.object({
+    id: faceDepthLandmarkSchema,
+    position: z.number().min(0).max(1),
+    depth: z.number().min(-0.5).max(0.5)
+  })).length(6)
+}).superRefine((profile, context) => {
+  const ids = new Set(profile.points.map((point) => point.id));
+  if (ids.size !== profile.points.length) context.addIssue({ code: "custom", path: ["points"], message: "侧脸深度语义点不能重复。" });
+  for (let index = 1; index < profile.points.length; index += 1) {
+    if (profile.points[index]!.position <= profile.points[index - 1]!.position) {
+      context.addIssue({ code: "custom", path: ["points", index, "position"], message: "侧脸深度语义点必须从额头到下巴严格递增。" });
+      break;
+    }
+  }
+});
+const torsoVolumeLandmarkSchema = z.enum(["upperChest", "chest", "waist", "hip"]);
+const torsoVolumeProfileSchema = z.object({
+  kind: z.literal("torso-volume-v1"),
+  strength: z.number().min(0).max(2),
+  points: z.array(z.object({
+    id: torsoVolumeLandmarkSchema,
+    position: z.number().min(0).max(1),
+    depth: z.number().min(-0.5).max(0.5)
+  })).length(4)
+}).superRefine((profile, context) => {
+  if (new Set(profile.points.map((point) => point.id)).size !== profile.points.length) context.addIssue({ code: "custom", path: ["points"], message: "躯干体积语义点不能重复。" });
+  for (let index = 1; index < profile.points.length; index += 1) {
+    if (profile.points[index]!.position <= profile.points[index - 1]!.position) {
+      context.addIssue({ code: "custom", path: ["points", index, "position"], message: "躯干体积语义点必须从肩部到髋部严格递增。" });
+      break;
+    }
+  }
+});
 
 const motionParameterSemanticSchema = z.enum([
   "head-yaw", "head-pitch", "head-roll", "body-sway", "body-pitch", "body-roll",
@@ -223,6 +277,7 @@ export const puppetLoomProjectSchema = z.object({
         frontHairTipRight: pointSchema.optional(),
         ahogeRoot: pointSchema.optional()
       }).optional(),
+      hairStrands: z.array(hairStrandSchema).min(2).max(12).optional(),
       mesh: meshSchema,
       weights: z.object({ head: z.number(), body: z.number(), gaze: z.number(), physics: z.number() }),
       clipLayerId: z.string().optional(),
@@ -257,8 +312,21 @@ export const puppetLoomProjectSchema = z.object({
       maxPitchRadians: z.number().positive(),
       maxPitchUpRadians: z.number().positive().optional(),
       maxPitchDownRadians: z.number().positive().optional(),
-      perspective: z.number().min(0).max(0.5)
+      perspective: z.number().min(0).max(0.5),
+      contourStrength: z.number().min(0.4).max(1.6).optional(),
+      depthStrength: z.number().min(0.4).max(1.6).optional(),
+      faceDepthProfile: faceDepthProfileSchema.optional()
     }).optional(),
+    poseOcclusion: z.object({
+      kind: z.literal("semantic-occlusion-v1"),
+      fadeStart: z.number().min(0).max(0.95),
+      farEyeOpacity: z.number().min(0).max(1),
+      farBrowOpacity: z.number().min(0).max(1),
+      farEarOpacity: z.number().min(0).max(1),
+      farSideHairOpacity: z.number().min(0).max(1),
+      sideHairDepthSwap: z.boolean()
+    }).optional(),
+    torsoVolumeProfile: torsoVolumeProfileSchema.optional(),
     semanticCage: z.object({
       kind: z.literal("semantic-face-cage-v1"),
       coordinateConvention: z.literal("screen-space"),
@@ -299,6 +367,7 @@ export const puppetLoomProjectSchema = z.object({
   disabledReasons: z.array(z.string())
 }).superRefine((project, context) => {
   const ids = new Set<string>();
+  const hairStrandIds = new Set<string>();
   const relativeAsset = (value: string): boolean => !/^(?:[a-z]:|[/\\])/i.test(value) && !value.split(/[\\/]+/).some((part) => part === "..");
   if (!relativeAsset(project.source.psdPath)) context.addIssue({ code: "custom", path: ["source", "psdPath"], message: "PSD 路径必须位于项目目录内。" });
   if (project.source.referencePath && !relativeAsset(project.source.referencePath)) context.addIssue({ code: "custom", path: ["source", "referencePath"], message: "参考图路径必须位于项目目录内。" });
@@ -340,6 +409,20 @@ export const puppetLoomProjectSchema = z.object({
     }
     for (const [channel, values] of Object.entries(layer.mesh.influences ?? {})) {
       if (values && values.length !== layer.mesh.points.length) context.addIssue({ code: "custom", path: ["layers", layerIndex, "mesh", "influences", channel], message: "顶点权重数量必须与网格点数一致。" });
+    }
+    const strandIds = new Set<string>();
+    if (layer.hairStrands && !["frontHair", "backHair", "sideHair"].includes(layer.role)) {
+      context.addIssue({ code: "custom", path: ["layers", layerIndex, "hairStrands"], message: "只有前发、后发和侧发图层可以包含房束。" });
+    }
+    for (let strandIndex = 0; strandIndex < (layer.hairStrands?.length ?? 0); strandIndex += 1) {
+      const strand = layer.hairStrands![strandIndex]!;
+      if (strandIds.has(strand.id)) context.addIssue({ code: "custom", path: ["layers", layerIndex, "hairStrands", strandIndex, "id"], message: "同一图层的房束 ID 不能重复。" });
+      if (hairStrandIds.has(strand.id)) context.addIssue({ code: "custom", path: ["layers", layerIndex, "hairStrands", strandIndex, "id"], message: "房束 ID 必须在整个项目中唯一。" });
+      strandIds.add(strand.id);
+      hairStrandIds.add(strand.id);
+      if (strand.weights.length !== layer.mesh.points.length || strand.release.length !== layer.mesh.points.length) {
+        context.addIssue({ code: "custom", path: ["layers", layerIndex, "hairStrands", strandIndex], message: "房束权重与释放数组必须对应全部网格顶点。" });
+      }
     }
   }
   for (let layerIndex = 0; layerIndex < project.layers.length; layerIndex += 1) {
@@ -534,6 +617,7 @@ const layerCalibrationOverrideSchema = z.object({
   locked: z.boolean().optional(),
   pivot: pointSchema.optional(),
   secondaryAnchors: secondaryAnchorOverrideSchema.optional(),
+  hairStrands: z.array(hairStrandSchema).min(2).max(12).optional(),
   weights: z.object({
     head: z.number().min(0).max(1).optional(),
     body: z.number().min(0).max(1).optional(),
@@ -550,7 +634,9 @@ const layerCalibrationOverrideSchema = z.object({
     body: vertexInfluencePatchSchema.optional(),
     gaze: vertexInfluencePatchSchema.optional(),
     physics: vertexInfluencePatchSchema.optional(),
-    pin: vertexInfluencePatchSchema.optional()
+    pin: vertexInfluencePatchSchema.optional(),
+    headAttachment: vertexInfluencePatchSchema.optional(),
+    physicsRelease: vertexInfluencePatchSchema.optional()
   }).partial().optional(),
   meshDensity: z.object({ rows: z.number().int().min(2).max(64), cols: z.number().int().min(2).max(64) }).optional()
 }).refine((override) => override.meshDetail === undefined || override.meshDensity === undefined, { message: "不能同时按细节尺度和行列数重建网格。" });
@@ -577,8 +663,20 @@ export const calibrationOverridesSchema = z.object({
       maxPitchRadians: z.number().min(0.06).max(0.55).optional(),
       maxPitchUpRadians: z.number().min(0.06).max(0.55).optional(),
       maxPitchDownRadians: z.number().min(0.06).max(0.55).optional(),
-      perspective: z.number().min(0).max(0.5).optional()
+      perspective: z.number().min(0).max(0.5).optional(),
+      contourStrength: z.number().min(0.4).max(1.6).optional(),
+      depthStrength: z.number().min(0.4).max(1.6).optional(),
+      faceDepthProfile: faceDepthProfileSchema.optional()
     }).partial().optional(),
+    poseOcclusion: z.object({
+      fadeStart: z.number().min(0).max(0.95).optional(),
+      farEyeOpacity: z.number().min(0).max(1).optional(),
+      farBrowOpacity: z.number().min(0).max(1).optional(),
+      farEarOpacity: z.number().min(0).max(1).optional(),
+      farSideHairOpacity: z.number().min(0).max(1).optional(),
+      sideHairDepthSwap: z.boolean().optional()
+    }).partial().optional(),
+    torsoVolumeProfile: torsoVolumeProfileSchema.optional(),
     motionTuning: z.object({
       amplitude: z.number().min(0).max(1.5).optional(),
       response: z.number().min(0).max(1).optional(),
@@ -605,7 +703,7 @@ export const calibrationPatchSchema = z.object({
     anchors: z.array(z.enum(["headTop", "forehead", "eyeLeft", "eyeRight", "cheekLeft", "cheekRight", "nose", "mouth", "chin", "neck", "shoulderLeft", "shoulderRight", "bodyCenter"])).optional(),
     semanticPoints: z.array(semanticCagePointIdSchema).optional(),
     layers: z.array(z.string().min(1)).optional(),
-    runtime: z.array(z.enum(["envelope", "poseField", "motionTuning", "secondaryMotionTuning"])).optional()
+    runtime: z.array(z.enum(["envelope", "poseField", "poseOcclusion", "torsoVolumeProfile", "motionTuning", "secondaryMotionTuning"])).optional()
   }).optional()
 });
 

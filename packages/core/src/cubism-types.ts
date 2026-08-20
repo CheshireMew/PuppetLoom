@@ -141,7 +141,31 @@ export interface CubismVerificationResult {
 export interface CubismPrepareResult {
   outputDirectory: string;
   plan: CubismExportPlan;
+  handoff: CubismHandoffManifest;
   files: string[];
+}
+
+export interface CubismHandoffManifest {
+  version: 1;
+  kind: "puppetloom-cubism-handoff";
+  createdAt: string;
+  source: {
+    projectDirectory: string;
+    projectName: string;
+    revision: number;
+    fingerprint: string;
+    psd: string;
+  };
+  readiness: {
+    strictAutomaticSync: boolean;
+    partialSyncAvailable: boolean;
+    officialMoc3Present: false;
+    readyForRuntimeDelivery: false;
+  };
+  blockedAutomation: CubismCompatibilityIssue[];
+  generatedSidecars: string[];
+  editorSteps: Array<{ id: string; owner: "PuppetLoom" | "Cubism Editor" | "operator"; required: boolean; instruction: string }>;
+  finalCommands: string[];
 }
 
 export interface CubismFinalizeOptions {
@@ -203,6 +227,30 @@ export interface CubismEditorSyncResult {
   appliedOperations: number;
   skippedOperations: number;
   warnings: string[];
+}
+
+export type CubismEditorValidationStage = "pre-sync" | "post-sync";
+
+export interface CubismEditorValidationIssue {
+  code: string;
+  severity: CubismCompatibilitySeverity;
+  message: string;
+  target?: string;
+}
+
+export interface CubismEditorValidationResult {
+  project: string;
+  revision: number;
+  stage: CubismEditorValidationStage;
+  inspection: CubismEditorInspection;
+  plan: CubismExportPlan;
+  layerCoverage: { total: number; matched: number; missing: Array<{ layerId: string; sourceName: string }> };
+  parameterCoverage: { total: number; matched: number; missing: string[]; rangeConflicts: string[] };
+  readyForPartialSync: boolean;
+  readyForStrictSync: boolean;
+  readyForOfficialExportReview: boolean;
+  manualGeometryReviewRequired: string[];
+  issues: CubismEditorValidationIssue[];
 }
 
 export type CubismPreviewPose = "neutral" | "left" | "right" | "up" | "down" | "blink" | "mouth";

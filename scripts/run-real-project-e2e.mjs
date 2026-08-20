@@ -1,11 +1,17 @@
 import { basename, resolve } from "node:path";
 import { _electron as electron } from "playwright";
+import sharp from "sharp";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 import { resolveProjectSource } from "./lib/project-source.mjs";
 import { cloneCurrentProjectForTest } from "./lib/test-project-clone.mjs";
 
 const root = resolve(".");
 const source = await resolveProjectSource(process.argv[2]);
+
+async function visibleVariation(image) {
+  const statistics = await sharp(image).stats();
+  return statistics.channels.slice(0, 3).reduce((sum, channel) => sum + channel.stdev, 0);
+}
 await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "测试结论仍然独立；来源素材和纹理通过只读硬链接复用，校准与项目清单保持可写副本。" } }, async (artifactRun) => {
 const project = artifactRun.path(`project-${basename(source)}`);
 const screenshot = artifactRun.path("editor.png");
@@ -15,7 +21,7 @@ const cloneReport = await cloneCurrentProjectForTest(source, project, { objectRo
 const electronApp = await electron.launch({
   args: [resolve("apps/desktop/dist/electron/main.js"), "--edit", "--project", project],
   cwd: root,
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1", PUPPETLOOM_E2E_USER_DATA: applicationProfile }
+  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", PUPPETLOOM_ALLOW_MULTIPLE: "1", PUPPETLOOM_INCLUDE_TEST_PROJECTS: "1", PUPPETLOOM_E2E_USER_DATA: applicationProfile }
 });
 
 try {
@@ -23,13 +29,11 @@ try {
   await editor.getByTestId("editor").waitFor();
   await editor.waitForFunction(() => {
     const canvas = document.querySelector(".editor-canvas");
-    if (!(canvas instanceof HTMLCanvasElement) || !canvas.width || !canvas.height) return false;
-    const gl = canvas.getContext("webgl2");
-    if (!gl) return false;
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    return pixels.some((value, index) => index % 4 === 3 && value > 0);
+    return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 && canvas.getContext("webgl2") !== null;
   }, undefined, { timeout: 30_000 });
+  await editor.waitForTimeout(250);
+  const editorCanvas = await editor.locator(".editor-canvas").screenshot();
+  if (await visibleVariation(editorCanvas) < 4) throw new Error("真实项目编辑画布没有显示角色纹理。" );
 
   const baseline = await editor.evaluate((directory) => window.puppetloom.readEditorWorkspace(directory), project);
   if (baseline.project.name !== "source" || baseline.project.layers.length !== 29) {
@@ -61,7 +65,7 @@ try {
   await meshButton.click();
   if (await editor.locator(".editor-overlay").count()) throw new Error("真实项目再次点击网格与权重后没有隐藏网格。" );
   await editor.getByRole("button", { name: "动作", exact: true }).click();
-  const frontHairAmplitude = editor.locator('.save-panel .range-row input[type="range"]').nth(6);
+  const frontHairAmplitude = editor.getByTestId("secondary-amplitude");
   await frontHairAmplitude.evaluate((element) => {
     const input = element;
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -106,31 +110,11 @@ try {
   const viewer = await viewerPromise;
   await viewer.getByTestId("viewer").waitFor();
   await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
-  const viewerReady = await viewer.evaluate(() => {
-    const canvas = document.querySelector("canvas");
-    if (!(canvas instanceof HTMLCanvasElement) || !canvas.width || !canvas.height) return false;
-    const gl = canvas.getContext("webgl2");
-    if (!gl) return false;
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    return pixels.some((value, index) => index % 4 === 3 && value > 0);
-  });
-  if (!viewerReady) throw new Error(`真实项目运行窗口没有可见像素：${await viewer.locator(".viewer-error").textContent() ?? "无界面错误"}`);
-  const frameSignature = () => {
-    const canvas = document.querySelector("canvas");
-    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("真实项目运行窗口缺少画布。");
-    const gl = canvas.getContext("webgl2");
-    if (!gl) throw new Error("真实项目运行窗口缺少 WebGL2 上下文。");
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    let hash = 2166136261;
-    for (const value of pixels) hash = Math.imul(hash ^ value, 16777619) >>> 0;
-    return hash;
-  };
-  const firstFrame = await viewer.evaluate(frameSignature);
+  const firstFrame = await viewer.locator("canvas").screenshot();
+  if (await visibleVariation(firstFrame) < 4) throw new Error(`真实项目运行窗口没有可见角色：${await viewer.locator(".viewer-error").textContent() ?? "无界面错误"}`);
   await viewer.waitForTimeout(1_200);
-  const secondFrame = await viewer.evaluate(frameSignature);
-  if (firstFrame === secondFrame) throw new Error("正式模型角色窗口默认启动后画面没有自主运动。" );
+  const secondFrame = await viewer.locator("canvas").screenshot();
+  if (firstFrame.equals(secondFrame)) throw new Error("正式模型角色窗口默认启动后画面没有自主运动。" );
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
   if (pointer.strength !== 1) throw new Error(`正式模型角色窗口首次启动没有默认开启鼠标跟随：${JSON.stringify(pointer)}`);
 

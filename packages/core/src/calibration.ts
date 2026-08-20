@@ -2,6 +2,7 @@ import { calibrationOverridesSchema } from "./schema.js";
 import { parsePuppetLoomProject } from "./project-format.js";
 import { remeshArtMesh } from "./art-mesh.js";
 import { frontHairPhysicsMask } from "./front-hair-geometry.js";
+import { hairAttachmentInfluences } from "./hair-strands.js";
 import { makeGridMesh, reprojectMeshInfluences } from "./mesh.js";
 import type {
   CalibrationOverrides,
@@ -10,6 +11,7 @@ import type {
   LayerCalibrationOverride,
   MeshInfluenceChannel,
   MeshBinding,
+  HairStrandSpec,
   Point,
   PuppetLoomProject
 } from "./types.js";
@@ -78,6 +80,12 @@ export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: Cal
         ...(base.runtime?.motionTuning || patch.runtime?.motionTuning ? {
           motionTuning: { ...(base.runtime?.motionTuning ?? {}), ...(patch.runtime?.motionTuning ?? {}) }
         } : {}),
+        ...(base.runtime?.poseField || patch.runtime?.poseField ? {
+          poseField: { ...(base.runtime?.poseField ?? {}), ...(patch.runtime?.poseField ?? {}) }
+        } : {}),
+        ...(base.runtime?.poseOcclusion || patch.runtime?.poseOcclusion ? {
+          poseOcclusion: { ...(base.runtime?.poseOcclusion ?? {}), ...(patch.runtime?.poseOcclusion ?? {}) }
+        } : {}),
         ...(base.runtime?.secondaryMotionTuning || patch.runtime?.secondaryMotionTuning ? {
           secondaryMotionTuning: Object.fromEntries([...new Set([
             ...Object.keys(base.runtime?.secondaryMotionTuning ?? {}),
@@ -118,8 +126,56 @@ function meshAtDensity(layer: LayerBinding, rows: number, cols: number): MeshBin
   return rebuilt;
 }
 
+function reprojectHairStrands(previous: MeshBinding, next: MeshBinding, strands: HairStrandSpec[]): HairStrandSpec[] {
+  return strands.map((strand) => ({
+    ...strand,
+    weights: next.points.map((point) => {
+      let nearest = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < previous.points.length; index += 1) {
+        const candidate = previous.points[index]!;
+        const distance = (candidate.x - point.x) ** 2 + (candidate.y - point.y) ** 2;
+        if (distance < nearestDistance) {
+          nearest = index;
+          nearestDistance = distance;
+        }
+      }
+      return strand.weights[nearest] ?? 0;
+    }),
+    release: next.points.map((point) => {
+      let nearest = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < previous.points.length; index += 1) {
+        const candidate = previous.points[index]!;
+        const distance = (candidate.x - point.x) ** 2 + (candidate.y - point.y) ** 2;
+        if (distance < nearestDistance) {
+          nearest = index;
+          nearestDistance = distance;
+        }
+      }
+      return strand.release[nearest] ?? 0;
+    })
+  }));
+}
+
+function applyHairStrandInfluences(layer: LayerBinding): void {
+  if (!layer.hairStrands || layer.hairStrands.length < 2) return;
+  const attachment = hairAttachmentInfluences(layer, layer.hairStrands);
+  layer.mesh.influences = {
+    ...(layer.mesh.influences ?? {}),
+    headAttachment: attachment.headAttachment,
+    physicsRelease: attachment.physicsRelease,
+    physics: layer.mesh.points.map((point, index) => Math.max(
+      layer.mesh.influences?.physics?.[index] ?? 0,
+      attachment.physicsRelease[index] ?? 0,
+      layer.role === "frontHair" ? frontHairPhysicsMask(layer, point) : 0
+    ))
+  };
+}
+
 function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverride): LayerBinding {
   const next = clone(layer);
+  const previousMesh = next.mesh;
   if (override.role) next.role = override.role;
   if (override.side) next.side = override.side;
   if (override.parentGroup) next.parentGroup = override.parentGroup;
@@ -147,6 +203,8 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
       next.mesh.influences.physics = next.mesh.points.map((point) => frontHairPhysicsMask(next, point));
     }
   }
+  if (override.hairStrands) next.hairStrands = clone(override.hairStrands);
+  else if (next.mesh !== previousMesh && next.hairStrands) next.hairStrands = reprojectHairStrands(previousMesh, next.mesh, next.hairStrands);
   for (const [rawIndex, delta] of Object.entries(override.meshPointDeltas ?? {})) {
     const index = Number(rawIndex);
     const base = next.mesh.points[index];
@@ -155,8 +213,9 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
     assertNormalized(point, `${layer.sourceName} 的网格顶点 ${rawIndex}`);
     next.mesh.points[index] = point;
   }
+  applyHairStrandInfluences(next);
   for (const [channel, values] of Object.entries(override.vertexInfluences ?? {}) as Array<[MeshInfluenceChannel, Record<string, number>]>) {
-    const fallback = channel === "pin" ? 0 : 1;
+    const fallback = channel === "pin" || channel === "physicsRelease" ? 0 : 1;
     const target = [...(next.mesh.influences?.[channel] ?? Array(next.mesh.points.length).fill(fallback))];
     if (target.length !== next.mesh.points.length) throw new Error(`${layer.sourceName} 的 ${channel} 权重数量与网格不一致。`);
     for (const [rawIndex, value] of Object.entries(values)) {
@@ -214,6 +273,20 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
     if (!next.runtime.poseField) throw new Error("当前项目没有可校准的统一头部姿态场。");
     next.runtime.poseField = { ...next.runtime.poseField, ...overrides.runtime.poseField };
   }
+  if (overrides.runtime?.poseOcclusion) {
+    next.runtime.poseOcclusion = {
+      kind: "semantic-occlusion-v1",
+      fadeStart: 0.58,
+      farEyeOpacity: 0.68,
+      farBrowOpacity: 0.76,
+      farEarOpacity: 0.55,
+      farSideHairOpacity: 0.72,
+      sideHairDepthSwap: true,
+      ...(next.runtime.poseOcclusion ?? {}),
+      ...overrides.runtime.poseOcclusion
+    };
+  }
+  if (overrides.runtime?.torsoVolumeProfile) next.runtime.torsoVolumeProfile = clone(overrides.runtime.torsoVolumeProfile);
   if (overrides.runtime?.motionTuning) {
     next.runtime.motionTuning = {
       amplitude: 1,

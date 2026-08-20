@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PuppetLoomError,
+  parseRuntimeControlRequest,
+  parseRuntimeControlServiceRequest,
+  parseRuntimeInputSession,
   CubismEditorClient,
   buildCubismExportPlan,
   clearCubismPreview,
@@ -18,18 +22,22 @@ import {
   exportPortableProject,
   finalizeCubismExport,
   planFrontHairAgent,
+  planRigExtensionUpgrade,
   planSecondaryPartAgent,
   inspectPsd,
   inspectCubismEditor,
+  readCharacterBenchmarkManifest,
   listCalibrationSessions,
   loadCalibration,
   loadProject,
   migrateProject,
   planModelAgent,
+  planStandardPerformanceActions,
   readModelAgentSpecification,
   renderProjectSuite,
   runModelAgent,
   runFrontHairAgent,
+  runCharacterBenchmarks,
   runSecondaryPartAgent,
   restoreCalibrationRevision,
   saveAuthoringPatch,
@@ -39,14 +47,16 @@ import {
   prepareCubismExport,
   previewCubismProject,
   verifyCubismModel,
+  validateCubismEditorProject,
   verifyProject
 } from "@puppetloom/core";
-import type { AuthoringPatch, CalibrationPatch, CubismPreviewPose, ModelAgentOptions, ModelAgentPart, ModelAgentRequestScope, RenderFocusScope, RenderSuiteKind, SecondaryModelAgentPart } from "@puppetloom/core";
+import type { AuthoringPatch, CalibrationPatch, CubismPreviewPose, ModelAgentOptions, ModelAgentPart, ModelAgentRequestScope, RenderFocusScope, RenderSuiteKind, RuntimeControlManifest, RuntimeControlResponse, RuntimeControlServiceRequest, RuntimeInputSession, RuntimeMotionInput, SecondaryModelAgentPart } from "@puppetloom/core";
 import { Command, CommanderError } from "commander";
 
 type OutputOptions = { json?: boolean };
 
 const defaultCubismTokenFile = join(process.env.LOCALAPPDATA ?? process.cwd(), "PuppetLoom", "cubism-editor-token.txt");
+const defaultRuntimeManifest = process.env.PUPPETLOOM_CONTROL_MANIFEST ?? join("D:\\Tools", "PuppetLoom", "user-data", "runtime-control.json");
 
 function print(value: unknown, options: OutputOptions = {}): void {
   if (options.json) {
@@ -86,6 +96,67 @@ async function readOptionalText(path: string): Promise<string> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
     throw new PuppetLoomError("IO_ERROR", `无法读取文件：${path}`, { cause: error });
   }
+}
+
+function finiteOption(value: string | undefined, label: string, minimum: number, maximum: number): number | undefined {
+  if (value === undefined) return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < minimum || number > maximum) throw new PuppetLoomError("INVALID_INPUT", `${label} 必须是 ${minimum} 到 ${maximum} 之间的数字。`);
+  return number;
+}
+
+function positiveInteger(value: string, label: string): number {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new PuppetLoomError("INVALID_INPUT", `${label} 必须是正整数。`);
+  return number;
+}
+
+function assignment(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function assignments(values: string[] | undefined, label: string): Record<string, number> | undefined {
+  if (!values?.length) return undefined;
+  const result: Record<string, number> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    const id = separator > 0 ? value.slice(0, separator).trim() : "";
+    const number = separator > 0 ? Number(value.slice(separator + 1)) : Number.NaN;
+    if (!id || !Number.isFinite(number)) throw new PuppetLoomError("INVALID_INPUT", `${label} 必须使用 id=数值 格式：${value}`);
+    result[id] = number;
+  }
+  return result;
+}
+
+async function runtimeControlUrl(explicit?: string): Promise<string> {
+  const direct = explicit ?? process.env.PUPPETLOOM_CONTROL_URL;
+  if (direct) return direct.replace(/\/$/, "");
+  let manifest: RuntimeControlManifest;
+  try {
+    manifest = JSON.parse(await readFile(defaultRuntimeManifest, "utf8")) as RuntimeControlManifest;
+  } catch (cause) {
+    throw new PuppetLoomError("IO_ERROR", `找不到运行时控制清单：${defaultRuntimeManifest}。请先打开 PuppetLoom，或用 --url 指定服务地址。`, { cause });
+  }
+  if (manifest.version !== 1 || manifest.status !== "running" || !manifest.url) throw new PuppetLoomError("IO_ERROR", "PuppetLoom 运行时控制服务当前没有运行。" );
+  return manifest.url.replace(/\/$/, "");
+}
+
+async function sendRuntimeControl(request: RuntimeControlServiceRequest, explicitUrl?: string): Promise<unknown> {
+  const url = await runtimeControlUrl(explicitUrl);
+  let response: Response;
+  try {
+    response = await fetch(`${url}/v1/control`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(5000)
+    });
+  } catch (cause) {
+    throw new PuppetLoomError("IO_ERROR", `无法连接 PuppetLoom 运行时控制服务：${url}`, { cause });
+  }
+  const body = await response.json() as RuntimeControlResponse;
+  if (!response.ok || !body.ok) throw new PuppetLoomError("INVALID_INPUT", body.error ?? `运行时控制请求失败：HTTP ${response.status}`);
+  return body.result;
 }
 
 async function connectCubism(url: string, tokenFile: string): Promise<CubismEditorClient> {
@@ -171,10 +242,16 @@ program
   .description("检查 PSD 图层、语义和建议绑定等级，不写入项目")
   .requiredOption("--input <character.psd>", "输入 PSD")
   .option("--reference <image>", "可选原始角色图；inspect 只记录参数，不写入")
+  .option("--clean-alpha", "高级：预演移除全部微小区域，包括可能有效的绘画细节；不修改源 PSD")
+  .option("--preserve-alpha-noise", "高级：保留自动检测到的高置信度 Alpha 噪点")
   .option("--json", "输出 JSON")
-  .action(async (options: { input: string; reference?: string; json?: boolean }) => {
+  .action(async (options: { input: string; reference?: string; cleanAlpha?: boolean; preserveAlphaNoise?: boolean; json?: boolean }) => {
     await run(async () => {
-      const report = await inspectPsd(resolve(options.input));
+      if (options.cleanAlpha && options.preserveAlphaNoise) throw new PuppetLoomError("INVALID_INPUT", "--clean-alpha 与 --preserve-alpha-noise 不能同时使用。");
+      const report = await inspectPsd(resolve(options.input), {
+        ...(options.cleanAlpha ? { alphaCleanup: "remove-all-tiny" as const } : {}),
+        ...(options.preserveAlphaNoise ? { alphaCleanup: "preserve-all" as const } : {})
+      });
       print({ ...report, ...(options.reference ? { reference: resolve(options.reference) } : {}) }, options);
     }, options);
   });
@@ -187,15 +264,20 @@ program
   .requiredOption("--output <project-dir>", "新建或空的输出目录")
   .option("--seed <number>", "动作时间线种子", "42")
   .option("--name <name>", "项目名称")
+  .option("--clean-alpha", "高级：移除全部微小区域，包括可能有效的绘画细节；源 PSD 始终原样保存")
+  .option("--preserve-alpha-noise", "高级：保留自动检测到的高置信度 Alpha 噪点")
   .option("--json", "输出 JSON")
-  .action(async (options: { input: string; reference?: string; output: string; seed: string; name?: string; json?: boolean }) => {
+  .action(async (options: { input: string; reference?: string; output: string; seed: string; name?: string; cleanAlpha?: boolean; preserveAlphaNoise?: boolean; json?: boolean }) => {
     await run(async () => {
       const seed = Number(options.seed);
       if (!Number.isSafeInteger(seed)) throw new PuppetLoomError("INVALID_INPUT", "seed 必须是安全整数。");
+      if (options.cleanAlpha && options.preserveAlphaNoise) throw new PuppetLoomError("INVALID_INPUT", "--clean-alpha 与 --preserve-alpha-noise 不能同时使用。");
       const result = await createProject({
         input: resolve(options.input),
         output: resolve(options.output),
         seed,
+        ...(options.cleanAlpha ? { alphaCleanup: "remove-all-tiny" as const } : {}),
+        ...(options.preserveAlphaNoise ? { alphaCleanup: "preserve-all" as const } : {}),
         ...(options.reference ? { reference: resolve(options.reference) } : {}),
         ...(options.name ? { name: options.name } : {})
       });
@@ -226,6 +308,230 @@ program
     await run(async () => print(await exportPortableProject({ project: resolve(options.project), output: resolve(options.output) }), options), options);
   });
 
+const benchmark = program.command("benchmark").description("校验真实角色基准清单，并批量生成可复现的项目能力报告");
+
+benchmark
+  .command("validate")
+  .description("只检查基准清单格式和素材使用声明，不运行角色项目")
+  .requiredOption("--manifest <corpus.json>", "真实角色基准清单")
+  .option("--json", "输出 JSON")
+  .action(async (options: { manifest: string; json?: boolean }) => {
+    await run(async () => {
+      const manifestPath = resolve(options.manifest);
+      const manifest = await readCharacterBenchmarkManifest(manifestPath);
+      print({
+        valid: true,
+        manifest: manifestPath,
+        name: manifest.name,
+        characters: manifest.characters.length,
+        readyForMaterials: manifest.characters.length === 0,
+        entries: manifest.characters.map(({ id, label, project, revision, materialUse, tags }) => ({ id, label, project, ...(revision === undefined ? {} : { revision }), materialUse, tags }))
+      }, options);
+    }, options);
+  });
+
+benchmark
+  .command("run")
+  .description("运行清单内全部角色，写入 JSON 与 Markdown 报告；不修改角色项目")
+  .requiredOption("--manifest <corpus.json>", "真实角色基准清单")
+  .requiredOption("--output <new-report-dir>", "尚不存在的报告目录")
+  .option("--json", "输出 JSON")
+  .action(async (options: { manifest: string; output: string; json?: boolean }) => {
+    await run(async () => {
+      const output = resolve(options.output);
+      if (existsSync(output)) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `基准报告目录已经存在：${output}`);
+      const report = await runCharacterBenchmarks(resolve(options.manifest));
+      await mkdir(output, { recursive: true });
+      const jsonPath = join(output, "benchmark-report.json");
+      const markdownPath = join(output, "benchmark-summary.md");
+      await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+      const rows = report.results.length
+        ? report.results.map((result) => `| ${result.id} | ${result.revision} | ${result.passed ? "通过" : "失败"} | ${result.checks.filter((check) => !check.passed).map((check) => check.id).join(", ") || "—"} |`).join("\n")
+        : "| — | — | 等待素材 | — |";
+      await writeFile(markdownPath, `# ${report.name}\n\n生成时间：${report.generatedAt}\n\n清单角色：${report.summary.declared}；通过：${report.summary.passed}；失败：${report.summary.failed}。\n\n| 角色 | Revision | 结果 | 未通过检查 |\n| --- | ---: | --- | --- |\n${rows}\n`, "utf8");
+      print({ ok: report.passed, output, report: jsonPath, summary: markdownPath, result: report.summary, readyForMaterials: report.readyForMaterials }, options);
+      if (!report.passed) process.exitCode = 3;
+    }, options);
+  });
+
+const runtime = program.command("runtime").description("检查并实时控制已打开的角色窗口，供外部 Agent、输入设备和自动化脚本调用");
+
+runtime
+  .command("inspect")
+  .description("列出运行中的角色窗口及其可用参数、表情和动作")
+  .option("--url <address>", "运行时控制服务地址；默认读取 D:\\Tools\\PuppetLoom\\user-data\\runtime-control.json")
+  .option("--json", "输出 JSON")
+  .action(async (options: { url?: string; json?: boolean }) => {
+    await run(async () => print(await sendRuntimeControl({ version: 1, requestId: randomUUID(), op: "inspect" }, options.url), options), options);
+  });
+
+runtime
+  .command("set")
+  .description("设置一个持续或带超时的控制来源；同一 source 的下一次设置会替换上一次")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .requiredOption("--source <id>", "控制来源 ID，例如 camera、microphone 或 agent-demo")
+  .option("--head-yaw <value>", "头部左右，-1 到 1")
+  .option("--head-pitch <value>", "头部俯仰，-1 到 1")
+  .option("--head-roll <value>", "头部侧倾，-1 到 1")
+  .option("--body-sway <value>", "身体左右，-1 到 1")
+  .option("--body-pitch <value>", "身体俯仰，-1 到 1")
+  .option("--body-roll <value>", "身体侧倾，-1 到 1")
+  .option("--gaze-x <value>", "视线左右，-1 到 1")
+  .option("--gaze-y <value>", "视线上下，-1 到 1")
+  .option("--breath <value>", "呼吸，-1 到 1")
+  .option("--blink <value>", "闭眼，0 到 1")
+  .option("--mouth-open <value>", "张嘴，0 到 1")
+  .option("--parameter <id=value>", "模型参数，可重复", assignment, [])
+  .option("--expression <id=value>", "表情强度，可重复", assignment, [])
+  .option("--priority <value>", "优先级 0 到 100；高优先级后混合", "50")
+  .option("--blend <value>", "来源混合比例 0 到 1", "1")
+  .option("--ttl <milliseconds>", "50 到 60000 毫秒；超时后自动回到自主动作")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: {
+    viewer: string; source: string; headYaw?: string; headPitch?: string; headRoll?: string; bodySway?: string; bodyPitch?: string; bodyRoll?: string;
+    gazeX?: string; gazeY?: string; breath?: string; blink?: string; mouthOpen?: string; parameter?: string[]; expression?: string[];
+    priority: string; blend: string; ttl?: string; url?: string; json?: boolean;
+  }) => {
+    await run(async () => {
+      const motion = Object.fromEntries(Object.entries({
+        headYaw: finiteOption(options.headYaw, "head-yaw", -1, 1),
+        headPitch: finiteOption(options.headPitch, "head-pitch", -1, 1),
+        headRoll: finiteOption(options.headRoll, "head-roll", -1, 1),
+        bodySway: finiteOption(options.bodySway, "body-sway", -1, 1),
+        bodyPitch: finiteOption(options.bodyPitch, "body-pitch", -1, 1),
+        bodyRoll: finiteOption(options.bodyRoll, "body-roll", -1, 1),
+        gazeX: finiteOption(options.gazeX, "gaze-x", -1, 1),
+        gazeY: finiteOption(options.gazeY, "gaze-y", -1, 1),
+        breath: finiteOption(options.breath, "breath", -1, 1),
+        blink: finiteOption(options.blink, "blink", 0, 1),
+        mouthOpen: finiteOption(options.mouthOpen, "mouth-open", 0, 1)
+      }).filter((entry): entry is [string, number] => entry[1] !== undefined)) as RuntimeMotionInput;
+      const parameters = assignments(options.parameter, "parameter");
+      const expressions = assignments(options.expression, "expression");
+      const request = parseRuntimeControlRequest({
+        version: 1,
+        requestId: randomUUID(),
+        op: "set",
+        viewerId: positiveInteger(options.viewer, "viewer"),
+        source: {
+          id: options.source,
+          priority: finiteOption(options.priority, "priority", 0, 100),
+          blend: finiteOption(options.blend, "blend", 0, 1),
+          ...(options.ttl === undefined ? {} : { ttlMs: finiteOption(options.ttl, "ttl", 50, 60_000) }),
+          ...(Object.keys(motion).length ? { motion } : {}),
+          ...(parameters ? { parameters } : {}),
+          ...(expressions ? { expressions } : {})
+        }
+      });
+      print(await sendRuntimeControl(request, options.url), options);
+    }, options);
+  });
+
+runtime
+  .command("trigger")
+  .description("触发表情或动作；非循环动作结束后自动释放")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .requiredOption("--source <id>", "触发来源 ID")
+  .option("--behavior <id>", "动作 ID")
+  .option("--expression <id>", "表情 ID")
+  .option("--strength <value>", "强度 0 到 1", "1")
+  .option("--duration <milliseconds>", "持续时间；省略时使用动作自身时长，表情默认 1000 毫秒")
+  .option("--priority <value>", "优先级 0 到 100", "70")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: { viewer: string; source: string; behavior?: string; expression?: string; strength: string; duration?: string; priority: string; url?: string; json?: boolean }) => {
+    await run(async () => {
+      const request = parseRuntimeControlRequest({
+        version: 1, requestId: randomUUID(), op: "trigger", viewerId: positiveInteger(options.viewer, "viewer"), sourceId: options.source,
+        ...(options.behavior ? { behaviorId: options.behavior } : {}),
+        ...(options.expression ? { expressionId: options.expression } : {}),
+        strength: finiteOption(options.strength, "strength", 0, 1),
+        ...(options.duration === undefined ? {} : { durationMs: finiteOption(options.duration, "duration", 50, 600_000) }),
+        priority: finiteOption(options.priority, "priority", 0, 100)
+      });
+      print(await sendRuntimeControl(request, options.url), options);
+    }, options);
+  });
+
+runtime
+  .command("release")
+  .description("释放一个控制来源；省略 source 时释放该角色的全部外部控制")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .option("--source <id>", "控制来源 ID")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: { viewer: string; source?: string; url?: string; json?: boolean }) => {
+    await run(async () => {
+      const request = parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "release", viewerId: positiveInteger(options.viewer, "viewer"), ...(options.source ? { sourceId: options.source } : {}) });
+      print(await sendRuntimeControl(request, options.url), options);
+    }, options);
+  });
+
+runtime
+  .command("record-start")
+  .description("开始录制该角色收到的摄像头、麦克风、快捷键和外部控制事件")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: { viewer: string; url?: string; json?: boolean }) => {
+    await run(async () => print(await sendRuntimeControl(parseRuntimeControlServiceRequest({
+      version: 1, requestId: randomUUID(), op: "record-start", viewerId: positiveInteger(options.viewer, "viewer")
+    }), options.url), options), options);
+  });
+
+runtime
+  .command("record-stop")
+  .description("停止输入录制，并保存为可确定性回放的 JSON；不会覆盖已有文件")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .requiredOption("--output <session.json>", "尚不存在的输出 JSON")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: { viewer: string; output: string; url?: string; json?: boolean }) => {
+    await run(async () => {
+      const output = resolve(options.output);
+      if (existsSync(output)) throw new PuppetLoomError("INVALID_INPUT", `输出文件已存在，不会覆盖：${output}`);
+      const result = await sendRuntimeControl(parseRuntimeControlServiceRequest({
+        version: 1, requestId: randomUUID(), op: "record-stop", viewerId: positiveInteger(options.viewer, "viewer")
+      }), options.url) as { session: RuntimeInputSession };
+      await mkdir(dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(result.session, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      print({ ...result, output }, options);
+    }, options);
+  });
+
+runtime
+  .command("replay")
+  .description("按原时间线回放输入会话；回放来源与当前实时输入相互隔离")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .requiredOption("--input <session.json>", "输入会话 JSON")
+  .option("--speed <value>", "回放速度 0.1 到 4", "1")
+  .option("--loop", "循环回放")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: { viewer: string; input: string; speed: string; loop?: boolean; url?: string; json?: boolean }) => {
+    await run(async () => {
+      const session = parseRuntimeInputSession(JSON.parse(await readFile(resolve(options.input), "utf8")) as unknown);
+      const request = parseRuntimeControlServiceRequest({
+        version: 1, requestId: randomUUID(), op: "replay-start", viewerId: positiveInteger(options.viewer, "viewer"),
+        session, speed: finiteOption(options.speed, "speed", 0.1, 4), loop: Boolean(options.loop)
+      });
+      print(await sendRuntimeControl(request, options.url), options);
+    }, options);
+  });
+
+runtime
+  .command("replay-stop")
+  .description("停止该角色正在进行的输入回放，并只释放回放创建的控制来源")
+  .requiredOption("--viewer <id>", "角色窗口 ID")
+  .option("--url <address>", "运行时控制服务地址")
+  .option("--json", "输出 JSON")
+  .action(async (options: { viewer: string; url?: string; json?: boolean }) => {
+    await run(async () => print(await sendRuntimeControl(parseRuntimeControlServiceRequest({
+      version: 1, requestId: randomUUID(), op: "replay-stop", viewerId: positiveInteger(options.viewer, "viewer")
+    }), options.url), options), options);
+  });
+
 const cubism = program.command("cubism").description("通过 Cubism Editor 官方链路同步可写结构并生成、校验 model3 运行时目录");
 
 cubism
@@ -243,9 +549,19 @@ cubism
 
 cubism
   .command("prepare")
-  .description("生成参数映射、兼容性报告及 exp3/motion3/physics3/cdi3 文件，不生成 moc3")
+  .description("生成官方交接包：映射、阻断报告、Editor 清单及 exp3/motion3/physics3/cdi3；不生成 moc3")
   .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
   .requiredOption("--output <new-directory>", "尚不存在的准备目录")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; output: string; json?: boolean }) => {
+    await run(async () => print(await prepareCubismExport(resolve(options.project), resolve(options.output)), options), options);
+  });
+
+cubism
+  .command("handoff")
+  .description("生成与 prepare 相同的完整 Cubism 官方交接包，名称用于交付流程")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .requiredOption("--output <new-directory>", "尚不存在的交接目录")
   .option("--json", "输出 JSON")
   .action(async (options: { project: string; output: string; json?: boolean }) => {
     await run(async () => print(await prepareCubismExport(resolve(options.project), resolve(options.output)), options), options);
@@ -297,6 +613,26 @@ cubismEditor
       const client = await connectCubism(options.url, options.tokenFile);
       try { print(await inspectCubismEditor(client, options.url, client.getVersion()), options); }
       finally { await client.close(); }
+    }, options);
+  });
+
+cubismEditor
+  .command("validate")
+  .description("按同步前或同步后阶段核对授权、Editor 模式、同名 ArtMesh、参数范围和不可自动验证的几何项")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .requiredOption("--stage <pre-sync|post-sync>", "校验阶段")
+  .option("--url <websocket-url>", "Editor WebSocket 地址", "ws://127.0.0.1:22033")
+  .option("--token-file <path>", "授权 Token 文件", defaultCubismTokenFile)
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; stage: "pre-sync" | "post-sync"; url: string; tokenFile: string; json?: boolean }) => {
+    await run(async () => {
+      if (options.stage !== "pre-sync" && options.stage !== "post-sync") throw new PuppetLoomError("INVALID_INPUT", "--stage 必须是 pre-sync 或 post-sync。" );
+      const client = await connectCubism(options.url, options.tokenFile);
+      try {
+        const result = await validateCubismEditorProject(resolve(options.project), client, options.stage, { url: options.url, apiVersion: client.getVersion() });
+        print(result, options);
+        if (options.stage === "pre-sync" ? !result.readyForPartialSync : !result.readyForOfficialExportReview) process.exitCode = 3;
+      } finally { await client.close(); }
     }, options);
   });
 
@@ -364,7 +700,74 @@ program
     }, options);
   });
 
+const extensions = program.command("extensions").description("让现有项目以可回退 revision 接入多房束、侧脸深度和可选躯干体积，不重建项目");
+
+extensions
+  .command("plan")
+  .description("分析现有项目自己的源 PSD，列出可追加的新绑定能力，不写入")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--torso-volume", "显式计划躯干体积曲线；默认不假定身体或服装需要体积")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; torsoVolume?: boolean; json?: boolean }) => {
+    await run(async () => {
+      print(await planRigExtensionUpgrade(resolve(options.project), { includeTorsoVolume: options.torsoVolume === true }), options);
+    }, options);
+  });
+
+extensions
+  .command("apply")
+  .description("把计划作为同一项目的新校准 revision 写入，并生成前后对比证据")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--torso-volume", "显式启用躯干体积曲线")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; torsoVolume?: boolean; json?: boolean }) => {
+    await run(async () => {
+      const directory = resolve(options.project);
+      const plan = await planRigExtensionUpgrade(directory, { includeTorsoVolume: options.torsoVolume === true });
+      if (!plan.patch) {
+        print({ ok: true, upToDate: true, revision: plan.baseRevision, plan }, options);
+        return;
+      }
+      const result = await saveCalibrationPatch(directory, plan.patch);
+      print({ ok: true, upToDate: false, revision: result.calibration.revision, plan, session: result.session, sessionPath: result.sessionPath, evidence: result.evidence, operation: result.operation }, options);
+    }, options);
+  });
+
 const author = program.command("author").description("供 Agent 检查和修改参数、关键形态与变形器");
+
+const actions = program.command("actions").description("建立并检查可由快捷键、CLI 和表演输入触发的标准表情与动作库");
+
+actions
+  .command("plan")
+  .description("按当前角色实际拥有的眉毛、手臂、手、腿和脚图层生成动作计划，不写入项目")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; json?: boolean }) => {
+    await run(async () => {
+      const directory = resolve(options.project);
+      const [project, calibration] = await Promise.all([loadProject(directory), loadCalibration(directory)]);
+      print(planStandardPerformanceActions(project, calibration.revision), options);
+    }, options);
+  });
+
+actions
+  .command("apply")
+  .description("以可回滚修订写入标准表情、点头、摇头、鞠躬、观察、挥手、踏步、眨眼和短句动作")
+  .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+  .option("--json", "输出 JSON")
+  .action(async (options: { project: string; json?: boolean }) => {
+    await run(async () => {
+      const directory = resolve(options.project);
+      const [project, calibration] = await Promise.all([loadProject(directory), loadCalibration(directory)]);
+      const plan = planStandardPerformanceActions(project, calibration.revision);
+      if (!plan.patch) {
+        print({ ok: true, upToDate: true, revision: calibration.revision, plan }, options);
+        return;
+      }
+      const result = await saveAuthoringPatch(directory, plan.patch);
+      print({ ok: true, upToDate: false, revision: result.calibration.revision, plan, session: result.session, sessionPath: result.sessionPath, evidence: result.evidence, operation: result.operation }, options);
+    }, options);
+  });
 
 const agent = program.command("agent").description("让 Agent 按部位完成分析、制作、自检和证据闭环");
 const modelAgentScopes = ["whole", "headFace", "eyes", "mouth", "frontHair", "backHair", "ahoge", "ears", "headwear", "body", "topCloth", "skirt", "tail", "accessory"] as const;

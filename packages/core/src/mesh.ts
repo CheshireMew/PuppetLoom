@@ -1,7 +1,7 @@
 import { roundPoint } from "./math.js";
 import type { MeshBinding, MeshInfluenceChannel, MeshInfluences, Point, Rect } from "./types.js";
 
-export const meshInfluenceChannels = ["face", "skull", "head", "body", "gaze", "physics", "pin"] as const satisfies readonly MeshInfluenceChannel[];
+export const meshInfluenceChannels = ["face", "skull", "head", "body", "gaze", "physics", "pin", "headAttachment", "physicsRelease"] as const satisfies readonly MeshInfluenceChannel[];
 
 export function defaultMeshInfluences(pointCount: number): MeshInfluences {
   return {
@@ -128,14 +128,17 @@ function sampleLocation(mesh: MeshBinding, uv: Point): BarycentricSample {
 /** Reprojects every influence channel by UV, so remeshing does not reset authored weights. */
 export function reprojectMeshInfluences(source: MeshBinding, target: MeshBinding): MeshInfluences {
   const samples = target.uvs.map((uv) => sampleLocation(source, uv));
-  return Object.fromEntries(meshInfluenceChannels.map((channel) => {
-    const fallback = channel === "pin" ? 0 : 1;
+  return Object.fromEntries(meshInfluenceChannels.flatMap((channel) => {
     const values = source.influences?.[channel];
-    return [channel, samples.map(({ indices, weights }) => (
+    // These two masks opt a layer into authored strand attachment. Keeping
+    // them absent on old projects preserves the earlier geometric heuristics.
+    if ((channel === "headAttachment" || channel === "physicsRelease") && !values) return [];
+    const fallback = channel === "pin" || channel === "physicsRelease" ? 0 : 1;
+    return [[channel, samples.map(({ indices, weights }) => (
       (values?.[indices[0]] ?? fallback) * weights[0]
       + (values?.[indices[1]] ?? fallback) * weights[1]
       + (values?.[indices[2]] ?? fallback) * weights[2]
-    ))];
+    ))]];
   })) as MeshInfluences;
 }
 

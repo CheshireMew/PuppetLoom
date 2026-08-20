@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://puppetloom.local/schemas/character-benchmark-manifest-v1.json",
+  "title": "PuppetLoom Character Benchmark Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "name", "characters"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "project", "materialUse", "tags", "expected"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "project": { "type": "string", "minLength": 1 },
+          "revision": { "type": "integer", "minimum": 0 },
+          "materialUse": { "enum": ["local-benchmark-only", "redistributable"] },
+          "tags": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "notes": { "type": "string" },
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allowedRigLevels": { "type": "array", "items": { "enum": ["semantic", "grouped", "minimal"] }, "uniqueItems": true },
+              "minLayerCount": { "type": "integer", "minimum": 0 },
+              "requiredRoles": { "type": "array", "items": { "enum": ["backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "tail", "accessory", "unknown"] }, "uniqueItems": true },
+              "minArtMeshRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+              "requiredParameterSemantics": { "type": "array", "items": { "enum": ["head-yaw", "head-pitch", "head-roll", "body-sway", "body-pitch", "body-roll", "gaze-x", "gaze-y", "breath", "blink", "mouth-open"] }, "uniqueItems": true },
+              "requiredExpressionIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "requiredBehaviorIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "minPoseValidationCount": { "type": "integer", "minimum": 0 },
+              "minSafetyScale": { "type": "number", "minimum": 0, "maximum": 1 },
+              "maxQualityIssueCount": { "type": "integer", "minimum": 0 },
+              "requirePoseField": { "type": "boolean" },
+              "requirePoseOcclusion": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

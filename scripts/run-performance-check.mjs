@@ -29,11 +29,31 @@ try {
     intervals.sort((left, right) => left - right);
     const averageInterval = intervals.reduce((sum, value) => sum + value, 0) / intervals.length;
     const p95 = intervals[Math.min(intervals.length - 1, Math.floor(intervals.length * 0.95))];
+    const buckets = {
+      under18: intervals.filter((value) => value < 18).length,
+      under26: intervals.filter((value) => value >= 18 && value < 26).length,
+      under40: intervals.filter((value) => value >= 26 && value < 40).length,
+      over40: intervals.filter((value) => value >= 40).length
+    };
+    const renderDurations = [];
+    if (typeof window.puppetloomRenderTestPose === "function") {
+      for (let index = 0; index < 90; index += 1) {
+        const started = performance.now();
+        window.puppetloomRenderTestPose({ headYaw: index % 2 ? 0.55 : -0.55, headPitch: 0.2 });
+        renderDurations.push(performance.now() - started);
+      }
+      renderDurations.sort((left, right) => left - right);
+    }
     return {
       frameCount: intervals.length,
       averageFps: 1000 / averageInterval,
       p95FrameMs: p95,
-      webgl2: Boolean(document.querySelector("canvas")?.getContext("webgl2"))
+      webgl2: Boolean(document.querySelector("canvas")?.getContext("webgl2")),
+      buckets,
+      renderCpuMs: renderDurations.length ? {
+        average: renderDurations.reduce((sum, value) => sum + value, 0) / renderDurations.length,
+        p95: renderDurations[Math.floor(renderDurations.length * 0.95)]
+      } : undefined
     };
   });
   if (!measurement.webgl2 || measurement.averageFps < 57 || measurement.p95FrameMs > 25) throw new Error(`性能未达到稳定 60 FPS 要求：${JSON.stringify(measurement)}`);

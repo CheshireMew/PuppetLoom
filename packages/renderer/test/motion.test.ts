@@ -91,6 +91,32 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...states.map((state) => Math.abs(state.tailY)))).toBeGreaterThan(0.04);
   });
 
+  it("creates deterministic independent chains for persisted hair strands", () => {
+    const project = fixtureProject();
+    project.layers = [{
+      role: "frontHair",
+      hairStrands: ["left", "center", "right"].map((id, index) => ({
+        id: `front:${id}`,
+        root: { x: 0.42 + index * 0.08, y: 0.2 },
+        tip: { x: 0.4 + index * 0.1, y: 0.45 },
+        width: 0.08,
+        confidence: 0.9,
+        source: "alpha-contour" as const,
+        physics: { stiffness: 26 + index * 2, damping: 8 + index * 0.4, segments: 4, maxDisplacement: 0.08 },
+        weights: [1],
+        release: [1]
+      }))
+    } as PuppetLoomProject["layers"][number]];
+    const left = new CalmMotionController(project);
+    const right = new CalmMotionController(project);
+    const times = Array.from({ length: 240 }, (_, index) => index / 60);
+    const leftStates = times.map((time) => left.sample(time, { primaryMotion: false }).secondary!.hairStrands!);
+    const rightStates = times.map((time) => right.sample(time, { primaryMotion: false }).secondary!.hairStrands!);
+    expect(leftStates).toEqual(rightStates);
+    expect(Object.keys(leftStates[0]!)).toEqual(["front:left", "front:center", "front:right"]);
+    expect(leftStates.some((state) => Math.abs(state["front:left"]!.x.at(-1)! - state["front:right"]!.x.at(-1)!) > 0.0001)).toBe(true);
+  });
+
   it("does not drive every attached part with the same phase and direction", () => {
     const controller = new CalmMotionController(fixtureProject());
     const states = Array.from({ length: 900 }, (_, index) => controller.sample(index / 60));

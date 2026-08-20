@@ -30,15 +30,16 @@ External API 1.1.0 能增删参数、部件和变形器，添加参数关键点�
 ```powershell
 $cli = "E:\Code\PuppetLoom\apps\cli\dist\index.js"
 node $cli cubism plan --project E:\Puppets\MyCharacter --json
-node $cli cubism prepare --project E:\Puppets\MyCharacter --output E:\Puppets\MyCharacter-cubism-work --json
+node $cli cubism handoff --project E:\Puppets\MyCharacter --output E:\Puppets\MyCharacter-cubism-work --json
 ```
 
-`plan.strictReady` 只有在没有阻断项时才为 `true`。`prepare` 始终可以生成映射和侧车供检查，但不会生成 `.moc3`。输出中的 `puppetloom/cubism-bridge.json` 记录源 revision、全部映射、覆盖数量和限制。
+`plan.strictReady` 只有在没有阻断项时才为 `true`。`handoff` 与兼容命令 `prepare` 都可以生成映射和侧车供检查，但不会生成 `.moc3`。输出中的 `puppetloom/handoff.json` 锁定项目绝对路径、revision、内容指纹、源 PSD、阻断项和完整命令；`HANDOFF.md` 供人阅读，`editor-checklist.json` 逐项区分 PuppetLoom、Editor 和操作者的责任。清单初始状态都是 pending，不会因为文件已生成就假装人工步骤已经完成。
 
 在 Cubism Editor 中从同一 PSD 建立或打开建模文件，保持 ArtMesh 名称与 PSD 图层名一致，然后在“文件 → 外部应用程序集成的设置”中启用服务。首次连接时授予 Allow；结构同步还要授予 Edit。先检查连接：
 
 ```powershell
 node $cli cubism editor inspect --json
+node $cli cubism editor validate --project E:\Puppets\MyCharacter --stage pre-sync --json
 ```
 
 5.3 可以用参数临时缓存检查标准映射，不改变模型文件：
@@ -57,6 +58,8 @@ node $cli cubism editor sync --project E:\Puppets\MyCharacter --json
 
 默认是严格模式。只要项目包含官方 API 不能写入的网格或程序化变形，它就会在 `EditBegin` 前停止。`--allow-partial` 只适合明确接受“建立参数和可写属性，网格仍需手工完成”的场景；返回结果中的 `partial: true` 和 warnings 必须保留在交付记录里。
 
+`editor validate` 在同步前检查 Allow/Edit 授权、External API 1.1.0、Modeling 模式、每个 PSD 图层是否只有一个同名 ArtMesh，以及已有参数是否发生范围冲突；缺失参数在 pre-sync 阶段只是待自动创建项。同步和人工补形后再执行 `--stage post-sync`，此时缺失参数会成为阻断项。官方 API 无法读取并证明顶点视觉等价，因此报告会一直把相关绑定列在 `manualGeometryReviewRequired`，除非项目本身没有这类内容；这部分只能由 Editor 中的人工视觉签核完成。
+
 同步完成并人工补齐网格后，由 Cubism Editor 使用官方“导出嵌入数据”功能生成 `.moc3`、纹理和 `.model3.json`。最后从该 model3 生成一个新目录：
 
 ```powershell
@@ -70,7 +73,7 @@ node $cli cubism verify --model E:\Puppets\MyCharacter-cubism-runtime\MyCharacte
 node $cli cubism open --model E:\Puppets\MyCharacter-cubism-runtime\MyCharacter.model3.json
 ```
 
-`finalize` 不改 Editor 导出目录，也不覆盖已有目标。它把全部原引用复制到旁路暂存目录，合并 PuppetLoom 侧车，验证通过后才一次性发布。失败时会返回并保留暂存目录，方便检查；它不会删除任何文件。
+`finalize` 不改 Editor 导出目录，也不覆盖已有目标。它把全部原引用复制到旁路暂存目录，合并 PuppetLoom 侧车，验证通过后才一次性发布，并写入 `puppetloom/official-runtime-verification.json` 记录来源 revision、Editor 真源和验证结果。失败时会返回并保留暂存目录，方便检查；它不会删除任何文件。
 
 ## 标准参数映射
 

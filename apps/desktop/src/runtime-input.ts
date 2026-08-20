@@ -1,0 +1,253 @@
+import type { RuntimeMotionInput } from "@puppetloom/core/browser";
+
+export interface FacePoint {
+  x: number;
+  y: number;
+  z?: number;
+}
+
+export interface FaceTrackingSample {
+  landmarks: FacePoint[];
+  blendshapes?: Record<string, number>;
+}
+
+interface FaceAxes {
+  yaw: number;
+  pitch: number;
+  roll: number;
+  gazeX: number;
+  gazeY: number;
+}
+
+export interface InputAdapterStatus {
+  state: "starting" | "active" | "lost" | "error" | "stopped";
+  message: string;
+}
+
+export interface RuntimeInputAdapter {
+  mediaStream?: MediaStream;
+  stop(): Promise<void>;
+}
+
+function clamp(value: number, minimum = -1, maximum = 1): number {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function average(points: FacePoint[]): FacePoint {
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    y: points.reduce((sum, point) => sum + point.y, 0) / points.length
+  };
+}
+
+function smooth(current: number, target: number, deltaMs: number, responseMs: number): number {
+  return current + (target - current) * (1 - Math.exp(-Math.max(1, deltaMs) / responseMs));
+}
+
+function axesFromLandmarks(landmarks: FacePoint[]): FaceAxes | undefined {
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  const nose = landmarks[1];
+  const forehead = landmarks[10];
+  const chin = landmarks[152];
+  if (!leftEye || !rightEye || !nose || !forehead || !chin || landmarks.length < 478) return undefined;
+  const eyeMid = average([leftEye, rightEye]);
+  const eyeDistance = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+  const faceHeight = Math.hypot(chin.x - forehead.x, chin.y - forehead.y);
+  if (eyeDistance < 0.01 || faceHeight < 0.02) return undefined;
+  const leftIris = average(landmarks.slice(468, 473));
+  const rightIris = average(landmarks.slice(473, 478));
+  const irisMid = average([leftIris, rightIris]);
+  return {
+    yaw: (nose.x - eyeMid.x) / eyeDistance,
+    pitch: (nose.y - eyeMid.y) / faceHeight,
+    roll: Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x),
+    gazeX: (irisMid.x - eyeMid.x) / eyeDistance,
+    gazeY: (irisMid.y - eyeMid.y) / eyeDistance
+  };
+}
+
+/** Calibrates a neutral face, then emits smoothed PuppetLoom semantic motion. */
+export class FaceInputMapper {
+  private baseline: FaceAxes = { yaw: 0, pitch: 0, roll: 0, gazeX: 0, gazeY: 0 };
+  private output: Required<Pick<RuntimeMotionInput, "headYaw" | "headPitch" | "headRoll" | "gazeX" | "gazeY" | "blink" | "mouthOpen">> = {
+    headYaw: 0, headPitch: 0, headRoll: 0, gazeX: 0, gazeY: 0, blink: 0, mouthOpen: 0
+  };
+  private calibratedFrames = 0;
+  private lastTimeMs: number | undefined;
+  private lostFrames = 0;
+
+  constructor(private readonly requiredCalibrationFrames = 24) {}
+
+  sample(sample: FaceTrackingSample | undefined, nowMs: number): RuntimeMotionInput | undefined {
+    const axes = sample ? axesFromLandmarks(sample.landmarks) : undefined;
+    if (!axes) {
+      this.lostFrames += 1;
+      if (this.lostFrames > 30) this.resetCalibration();
+      return undefined;
+    }
+    this.lostFrames = 0;
+    const deltaMs = this.lastTimeMs === undefined ? 33 : Math.max(1, Math.min(100, nowMs - this.lastTimeMs));
+    this.lastTimeMs = nowMs;
+    if (this.calibratedFrames < this.requiredCalibrationFrames) {
+      const count = this.calibratedFrames + 1;
+      for (const key of Object.keys(this.baseline) as Array<keyof FaceAxes>) this.baseline[key] += (axes[key] - this.baseline[key]) / count;
+      this.calibratedFrames = count;
+    }
+    const calibrated = this.calibratedFrames >= this.requiredCalibrationFrames;
+    const shape = sample?.blendshapes ?? {};
+    const target = {
+      headYaw: calibrated ? clamp((axes.yaw - this.baseline.yaw) * 3.6) : 0,
+      headPitch: calibrated ? clamp((axes.pitch - this.baseline.pitch) * 5.2) : 0,
+      headRoll: calibrated ? clamp((axes.roll - this.baseline.roll) / 0.42) : 0,
+      gazeX: calibrated ? clamp((axes.gazeX - this.baseline.gazeX) * 7.5) : 0,
+      gazeY: calibrated ? clamp((axes.gazeY - this.baseline.gazeY) * 7.5) : 0,
+      blink: clamp(((shape.eyeBlinkLeft ?? 0) + (shape.eyeBlinkRight ?? 0)) * 0.5, 0, 1),
+      mouthOpen: clamp(Math.max(shape.jawOpen ?? 0, (shape.mouthFunnel ?? 0) * 0.55, (shape.mouthPucker ?? 0) * 0.45), 0, 1)
+    };
+    this.output = {
+      headYaw: smooth(this.output.headYaw, target.headYaw, deltaMs, 85),
+      headPitch: smooth(this.output.headPitch, target.headPitch, deltaMs, 95),
+      headRoll: smooth(this.output.headRoll, target.headRoll, deltaMs, 90),
+      gazeX: smooth(this.output.gazeX, target.gazeX, deltaMs, 55),
+      gazeY: smooth(this.output.gazeY, target.gazeY, deltaMs, 55),
+      blink: smooth(this.output.blink, target.blink, deltaMs, target.blink > this.output.blink ? 28 : 65),
+      mouthOpen: smooth(this.output.mouthOpen, target.mouthOpen, deltaMs, target.mouthOpen > this.output.mouthOpen ? 42 : 105)
+    };
+    return { ...this.output };
+  }
+
+  resetCalibration(): void {
+    this.calibratedFrames = 0;
+    this.baseline = { yaw: 0, pitch: 0, roll: 0, gazeX: 0, gazeY: 0 };
+    this.lastTimeMs = undefined;
+  }
+
+  get calibrated(): boolean {
+    return this.calibratedFrames >= this.requiredCalibrationFrames;
+  }
+}
+
+export class MicrophoneInputMapper {
+  private noiseFloor = 0.008;
+  private envelope = 0;
+
+  sample(samples: Float32Array, deltaMs = 33): number {
+    const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / Math.max(1, samples.length));
+    if (rms < this.noiseFloor * 1.8) this.noiseFloor = smooth(this.noiseFloor, Math.max(0.002, rms), deltaMs, 1800);
+    const gate = this.noiseFloor * 1.35;
+    const target = clamp(Math.sqrt(Math.max(0, rms - gate) / Math.max(0.025, this.noiseFloor * 7)), 0, 1);
+    this.envelope = smooth(this.envelope, target, deltaMs, target > this.envelope ? 38 : 145);
+    return this.envelope < 0.025 ? 0 : this.envelope;
+  }
+}
+
+function blendshapes(result: { faceBlendshapes?: Array<{ categories: Array<{ categoryName?: string; score: number }> }> }): Record<string, number> {
+  return Object.fromEntries((result.faceBlendshapes?.[0]?.categories ?? []).flatMap((category) => category.categoryName ? [[category.categoryName, category.score] as const] : []));
+}
+
+export async function startFaceInput(
+  assets: { wasmBaseUrl: string; faceLandmarkerModelUrl: string },
+  onMotion: (motion: RuntimeMotionInput) => void,
+  onStatus: (status: InputAdapterStatus) => void
+): Promise<RuntimeInputAdapter> {
+  onStatus({ state: "starting", message: "正在启动摄像头并加载面捕模型…" });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = stream;
+  await video.play();
+  const { FaceLandmarker, FilesetResolver } = await import("@mediapipe/tasks-vision");
+  const fileset = await FilesetResolver.forVisionTasks(assets.wasmBaseUrl);
+  const options = {
+    baseOptions: { modelAssetPath: assets.faceLandmarkerModelUrl, delegate: "GPU" as const },
+    runningMode: "VIDEO" as const,
+    numFaces: 1,
+    outputFaceBlendshapes: true,
+    minFaceDetectionConfidence: 0.55,
+    minFacePresenceConfidence: 0.55,
+    minTrackingConfidence: 0.5
+  };
+  let landmarker;
+  try {
+    landmarker = await FaceLandmarker.createFromOptions(fileset, options);
+  } catch {
+    landmarker = await FaceLandmarker.createFromOptions(fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: "CPU" } });
+  }
+  const mapper = new FaceInputMapper();
+  let active = true;
+  let frame = 0;
+  let lastVideoTime = -1;
+  let hadFace = false;
+  const tick = () => {
+    if (!active) return;
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const result = landmarker.detectForVideo(video, performance.now());
+      const landmarks = result.faceLandmarks[0];
+      const motion = mapper.sample(landmarks ? { landmarks, blendshapes: blendshapes(result) } : undefined, performance.now());
+      if (motion) {
+        onMotion(motion);
+        if (!hadFace || mapper.calibrated) onStatus({ state: "active", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然看向摄像头，正在校准…" });
+        hadFace = true;
+      } else if (hadFace) {
+        onStatus({ state: "lost", message: "暂时没有检测到面部，角色已回到自主动作" });
+        hadFace = false;
+      }
+    }
+    frame = requestAnimationFrame(tick);
+  };
+  frame = requestAnimationFrame(tick);
+  return {
+    mediaStream: stream,
+    async stop() {
+      active = false;
+      cancelAnimationFrame(frame);
+      landmarker.close();
+      stream.getTracks().forEach((track) => track.stop());
+      video.srcObject = null;
+      onStatus({ state: "stopped", message: "摄像头面捕已关闭" });
+    }
+  };
+}
+
+export async function startMicrophoneInput(
+  onMouthOpen: (mouthOpen: number) => void,
+  onStatus: (status: InputAdapterStatus) => void
+): Promise<RuntimeInputAdapter> {
+  onStatus({ state: "starting", message: "正在启动麦克风…" });
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }, video: false });
+  const context = new AudioContext({ latencyHint: "interactive" });
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0;
+  source.connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  const mapper = new MicrophoneInputMapper();
+  let active = true;
+  let frame = 0;
+  let previous = performance.now();
+  const tick = (now: number) => {
+    if (!active) return;
+    analyser.getFloatTimeDomainData(samples);
+    onMouthOpen(mapper.sample(samples, now - previous));
+    previous = now;
+    frame = requestAnimationFrame(tick);
+  };
+  onStatus({ state: "active", message: "麦克风口型已启用" });
+  frame = requestAnimationFrame(tick);
+  return {
+    mediaStream: stream,
+    async stop() {
+      active = false;
+      cancelAnimationFrame(frame);
+      source.disconnect();
+      analyser.disconnect();
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+      onStatus({ state: "stopped", message: "麦克风口型已关闭" });
+    }
+  };
+}

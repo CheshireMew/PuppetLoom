@@ -100,6 +100,10 @@ describe("rig attachment pivots", () => {
     expect(frontHair?.mesh.topology).toBe("art");
     expect(frontHair?.mesh.art?.detail).toBe(12);
     expect(frontHair?.mesh.points.length).toBeGreaterThan(40);
+    expect(frontHair?.hairStrands).toHaveLength(3);
+    expect(frontHair?.hairStrands?.every((strand) => strand.weights.length === frontHair.mesh.points.length && strand.release.length === frontHair.mesh.points.length)).toBe(true);
+    expect(Math.min(...frontHair!.mesh.influences!.headAttachment!)).toBe(0);
+    expect(Math.max(...frontHair!.mesh.influences!.headAttachment!)).toBe(1);
     expect(project.layers.find((layer) => layer.role === "topWear")?.pivot.y).toBeCloseTo(0.5396, 6);
     expect(project.layers.find((layer) => layer.role === "bottomWear")?.pivot.y).toBeCloseTo(0.686, 6);
   });

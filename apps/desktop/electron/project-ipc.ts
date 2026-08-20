@@ -4,6 +4,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createProject, inspectPsd, loadProject, loadProjectRevision, verifyProject } from "@puppetloom/core";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { DesktopCreateRequest } from "./global.js";
+import { recentProjectDisplayName, usableRecentProjects } from "./recent-projects.js";
 
 export interface RecentProject {
   directory: string;
@@ -30,7 +31,7 @@ export class ProjectIpcService {
   async recentProjects(): Promise<RecentProject[]> {
     try {
       const value = JSON.parse(await readFile(join(this.applicationProfile, "recent-projects.json"), "utf8"));
-      return Array.isArray(value) ? value.filter((entry): entry is RecentProject => entry && typeof entry.directory === "string" && typeof entry.name === "string") : [];
+      return usableRecentProjects(value, process.env.PUPPETLOOM_INCLUDE_TEST_PROJECTS === "1");
     } catch {
       return [];
     }
@@ -40,7 +41,7 @@ export class ProjectIpcService {
     const directory = resolve(projectDirectory);
     const project = await loadProject(directory);
     const current = (await this.recentProjects()).filter((entry) => !samePath(entry.directory, directory));
-    const next = [{ directory, name: project.name, openedAt: new Date().toISOString() }, ...current].slice(0, 12);
+    const next = [{ directory, name: recentProjectDisplayName(project.name, directory), openedAt: new Date().toISOString() }, ...current].slice(0, 12);
     mkdirSync(this.applicationProfile, { recursive: true });
     await writeFile(join(this.applicationProfile, "recent-projects.json"), `${JSON.stringify(next, null, 2)}\n`, "utf8");
     return next;
@@ -74,6 +75,7 @@ export class ProjectIpcService {
         input: resolve(request.input),
         output: resolve(request.output),
         seed: request.seed ?? 42,
+        ...(request.preserveAlphaNoise ? { alphaCleanup: "preserve-all" as const } : {}),
         ...(request.reference ? { reference: resolve(request.reference) } : {}),
         ...(request.name ? { name: request.name } : {})
       });

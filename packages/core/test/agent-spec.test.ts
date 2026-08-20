@@ -65,4 +65,21 @@ describe("external Agent rig specification", () => {
     placeholderRationale.parts[0]!.rationale = ["自然、克制的前发基线；外部 Agent 应在看图后调整。"];
     expect(() => parseModelAgentSpecification(placeholderRationale)).toThrow("模板占位内容");
   });
+
+  it("accepts explicit head contour, depth and far-side occlusion decisions", () => {
+    const head = {
+      version: 1, kind: "puppetloom-rig-spec", scope: "selected", baseRevision: 8, goal: "收紧远侧轮廓并保留双眼可读性",
+      parts: [{
+        part: "headFace", rationale: ["右转证据中远侧眼接近脸缘，但仍应保留约七成可见度。"],
+        intent: {
+          amplitude: 0.9, response: 0.72, stability: 0.7, yawDegrees: 14, pitchUpDegrees: 12, pitchDownDegrees: 15,
+          contourStrength: 1.15, depthStrength: 1.08, farEyeOpacity: 0.7, farBrowOpacity: 0.78,
+          farEarOpacity: 0.5, farSideHairOpacity: 0.68, occlusionFadeStart: 0.56, sideHairDepthSwap: true
+        }
+      }]
+    };
+    expect(parseModelAgentSpecification(head)).toEqual(head);
+    head.parts[0]!.intent.contourStrength = 3;
+    expect(() => parseModelAgentSpecification(head)).toThrow("contourStrength");
+  });
 });

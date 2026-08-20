@@ -3,7 +3,7 @@ import { evaluateLayerAuthoring, resolveMotionState } from "./model.js";
 import { applyCoherentPoseField } from "./pose-field.js";
 import { ahogeHingeWeight, frontHairSideGeometry } from "./front-hair-geometry.js";
 import { clothingBodyFollow, clothingSecondaryRelease } from "./clothing-geometry.js";
-import type { LayerBinding, MotionChainState, MotionState, Point, PuppetLoomProject } from "./types.js";
+import type { LayerBinding, MeshInfluenceChannel, MotionChainState, MotionState, Point, PuppetLoomProject, TorsoVolumeProfile } from "./types.js";
 
 function rotate(point: Point, pivot: Point, radians: number): Point {
   if (Math.abs(radians) < 1e-8) return point;
@@ -36,6 +36,21 @@ function pitchParallax(layer: LayerBinding): number {
 function smoothstep01(value: number): number {
   const t = clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
+}
+
+export function torsoVolumeAt(profile: TorsoVolumeProfile, normalizedTorsoY: number): number {
+  const y = clamp(normalizedTorsoY, 0, 1);
+  const points = profile.points;
+  if (y <= points[0]!.position) return points[0]!.depth;
+  if (y >= points.at(-1)!.position) return points.at(-1)!.depth;
+  for (let index = 1; index < points.length; index += 1) {
+    const right = points[index]!;
+    const left = points[index - 1]!;
+    if (y > right.position) continue;
+    const amount = smoothstep01((y - left.position) / Math.max(1e-9, right.position - left.position));
+    return left.depth + (right.depth - left.depth) * amount;
+  }
+  return 0;
 }
 
 function chainValue(chain: MotionChainState | undefined, axis: "x" | "y", free: number): number {
@@ -160,21 +175,74 @@ function hasSidePerspective(layer: LayerBinding): boolean {
   return layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash" || layer.role === "eyeClosed" || layer.role === "eyebrow" || layer.role === "ear";
 }
 
-function vertexInfluence(layer: LayerBinding, channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin", index: number | undefined, fallback: number): number {
+function vertexInfluence(layer: LayerBinding, channel: MeshInfluenceChannel, index: number | undefined, fallback: number): number {
   if (index === undefined) return fallback;
   return clamp(layer.mesh.influences?.[channel]?.[index] ?? fallback, 0, 1);
 }
 
-function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
+function applyAuthoredHairStrands(
+  point: Point,
+  base: Point,
+  layer: LayerBinding,
+  state: MotionState,
+  vertexIndex: number | undefined,
+  faceHeight: number,
+  layerWeight: number
+): boolean {
+  if (vertexIndex === undefined || !layer.hairStrands || !state.secondary?.hairStrands) return false;
+  const hasAuthoredState = layer.hairStrands.some((strand) => state.secondary?.hairStrands?.[strand.id]);
+  if (!hasAuthoredState) return false;
+  const rotationScale = layer.role === "frontHair" ? 2.45 : layer.role === "sideHair" ? 3.15 : 3.65;
+  const liftScale = layer.role === "frontHair" ? 0.24 : layer.role === "sideHair" ? 0.64 : 0.84;
+  for (const strand of layer.hairStrands) {
+    const chain = state.secondary.hairStrands[strand.id];
+    const ownership = clamp(strand.weights[vertexIndex] ?? 0, 0, 1);
+    const release = clamp(strand.release[vertexIndex] ?? 0, 0, 1);
+    if (!chain || ownership <= 1e-6 || release <= 1e-6) continue;
+    const strandWeight = layerWeight * ownership;
+    const bend = chainValue(chain, "x", release);
+    const lift = chainValue(chain, "y", release);
+    addLocalRotation(point, base, strand.root, bend * rotationScale * strandWeight, 1);
+    point.y += lift * faceHeight * liftScale * strandWeight * release;
+  }
+  // The authored strand system owns the whole layer, including pinned roots.
+  // Returning true here prevents the legacy left/right chain from being
+  // applied a second time to vertices whose release is intentionally zero.
+  return true;
+}
+
+export interface DeformationFrameContext {
+  state: MotionState;
+  envelope: PuppetLoomProject["runtime"]["envelope"];
+  faceWidth: number;
+  faceHeight: number;
+  headPivot: Point;
+  bodyPivot: Point;
+  yaw: number;
+  pitch: number;
+  headRoll: number;
+  bodyRoll: number;
+}
+
+/** Precomputes values shared by every vertex in one rendered frame. */
+export function createDeformationFrameContext(project: PuppetLoomProject, resolvedState: MotionState): DeformationFrameContext {
   const envelope = project.runtime.envelope;
-  const faceWidth = Math.max(0.08, Math.abs((project.anchors.cheekLeft?.x ?? 0.6) - (project.anchors.cheekRight?.x ?? 0.4)) / 0.64);
-  const faceHeight = Math.max(0.1, Math.abs((project.anchors.chin?.y ?? 0.5) - (project.anchors.forehead?.y ?? 0.25)) / 0.78);
-  const headPivot = project.anchors.neck ?? project.anchors.chin ?? { x: 0.5, y: 0.42 };
-  const bodyPivot = project.anchors.bodyCenter ?? { x: 0.5, y: 0.65 };
-  const yaw = clamp(state.headYaw, -1, 1) * envelope.headYaw;
-  const pitch = clamp(state.headPitch, -1, 1) * envelope.headPitch;
-  const headRoll = (clamp(state.headRoll, -1, 1) * envelope.headRollDegrees * Math.PI) / 180;
-  const bodyRoll = (clamp(state.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180;
+  return {
+    state: resolvedState,
+    envelope,
+    faceWidth: Math.max(0.08, Math.abs((project.anchors.cheekLeft?.x ?? 0.6) - (project.anchors.cheekRight?.x ?? 0.4)) / 0.64),
+    faceHeight: Math.max(0.1, Math.abs((project.anchors.chin?.y ?? 0.5) - (project.anchors.forehead?.y ?? 0.25)) / 0.78),
+    headPivot: project.anchors.neck ?? project.anchors.chin ?? { x: 0.5, y: 0.42 },
+    bodyPivot: project.anchors.bodyCenter ?? { x: 0.5, y: 0.65 },
+    yaw: clamp(resolvedState.headYaw, -1, 1) * envelope.headYaw,
+    pitch: clamp(resolvedState.headPitch, -1, 1) * envelope.headPitch,
+    headRoll: (clamp(resolvedState.headRoll, -1, 1) * envelope.headRollDegrees * Math.PI) / 180,
+    bodyRoll: (clamp(resolvedState.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180
+  };
+}
+
+function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, frame: DeformationFrameContext, vertexIndex?: number): Point {
+  const { state, envelope, faceWidth, faceHeight, headPivot, bodyPivot, yaw, pitch, headRoll, bodyRoll } = frame;
   const release = 1 - vertexInfluence(layer, "pin", vertexIndex, 0);
   const bodyLayerWeight = layer.weights.body * vertexInfluence(layer, "body", vertexIndex, 1) * release;
   const headLayerWeight = layer.weights.head * vertexInfluence(layer, "head", vertexIndex, 1) * release;
@@ -215,6 +283,15 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
       const pitchScale = 1 - bodyPitch * 0.012 * bodyWeight * upperFollow;
       point.x = bodyPivot.x + (point.x - bodyPivot.x) * pitchScale;
     }
+    if (project.runtime.torsoVolumeProfile && (layer.role === "topWear" || layer.role === "bottomWear")) {
+      const shoulderY = project.anchors.shoulderLeft && project.anchors.shoulderRight
+        ? (project.anchors.shoulderLeft.y + project.anchors.shoulderRight.y) * 0.5
+        : project.anchors.neck?.y ?? bodyPivot.y - faceHeight * 0.55;
+      const hipY = Math.max(shoulderY + faceHeight * 0.9, bodyPivot.y + faceHeight * 0.72);
+      const torsoY = clamp((base.y - shoulderY) / Math.max(1e-6, hipY - shoulderY), 0, 1);
+      const depth = torsoVolumeAt(project.runtime.torsoVolumeProfile, torsoY) * project.runtime.torsoVolumeProfile.strength;
+      point.x += bodyTurn * faceWidth * depth * 0.24 * bodyLayerWeight;
+    }
     if (layer.side !== "center") {
       const side = layer.side === "left" ? 1 : -1;
       point.x += bodyTurn * side * faceWidth * 0.006 * bodyWeight;
@@ -227,11 +304,17 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     const neckV = layer.role === "neck" ? clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1) : 0;
     const headWeight = headLayerWeight * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
     if (project.runtime.poseField) {
-      const posed = applyCoherentPoseField(project.runtime.poseField, layer, point, yaw, pitch, project.runtime.semanticCage, {
+      const blinkModified = (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && state.blink > 0;
+      // Static head-only vertices retain their project object identity here so
+      // the semantic-cage lookup can reuse topology weights across frames.
+      const poseInput = bodyLayerWeight === 0 && !blinkModified ? base : point;
+      const attachment = vertexIndex === undefined ? undefined : layer.mesh.influences?.headAttachment?.[vertexIndex];
+      const posed = applyCoherentPoseField(project.runtime.poseField, layer, poseInput, yaw, pitch, project.runtime.semanticCage, {
         face: vertexInfluence(layer, "face", vertexIndex, 1),
-        skull: vertexInfluence(layer, "skull", vertexIndex, 1)
+        skull: vertexInfluence(layer, "skull", vertexIndex, 1),
+        ...(attachment === undefined ? {} : { attachment: clamp(attachment, 0, 1) })
       });
-      point = { x: point.x + (posed.x - point.x) * headWeight, y: point.y + (posed.y - point.y) * headWeight };
+      point = { x: point.x + (posed.x - poseInput.x) * headWeight, y: point.y + (posed.y - poseInput.y) * headWeight };
     }
     else {
       if (layer.side !== "center" && hasSidePerspective(layer)) {
@@ -269,25 +352,29 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     const free = secondaryFree(layer, base);
     const weight = physicsLayerWeight;
     if (layer.role === "frontHair") {
-      const strand = frontHairSideGeometry(layer, base);
-      const strandChain = strand.screenSide < 0 ? state.secondary?.frontHairLeft : state.secondary?.frontHairRight;
-      const bangRelease = strand.bangRelease;
-      if (state.secondary) {
-        const sideBend = chainValue(strandChain, "x", strand.sideRelease);
-        const sideLift = chainValue(strandChain, "y", strand.sideRelease);
-        const bangBend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, bangRelease);
-        const bangLift = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "y", u, bangRelease);
-        addLocalRotation(point, base, strand.root, sideBend * 2.45 * weight, 1);
-        addLocalRotation(point, base, strand.bangRoot, bangBend * 1.35 * weight, 1);
-        point.y += sideLift * faceHeight * 0.22 * weight * strand.sideRelease;
-        point.y += bangLift * faceHeight * 0.16 * weight * bangRelease;
-      } else {
-        addLocalRotation(point, base, strand.root, state.hairX * 1.7 * weight * strand.sideRelease, 1);
-        addLocalRotation(point, base, strand.bangRoot, state.hairX * 0.9 * weight * bangRelease, 1);
-        point.y += state.hairY * faceHeight * 0.2 * weight * free;
+      if (!applyAuthoredHairStrands(point, base, layer, state, vertexIndex, faceHeight, weight)) {
+        const strand = frontHairSideGeometry(layer, base);
+        const strandChain = strand.screenSide < 0 ? state.secondary?.frontHairLeft : state.secondary?.frontHairRight;
+        const bangRelease = strand.bangRelease;
+        if (state.secondary) {
+          const sideBend = chainValue(strandChain, "x", strand.sideRelease);
+          const sideLift = chainValue(strandChain, "y", strand.sideRelease);
+          const bangBend = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "x", u, bangRelease);
+          const bangLift = pairedChainValue(state.secondary.frontHairLeft, state.secondary.frontHairRight, "y", u, bangRelease);
+          addLocalRotation(point, base, strand.root, sideBend * 2.45 * weight, 1);
+          addLocalRotation(point, base, strand.bangRoot, bangBend * 1.35 * weight, 1);
+          point.y += sideLift * faceHeight * 0.22 * weight * strand.sideRelease;
+          point.y += bangLift * faceHeight * 0.16 * weight * bangRelease;
+        } else {
+          addLocalRotation(point, base, strand.root, state.hairX * 1.7 * weight * strand.sideRelease, 1);
+          addLocalRotation(point, base, strand.bangRoot, state.hairX * 0.9 * weight * bangRelease, 1);
+          point.y += state.hairY * faceHeight * 0.2 * weight * free;
+        }
       }
     } else if (layer.role === "backHair" || layer.role === "sideHair") {
-      if (state.secondary) {
+      if (applyAuthoredHairStrands(point, base, layer, state, vertexIndex, faceHeight, weight)) {
+        // Every vertex is owned by one or more persisted strands.
+      } else if (state.secondary) {
         const bend = pairedChainValue(state.secondary.backHairLeft, state.secondary.backHairRight, "x", u, free);
         const lift = pairedChainValue(state.secondary.backHairLeft, state.secondary.backHairRight, "y", u, free);
         addLocalBend(point, base, layer.pivot, bend * 3.5 * weight, 1);
@@ -349,7 +436,8 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
 }
 
 export function deformPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, state: MotionState, vertexIndex?: number): Point {
-  return deformResolvedPoint(project, layer, base, resolveMotionState(project, state), vertexIndex);
+  const resolvedState = resolveMotionState(project, state);
+  return deformResolvedPoint(project, layer, base, createDeformationFrameContext(project, resolvedState), vertexIndex);
 }
 
 /**
@@ -366,14 +454,15 @@ export function invertDeformedPoint(
   initial: Point
 ): Point {
   const resolvedState = resolveMotionState(project, state);
+  const frame = createDeformationFrameContext(project, resolvedState);
   let current = { ...initial };
   const epsilon = 1e-5;
   for (let iteration = 0; iteration < 12; iteration += 1) {
-    const value = deformResolvedPoint(project, layer, current, resolvedState, vertexIndex);
+    const value = deformResolvedPoint(project, layer, current, frame, vertexIndex);
     const error = { x: target.x - value.x, y: target.y - value.y };
     if (Math.hypot(error.x, error.y) < 1e-8) break;
-    const dx = deformResolvedPoint(project, layer, { x: current.x + epsilon, y: current.y }, resolvedState, vertexIndex);
-    const dy = deformResolvedPoint(project, layer, { x: current.x, y: current.y + epsilon }, resolvedState, vertexIndex);
+    const dx = deformResolvedPoint(project, layer, { x: current.x + epsilon, y: current.y }, frame, vertexIndex);
+    const dy = deformResolvedPoint(project, layer, { x: current.x, y: current.y + epsilon }, frame, vertexIndex);
     const j00 = (dx.x - value.x) / epsilon;
     const j10 = (dx.y - value.y) / epsilon;
     const j01 = (dy.x - value.x) / epsilon;
@@ -395,7 +484,13 @@ export function invertDeformedPoint(
 export function deformedPoints(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): Point[] {
   const resolvedState = resolveMotionState(project, state);
   const authored = evaluateLayerAuthoring(project, layer, resolvedState);
-  return authored.points.map((point, index) => deformResolvedPoint(project, layer, point, resolvedState, index));
+  const frame = createDeformationFrameContext(project, resolvedState);
+  return authored.points.map((point, index) => deformResolvedPoint(project, layer, point, frame, index));
+}
+
+/** Deforms one cached authoring result with a state already returned by resolveMotionState. */
+export function deformedAuthoredPoints(project: PuppetLoomProject, layer: LayerBinding, authoredPoints: Point[], resolvedState: MotionState, frame = createDeformationFrameContext(project, resolvedState)): Point[] {
+  return authoredPoints.map((point, index) => deformResolvedPoint(project, layer, point, frame, index));
 }
 
 export const neutralMotionState: MotionState = {

@@ -80,6 +80,23 @@ describe("primary model Agent", () => {
     expect(mouth.operations.filter((operation) => operation.op === "upsert-expression")).toHaveLength(3);
   });
 
+  it("carries head contour, depth and occlusion decisions into runtime calibration", () => {
+    const value = project();
+    value.runtime.poseField = { kind: "ellipsoid-v1", center: { x: 0.5, y: 0.3 }, radiusX: 0.2, radiusY: 0.22, maxYawRadians: 0.2, maxPitchRadians: 0.2, perspective: 0.12 };
+    const proposal = createPrimaryPartAgentProposal(value, {
+      part: "headFace",
+      instruction: "远侧眼不要穿出轮廓",
+      intent: {
+        amplitude: 0.9, response: 0.72, stability: 0.7, yawDegrees: 14, pitchUpDegrees: 12, pitchDownDegrees: 15,
+        contourStrength: 1.2, depthStrength: 1.1, farEyeOpacity: 0.66, farBrowOpacity: 0.75,
+        farEarOpacity: 0.5, farSideHairOpacity: 0.7, occlusionFadeStart: 0.55, sideHairDepthSwap: true,
+        explanation: ["检查了九向姿态。"]
+      }
+    });
+    expect(proposal.overrides.runtime?.poseField).toEqual(expect.objectContaining({ contourStrength: 1.2, depthStrength: 1.1 }));
+    expect(proposal.overrides.runtime?.poseOcclusion).toEqual(expect.objectContaining({ farEyeOpacity: 0.66, fadeStart: 0.55, sideHairDepthSwap: true }));
+  });
+
   it("does not erase accepted front-hair authoring while improving the head", () => {
     const value = project();
     value.layers.push(layer("front-hair", "frontHair", "center", { x: 0.3, y: 0.08, width: 0.4, height: 0.34 }));

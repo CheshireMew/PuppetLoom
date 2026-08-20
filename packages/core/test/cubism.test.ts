@@ -2,9 +2,10 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCubismExportPlan, createCubismParameterMappings, generateCubismSidecars, mapCubismParameterValue } from "../src/cubism-format.js";
-import { CubismEditorClient, CubismRpcError, executeCubismEditorOperations, inspectCubismEditor, type CubismRpc, type CubismWebSocketLike } from "../src/cubism-bridge.js";
+import { CubismEditorClient, CubismRpcError, executeCubismEditorOperations, inspectCubismEditor, validateCubismEditorProject, type CubismRpc, type CubismWebSocketLike } from "../src/cubism-bridge.js";
 import { verifyCubismModel } from "../src/cubism-export.js";
 import { createDefaultAuthoringModel } from "../src/model.js";
+import { createProject, loadProject } from "../src/project.js";
 import type { AuthoringModel, LayerBinding, PuppetLoomProject } from "../src/types.js";
 import { artifactPath } from "../../../test/support/artifacts.js";
 
@@ -152,6 +153,34 @@ describe("Cubism official bridge", () => {
     });
     await expect(executeCubismEditorOperations(failed, "model", [{ method: "AddParameter", data: { Id: "ParamBad" }, description: "bad" }])).rejects.toThrow("事务已回滚");
     expect(failed.calls.at(-1)).toMatchObject({ method: "EditEnd", data: { Cancel: true } });
+  });
+
+  it("validates an Editor model against the exact project revision and keeps manual geometry blockers visible", async () => {
+    const projectDirectory = artifactPath(`cubism-editor-validation-${process.pid}-${Date.now()}`);
+    await createProject({ input: "test/fixtures/semantic.psd", output: projectDirectory, seed: 42 });
+    const source = await loadProject(projectDirectory);
+    const plan = buildCubismExportPlan(source, 0);
+    const parameters = plan.mappings.flatMap((mapping) => mapping.targetIds.map((Id) => ({
+      Id, Name: Id, Min: mapping.targetRange.min, Default: mapping.targetRange.default, Max: mapping.targetRange.max
+    })));
+    const rpc = new FakeRpc((method) => {
+      if (method === "GetIsApproval" || method === "GetIsEditApproval") return { Result: true };
+      if (method === "GetCurrentModelUID") return { ModelUID: "formal-model" };
+      if (method === "GetCurrentEditMode") return { EditMode: "Modeling" };
+      if (method === "GetParameters") return { Parameters: parameters };
+      if (method === "GetPartStructure") return { PartStructure: { Id: "root", Name: "Root", Type: "Part", Entries: source.layers.map((layer) => ({ Id: `art-${layer.id}`, Name: layer.sourceName, Type: "ArtMesh" })) } };
+      return {};
+    });
+    const pre = await validateCubismEditorProject(projectDirectory, rpc, "pre-sync", { url: "ws://fixture" });
+    expect(pre.layerCoverage.matched).toBe(source.layers.length);
+    expect(pre.parameterCoverage.missing).toHaveLength(0);
+    expect(pre.readyForPartialSync).toBe(true);
+    expect(pre.readyForStrictSync).toBe(false);
+    expect(pre.manualGeometryReviewRequired.length).toBeGreaterThan(0);
+
+    const post = await validateCubismEditorProject(projectDirectory, rpc, "post-sync", { url: "ws://fixture" });
+    expect(post.readyForOfficialExportReview).toBe(false);
+    expect(post.issues.some((issue) => issue.severity === "blocking" && pre.manualGeometryReviewRequired.includes(issue.target ?? issue.code))).toBe(true);
   });
 
   it("validates model references, MOC3 header and decodable textures", async () => {

@@ -106,20 +106,22 @@ function activeBehaviorValues(project: PuppetLoomProject, state: MotionState): {
 } {
   const values = { parameters: {} as Record<string, number>, expressions: { ...(state.expressions ?? {}) } };
   const model = modelFor(project);
-  const active: Array<{ behavior: ModelBehavior; timeSeconds: number }> = [];
+  const active: Array<{ behavior: ModelBehavior; timeSeconds: number; weight: number }> = [];
   if (state.timeSeconds !== undefined) {
-    for (const behavior of model.behaviors) if (behavior.autoplay) active.push({ behavior, timeSeconds: state.timeSeconds });
+    for (const behavior of model.behaviors) if (behavior.autoplay) active.push({ behavior, timeSeconds: state.timeSeconds, weight: 1 });
   }
   if (state.behavior) {
     const behavior = model.behaviors.find((candidate) => candidate.id === state.behavior!.id);
-    if (behavior) active.push({ behavior, timeSeconds: state.behavior.timeSeconds });
+    if (behavior) active.push({ behavior, timeSeconds: state.behavior.timeSeconds, weight: clamp(state.behavior.weight ?? 1, 0, 1) });
   }
   for (const entry of active) {
     const local = behaviorTime(entry.behavior, entry.timeSeconds);
     for (const track of entry.behavior.tracks) {
       const value = trackValue(track, local);
-      if (track.target.kind === "parameter") values.parameters[track.target.id] = value;
-      else values.expressions[track.target.id] = clamp(value, 0, 1);
+      if (track.target.kind === "parameter") {
+        const parameter = model.parameters.find((candidate) => candidate.id === track.target.id);
+        values.parameters[track.target.id] = parameter ? parameter.default + (value - parameter.default) * entry.weight : value;
+      } else values.expressions[track.target.id] = clamp(value * entry.weight, 0, 1);
     }
   }
   return values;
@@ -355,9 +357,10 @@ export interface EvaluatedLayerAuthoring {
   drawOrderOffset: number;
 }
 
-export function evaluateLayerAuthoring(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): EvaluatedLayerAuthoring {
-  const parameters = resolveParameterValues(project, state);
-  const bindingWeights = bindingsFor(project, "layer", layer.id).map((binding) => weightedKeyforms(binding, parameters));
+function evaluateLayerAuthoringParameters(project: PuppetLoomProject, layer: LayerBinding, parameters: Record<string, number>): EvaluatedLayerAuthoring {
+  const bindings = bindingsFor(project, "layer", layer.id);
+  if (bindings.length === 0 && !layer.deformerId) return { points: layer.mesh.points, opacityMultiplier: 1, drawOrderOffset: 0 };
+  const bindingWeights = bindings.map((binding) => weightedKeyforms(binding, parameters));
   const points = layer.mesh.points.map((base, index) => {
     let current = { ...base };
     for (const weights of bindingWeights) addPoint(current, sampledPoint(weights, "meshPointDeltas", index), 1);
@@ -373,4 +376,13 @@ export function evaluateLayerAuthoring(project: PuppetLoomProject, layer: LayerB
     opacityMultiplier: bindingWeights.reduce((value, weights) => value * sampledNumber(weights, "opacityMultiplier", 1), 1),
     drawOrderOffset: bindingWeights.reduce((value, weights) => value + sampledNumber(weights, "drawOrderOffset", 0), 0)
   };
+}
+
+export function evaluateLayerAuthoring(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): EvaluatedLayerAuthoring {
+  return evaluateLayerAuthoringParameters(project, layer, resolveParameterValues(project, state));
+}
+
+/** Hot-path variant for a state already returned by resolveMotionState. */
+export function evaluateLayerAuthoringResolved(project: PuppetLoomProject, layer: LayerBinding, resolvedState: MotionState): EvaluatedLayerAuthoring {
+  return evaluateLayerAuthoringParameters(project, layer, resolvedState.parameters ?? resolveParameterValues(project, resolvedState));
 }

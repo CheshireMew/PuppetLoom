@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthoringModel,
   CalibrationOverrides,
+  FaceDepthLandmark,
   LayerBinding,
   MotionState,
   Point,
   PoseValidation,
   RevisionComparisonResult,
-  SecondaryMotionPart
+  SecondaryMotionPart,
+  TorsoVolumeLandmark,
+  TorsoVolumeProfile
 } from "@puppetloom/core";
 import {
   applyCalibrationOverrides,
+  defaultTorsoVolumeProfile,
   deformedPoints,
   evaluateLayerAuthoring,
   invertDeformedPoint,
@@ -579,7 +583,29 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     commit(mergeCalibrationOverrides(pending, { runtime: { secondaryMotionTuning: { [part]: { [key]: value } } } }));
   }
 
-  function setVertexInfluence(channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin", value: number): void {
+  function setFaceDepth(landmark: FaceDepthLandmark, depth: number): void {
+    const profile = project?.runtime.poseField?.faceDepthProfile;
+    if (!profile) return;
+    commit(mergeCalibrationOverrides(pending, {
+      runtime: {
+        poseField: {
+          faceDepthProfile: {
+            ...clone(profile),
+            points: profile.points.map((point) => point.id === landmark ? { ...point, depth } : point)
+          }
+        }
+      }
+    }));
+  }
+
+  function setTorsoVolume(landmark: TorsoVolumeLandmark | "strength", value: number): void {
+    const profile: TorsoVolumeProfile = clone(project?.runtime.torsoVolumeProfile ?? defaultTorsoVolumeProfile(1));
+    if (landmark === "strength") profile.strength = value;
+    else profile.points = profile.points.map((point) => point.id === landmark ? { ...point, depth: value } : point);
+    commit(mergeCalibrationOverrides(pending, { runtime: { torsoVolumeProfile: profile } }));
+  }
+
+  function setVertexInfluence(channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin" | "headAttachment" | "physicsRelease", value: number): void {
     if (!selectedLayer || selectedVertex === undefined) return;
     setLayerProperty({ vertexInfluences: { [channel]: { [selectedVertex]: value } } });
   }
@@ -953,6 +979,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onRuntimeTuning={setRuntimeTuning}
           onSecondaryPart={setSecondaryPart}
           onSecondaryTuning={setSecondaryTuning}
+          onFaceDepth={setFaceDepth}
+          onTorsoVolume={setTorsoVolume}
           onLabel={setLabel}
           onSave={() => void save()}
           onDiscard={() => void discardDraft()}

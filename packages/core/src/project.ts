@@ -246,7 +246,7 @@ async function writePoseSheet(output: string, imported: ImportedPsd, project: Pu
   await sharp({ create: { width: cellWidth * columns, height: cellHeight * rows, channels: 4, background: { r: 24, g: 29, b: 39, alpha: 1 } } }).composite(composites).png().toFile(output);
 }
 
-function buildReport(project: PuppetLoomProject, recognized: number, warnings: string[], assetRequestCount: number): BuildReport {
+function buildReport(project: PuppetLoomProject, recognized: number, warnings: string[], assetRequestCount: number, importPreflight: BuildReport["importPreflight"]): BuildReport {
   const featureEntries = Object.entries(project.runtime.features);
   return {
     version: 1,
@@ -260,6 +260,7 @@ function buildReport(project: PuppetLoomProject, recognized: number, warnings: s
     warnings,
     quality: project.quality,
     assetRequestCount,
+    importPreflight,
     ...(project.runtime.semanticCage ? {
       landmarkCalibration: {
         ...project.runtime.semanticCage.validation,
@@ -273,7 +274,10 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   const input = resolve(options.input);
   const finalOutput = resolve(options.output);
   const outputExisted = await ensureWritableOutput(finalOutput);
-  const imported = await importPsd(input);
+  const imported = await importPsd(input, {
+    ...(options.alphaCleanup ? { alphaCleanup: options.alphaCleanup } : {}),
+    ...(options.cleanAlpha !== undefined ? { cleanAlpha: options.cleanAlpha } : {})
+  });
   const inspection = inspectionFromImported(imported);
   const name = options.name?.trim() || parse(input).name;
   const referencePng = options.reference ? await sharp(resolve(options.reference)).png().toBuffer() : undefined;
@@ -294,7 +298,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   }
   project = applySafetyLimits(project);
   const requests = makeAssetRequests(project);
-  const report = buildReport(project, inspection.recognizedLayerCount, imported.warnings, requests.requests.length);
+  const report = buildReport(project, inspection.recognizedLayerCount, imported.warnings, requests.requests.length, inspection.preflight);
   const operationId = randomUUID();
   const stagingOutput = join(dirname(finalOutput), `.${basename(finalOutput)}.puppetloom-pending-${operationId}`);
   const reservation = join(dirname(finalOutput), `.${basename(finalOutput)}.puppetloom-reserved-${operationId}`);
@@ -334,6 +338,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
     await writeFile(join(output, "puppetloom.json"), `${JSON.stringify(project, null, 2)}\n`, "utf8");
     await writeFreshCalibration(output);
     await writeFile(join(output, "reports", "build-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    await writeFile(join(output, "reports", "import-preflight.json"), `${JSON.stringify(inspection, null, 2)}\n`, "utf8");
     await writeFile(join(output, "requests", "asset-requests.json"), `${JSON.stringify(requests, null, 2)}\n`, "utf8");
     const verification = await (await import("./verify.js")).verifyProject(output);
     if (!verification.valid) throw new PuppetLoomError("INVALID_PROJECT", `生成项目未通过发布前验证：${verification.warnings.join("；")}`);
@@ -522,6 +527,7 @@ export async function describeProject(projectDirectory: string, layerId?: string
     bounds: selected.bounds,
     pivot: selected.pivot,
     ...(selected.secondaryAnchors ? { secondaryAnchors: selected.secondaryAnchors } : {}),
+    ...(selected.hairStrands ? { hairStrands: selected.hairStrands } : {}),
     weights: selected.weights,
     ...(selected.clipLayerId ? { clipLayerId: selected.clipLayerId } : {}),
     ...(selected.mouthVariant ? { mouthVariant: selected.mouthVariant } : {}),
@@ -562,9 +568,9 @@ export async function describeProject(projectDirectory: string, layerId?: string
           position,
           delta: { x: position.x - basePosition.x, y: position.y - basePosition.y },
           uv,
-          influences: Object.fromEntries((["face", "skull", "head", "body", "gaze", "physics", "pin"] as const).map((channel) => [
+          influences: Object.fromEntries((["face", "skull", "head", "body", "gaze", "physics", "pin", "headAttachment", "physicsRelease"] as const).map((channel) => [
             channel,
-            selected.mesh.influences?.[channel]?.[index] ?? (channel === "pin" ? 0 : 1)
+            selected.mesh.influences?.[channel]?.[index] ?? (channel === "pin" || channel === "physicsRelease" ? 0 : 1)
           ])) as Record<import("./types.js").MeshInfluenceChannel, number>
         };
       }),
@@ -609,6 +615,7 @@ export async function describeProject(projectDirectory: string, layerId?: string
       bounds: layer.bounds,
       pivot: layer.pivot,
       ...(layer.secondaryAnchors ? { secondaryAnchors: layer.secondaryAnchors } : {}),
+      ...(layer.hairStrands ? { hairStrands: layer.hairStrands } : {}),
       mesh: {
         topology: layer.mesh.topology,
         ...(layer.mesh.rows !== undefined ? { rows: layer.mesh.rows } : {}),

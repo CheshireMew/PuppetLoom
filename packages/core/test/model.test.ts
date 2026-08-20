@@ -146,6 +146,7 @@ describe("AI authoring model", () => {
     expect(resolveParameterValues(value, { ...neutralMotionState, timeSeconds: 0.5 }).smile).toBeCloseTo(0.5);
     expect(resolveParameterValues(value, { ...neutralMotionState, timeSeconds: 0.5, parameters: { smile: 0.2 } }).smile).toBe(0.2);
     expect(resolveParameterValues(value, { ...neutralMotionState, expressions: { happy: 0.75 } }).smile).toBe(0.75);
+    expect(resolveParameterValues(value, { ...neutralMotionState, behavior: { id: "idle-expression", timeSeconds: 1, weight: 0.4 } }).smile).toBeCloseTo(0.4);
   });
 
   it("runs authored parameter physics deterministically and lets an explicit output override it", () => {

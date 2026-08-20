@@ -44,6 +44,23 @@ contextBridge.exposeInMainWorld("puppetloom", {
   controlViewer: (id: number, action: string) => ipcRenderer.invoke("viewer:control", id, action),
   viewerAction: (action: string) => ipcRenderer.invoke("viewer:self-control", action),
   pointerTarget: () => ipcRenderer.invoke("viewer:pointer-target"),
+  runtimeControl: () => ipcRenderer.invoke("viewer:runtime-control"),
+  runtimeDescriptor: () => ipcRenderer.invoke("viewer:runtime-descriptor"),
+  runtimeAssets: () => ipcRenderer.invoke("runtime:assets"),
+  setRuntimeSource: (source: unknown) => ipcRenderer.invoke("viewer:runtime-set", source),
+  releaseRuntimeSource: (sourceId: string) => ipcRenderer.invoke("viewer:runtime-release", sourceId),
+  triggerRuntimeTarget: (target: unknown) => ipcRenderer.invoke("viewer:runtime-trigger", target),
+  inputRecording: (action: "start" | "stop") => ipcRenderer.invoke("viewer:input-recording", action),
+  inputReplay: (action: "start" | "stop") => ipcRenderer.invoke("viewer:input-replay", action),
+  onRuntimeControl: (listener: (snapshot: unknown) => void) => {
+    const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);
+    ipcRenderer.on("viewer:runtime-control-changed", handler);
+    return () => ipcRenderer.removeListener("viewer:runtime-control-changed", handler);
+  },
+  startPerformanceRecording: (metadata: unknown) => ipcRenderer.invoke("viewer:performance-recording-start", metadata),
+  appendPerformanceRecording: (id: string, bytes: Uint8Array) => ipcRenderer.invoke("viewer:performance-recording-append", id, bytes),
+  stopPerformanceRecording: (id: string, durationMs: number) => ipcRenderer.invoke("viewer:performance-recording-stop", id, durationMs),
+  failPerformanceRecording: (id: string, error: string) => ipcRenderer.invoke("viewer:performance-recording-fail", id, error),
   onViewerState: (listener: (state: unknown) => void) => {
     const handler = (_event: unknown, state: unknown) => listener(state);
     ipcRenderer.on("viewer:state", handler);

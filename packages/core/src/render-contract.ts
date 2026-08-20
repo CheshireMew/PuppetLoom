@@ -1,4 +1,5 @@
-import { evaluateLayerAuthoring, resolveMotionState } from "./model.js";
+import { evaluateLayerAuthoring, evaluateLayerAuthoringResolved, resolveMotionState, type EvaluatedLayerAuthoring } from "./model.js";
+import { poseDependentOpacity, poseDependentOrder } from "./pose-occlusion.js";
 import type { LayerBinding, MotionState, PuppetLoomProject } from "./types.js";
 
 const eyeSurfaceRoles = new Set(["eyeWhite", "iris", "eyelash"]);
@@ -22,8 +23,12 @@ export function layersInRenderOrder(layers: LayerBinding[]): LayerBinding[] {
 
 /** Authoring-aware order used by all renderers. */
 export function authoredLayersInRenderOrder(project: PuppetLoomProject, state: MotionState): LayerBinding[] {
-  const offsets = new Map(project.layers.map((layer) => [layer.id, evaluateLayerAuthoring(project, layer, state).drawOrderOffset]));
-  const effectiveOrder = (layer: LayerBinding): number => layer.order + (offsets.get(layer.id) ?? 0);
+  const resolved = resolveMotionState(project, state);
+  const offsets = new Map(project.layers.map((layer) => [layer.id, evaluateLayerAuthoring(project, layer, resolved).drawOrderOffset]));
+  const authoredOrder = (layer: LayerBinding): number => layer.order + (offsets.get(layer.id) ?? 0);
+  const face = project.layers.find((layer) => layer.role === "face");
+  const faceOrder = face ? authoredOrder(face) : undefined;
+  const effectiveOrder = (layer: LayerBinding): number => poseDependentOrder(project, layer, resolved, authoredOrder(layer), faceOrder);
   const ordered = project.layers.filter((layer) => layer.visible !== false).sort((left, right) => effectiveOrder(left) - effectiveOrder(right));
   const slots = ordered.map((layer, index) => eyeSurfaceRoles.has(layer.role) ? index : -1).filter((index) => index >= 0);
   const eyeLayers = ordered
@@ -52,7 +57,43 @@ export function opacityFor(layer: LayerBinding, state: MotionState): number {
 /** Authoring-aware opacity used by all renderers. */
 export function authoredOpacityFor(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): number {
   const resolved = resolveMotionState(project, state);
-  return Math.max(0, Math.min(1, opacityFor(layer, resolved) * evaluateLayerAuthoring(project, layer, resolved).opacityMultiplier));
+  return Math.max(0, Math.min(1, opacityFor(layer, resolved) * evaluateLayerAuthoring(project, layer, resolved).opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
+}
+
+export interface AuthoredRenderFrameLayer {
+  layer: LayerBinding;
+  authoring: EvaluatedLayerAuthoring;
+  opacity: number;
+}
+
+export interface AuthoredRenderFrame {
+  state: MotionState;
+  layers: AuthoredRenderFrameLayer[];
+  authoringByLayerId: Map<string, EvaluatedLayerAuthoring>;
+}
+
+/** Resolves parameters and expensive authored geometry once for an entire render frame. */
+export function authoredRenderFrame(project: PuppetLoomProject, state: MotionState): AuthoredRenderFrame {
+  const resolved = resolveMotionState(project, state);
+  const authoringByLayerId = new Map(project.layers.map((layer) => [layer.id, evaluateLayerAuthoringResolved(project, layer, resolved)]));
+  const authoredOrder = (layer: LayerBinding): number => layer.order + (authoringByLayerId.get(layer.id)?.drawOrderOffset ?? 0);
+  const face = project.layers.find((layer) => layer.role === "face");
+  const faceOrder = face ? authoredOrder(face) : undefined;
+  const effectiveOrder = (layer: LayerBinding): number => poseDependentOrder(project, layer, resolved, authoredOrder(layer), faceOrder);
+  const ordered = project.layers.filter((layer) => layer.visible !== false).sort((left, right) => effectiveOrder(left) - effectiveOrder(right));
+  const slots = ordered.map((layer, index) => eyeSurfaceRoles.has(layer.role) ? index : -1).filter((index) => index >= 0);
+  const eyeLayers = ordered.filter((layer) => eyeSurfaceRoles.has(layer.role))
+    .sort((left, right) => eyeSurfaceRank(left) - eyeSurfaceRank(right) || left.side.localeCompare(right.side) || effectiveOrder(left) - effectiveOrder(right));
+  slots.forEach((slot, index) => { ordered[slot] = eyeLayers[index]!; });
+  return {
+    state: resolved,
+    authoringByLayerId,
+    layers: ordered.map((layer) => {
+      const authoring = authoringByLayerId.get(layer.id)!;
+      const opacity = Math.max(0, Math.min(1, opacityFor(layer, resolved) * authoring.opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
+      return { layer, authoring, opacity };
+    })
+  };
 }
 
 export type SupportedBlendMode = "normal" | "multiply" | "screen" | "add" | "darken" | "lighten";

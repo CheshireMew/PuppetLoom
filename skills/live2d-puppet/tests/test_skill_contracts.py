@@ -46,6 +46,8 @@ class SkillContractTests(unittest.TestCase):
             "describe": ("--layer", "--revision"),
             "migrate": ("--input", "--output"),
             "enhance": ("--assets",),
+            "render": ("--output", "--suite", "--revision", "--size", "--focus"),
+            "evidence": ("--project", "--session", "--status"),
             "record": ("--mode", "--duration", "--fps", "--revision"),
             "play": ("--revision",),
         }
@@ -163,13 +165,55 @@ class SkillContractTests(unittest.TestCase):
         self.assertLess(restored, stopped)
 
     def test_visual_rules_preserve_exposed_project_lessons(self) -> None:
-        for phrase in ("近大远小", "上下看是俯视/仰视", "脖子不是滞后的头发", "前发根部随头骨", "耳朵以头侧根部为铰链", "尾巴以身体连接处为锚点", "脚不能随呼吸位移", "十五种嘴形"):
+        for phrase in ("近大远小", "上下看是俯视/仰视", "脖子不是滞后的头发", "前发根部随头骨", "耳朵以头侧根部为铰链", "尾巴以身体连接处为锚点", "脚不能随呼吸位移", "十五种嘴形", "同一 ArtMesh", "源图像像素"):
             self.assertIn(phrase, self.skill + self.visual)
 
-    def test_learning_does_not_promote_one_character_globally(self) -> None:
-        self.assertIn("一个角色的接受记录不足以修改通用自动绑定算法", self.learning)
+    def test_learning_requires_generic_causal_evidence_not_a_project_count_ritual(self) -> None:
+        self.assertIn("一个角色的接受记录本身不足以修改通用自动绑定算法", self.learning)
+        self.assertIn("至少两个项目", self.learning)
+        self.assertIn("不是绝对前置条件", self.learning)
+        self.assertIn("通用 fixture", self.learning)
+        self.assertIn("角色专用顶点列表", self.learning)
         self.assertIn("用户明确要求", self.learning)
         self.assertIn("$meta-skills", self.learning)
+
+    def test_mature_projects_are_audited_without_redundant_revisions(self) -> None:
+        combined = self.skill + self.workflow
+        for phrase in (
+            "先审查，后写入",
+            "若没有待修缺陷",
+            "不创建新 revision",
+            "整模 `apply` 不是整体事务",
+            "后续部位 `blocked`",
+            "当前只有前发 Agent",
+            "不能替代对全部历史 accepted 结果的视觉保护清单",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_user_constraints_and_candidate_acceptance_are_binding(self) -> None:
+        combined = self.skill + self.workflow + self.review + self.visual + self.learning
+        for phrase in (
+            "只使用现有素材",
+            "不得运行 `enhance`",
+            "不要视频",
+            "不运行 `record`",
+            "evidence --project <directory> --session <id> --status accepted",
+            "用户看候选前",
+            "最后接受的 revision",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_repeated_visual_failure_routes_to_root_cause_evidence(self) -> None:
+        combined = self.review + self.visual
+        for phrase in (
+            "源 Alpha",
+            "neutral 状态 ArtMesh",
+            "目标姿态下的网格/轮廓边界",
+            "最终实际像素",
+            "亚像素差异",
+            "共享网格不等于共享语义",
+        ):
+            self.assertIn(phrase, combined)
 
     def test_cubism_bridge_preserves_the_official_boundary(self) -> None:
         combined = self.skill + self.cubism

@@ -9,6 +9,8 @@ import type {
   CubismEditorObject,
   CubismEditorParameter,
   CubismEditorPreviewResult,
+  CubismEditorValidationResult,
+  CubismEditorValidationStage,
   CubismEditorSyncResult,
   CubismExportPlan,
   CubismParameterMapping,
@@ -265,6 +267,70 @@ function layerObject(project: PuppetLoomProject, objects: CubismEditorObject[], 
   const normalize = (value: string): string => value.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
   const relaxed = artMeshes.filter((object) => normalize(object.Name) === normalize(layer.sourceName));
   return relaxed.length === 1 ? relaxed[0] : undefined;
+}
+
+export async function validateCubismEditorProject(
+  projectDirectory: string,
+  rpc: CubismRpc,
+  stage: CubismEditorValidationStage,
+  options: { url?: string; apiVersion?: string } = {}
+): Promise<CubismEditorValidationResult> {
+  if (stage !== "pre-sync" && stage !== "post-sync") throw new PuppetLoomError("INVALID_INPUT", `未知 Cubism 校验阶段：${String(stage)}`);
+  const [project, calibration] = await Promise.all([loadProject(projectDirectory), loadCalibration(projectDirectory)]);
+  const plan = buildCubismExportPlan(project, calibration.revision);
+  const inspection = await inspectCubismEditor(rpc, options.url, options.apiVersion);
+  const issues: CubismEditorValidationResult["issues"] = [];
+  const issue = (code: string, severity: "blocking" | "warning" | "info", message: string, target?: string): void => {
+    issues.push({ code, severity, message, ...(target ? { target } : {}) });
+  };
+  if (!inspection.approved) issue("EDITOR_ALLOW_REQUIRED", "blocking", "Cubism Editor 尚未授予 Allow 权限。" );
+  if (!inspection.editApiAvailable) issue("EDITOR_EDIT_API_UNAVAILABLE", "blocking", "当前 Editor 没有 External API 1.1.0 编辑能力；结构同步需要 5.4 alpha 或更新版本。" );
+  if (!inspection.editApproved) issue("EDITOR_EDIT_APPROVAL_REQUIRED", "blocking", "Cubism Editor 尚未授予 Edit 权限。" );
+  if (!inspection.modelUid) issue("EDITOR_MODEL_REQUIRED", "blocking", "Cubism Editor 当前没有打开可编辑模型。" );
+  if (inspection.editMode !== "Modeling") issue("EDITOR_MODELING_MODE_REQUIRED", "blocking", `当前模式是 ${inspection.editMode ?? "unknown"}，必须切换到 Modeling。`);
+  for (const warning of inspection.warnings) issue("EDITOR_WARNING", "warning", warning);
+
+  const missingLayers = project.layers
+    .filter((layer) => !layerObject(project, inspection.objects, layer))
+    .map((layer) => ({ layerId: layer.id, sourceName: layer.sourceName }));
+  for (const layer of missingLayers) issue("ARTMESH_NOT_UNIQUELY_MATCHED", "blocking", `找不到唯一同名 ArtMesh：${layer.sourceName}`, layer.layerId);
+  const expectedParameters = plan.mappings.flatMap((mapping) => mapping.targetIds.map((id) => ({ id, range: mapping.targetRange })));
+  const actualParameters = new Map(inspection.parameters.map((parameter) => [parameter.Id, parameter]));
+  const missingParameters: string[] = [];
+  const rangeConflicts: string[] = [];
+  for (const expected of expectedParameters) {
+    const actual = actualParameters.get(expected.id);
+    if (!actual) {
+      missingParameters.push(expected.id);
+      issue("PARAMETER_MISSING", stage === "post-sync" ? "blocking" : "info", `${expected.id} 尚未创建${stage === "pre-sync" ? "，同步时可自动添加" : ""}。`, expected.id);
+      continue;
+    }
+    if (!closeEnough(actual.Min, expected.range.min) || !closeEnough(actual.Default, expected.range.default) || !closeEnough(actual.Max, expected.range.max)) {
+      rangeConflicts.push(expected.id);
+      issue("PARAMETER_RANGE_CONFLICT", "blocking", `${expected.id} 范围为 ${actual.Min}/${actual.Default}/${actual.Max}，目标范围是 ${expected.range.min}/${expected.range.default}/${expected.range.max}。`, expected.id);
+    }
+  }
+  for (const planIssue of plan.issues.filter((value) => value.severity === "blocking")) issues.push(planIssue);
+  const manualGeometryReviewRequired = [...new Set(plan.issues
+    .filter((value) => value.severity === "blocking")
+    .map((value) => value.target ?? value.code))];
+  const editorReady = inspection.approved && inspection.editApiAvailable && inspection.editApproved && Boolean(inspection.modelUid) && inspection.editMode === "Modeling";
+  const structuralReady = editorReady && missingLayers.length === 0 && rangeConflicts.length === 0;
+  const postParametersReady = stage === "pre-sync" || missingParameters.length === 0;
+  return {
+    project: project.name,
+    revision: calibration.revision,
+    stage,
+    inspection,
+    plan,
+    layerCoverage: { total: project.layers.length, matched: project.layers.length - missingLayers.length, missing: missingLayers },
+    parameterCoverage: { total: expectedParameters.length, matched: expectedParameters.length - missingParameters.length, missing: missingParameters, rangeConflicts },
+    readyForPartialSync: stage === "pre-sync" && structuralReady,
+    readyForStrictSync: stage === "pre-sync" && structuralReady && plan.strictReady,
+    readyForOfficialExportReview: stage === "post-sync" && structuralReady && postParametersReady && manualGeometryReviewRequired.length === 0,
+    manualGeometryReviewRequired,
+    issues
+  };
 }
 
 function targetParameterId(mapping: CubismParameterMapping, layer?: LayerBinding): string {

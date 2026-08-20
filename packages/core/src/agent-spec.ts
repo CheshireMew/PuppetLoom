@@ -13,6 +13,14 @@ export interface PrimaryPartIntentSpecification {
   yawDegrees?: number;
   pitchUpDegrees?: number;
   pitchDownDegrees?: number;
+  contourStrength?: number;
+  depthStrength?: number;
+  farEyeOpacity?: number;
+  farBrowOpacity?: number;
+  farEarOpacity?: number;
+  farSideHairOpacity?: number;
+  occlusionFadeStart?: number;
+  sideHairDepthSwap?: boolean;
 }
 
 export interface FrontHairIntentSpecification extends PrimaryPartIntentSpecification {
@@ -122,7 +130,18 @@ function headFaceIntent(value: unknown, path: string): PrimaryPartIntentSpecific
     ...primaryIntent(value, path),
     yawDegrees: numberIn(value, "yawDegrees", 10, 25, path),
     pitchUpDegrees: numberIn(value, "pitchUpDegrees", 8, 20, path),
-    pitchDownDegrees: numberIn(value, "pitchDownDegrees", 8, 20, path)
+    pitchDownDegrees: numberIn(value, "pitchDownDegrees", 8, 20, path),
+    contourStrength: value.contourStrength === undefined ? 1 : numberIn(value, "contourStrength", 0.4, 1.6, path),
+    depthStrength: value.depthStrength === undefined ? 1 : numberIn(value, "depthStrength", 0.4, 1.6, path),
+    farEyeOpacity: value.farEyeOpacity === undefined ? 0.68 : numberIn(value, "farEyeOpacity", 0, 1, path),
+    farBrowOpacity: value.farBrowOpacity === undefined ? 0.76 : numberIn(value, "farBrowOpacity", 0, 1, path),
+    farEarOpacity: value.farEarOpacity === undefined ? 0.55 : numberIn(value, "farEarOpacity", 0, 1, path),
+    farSideHairOpacity: value.farSideHairOpacity === undefined ? 0.72 : numberIn(value, "farSideHairOpacity", 0, 1, path),
+    occlusionFadeStart: value.occlusionFadeStart === undefined ? 0.58 : numberIn(value, "occlusionFadeStart", 0, 0.95, path),
+    sideHairDepthSwap: value.sideHairDepthSwap === undefined ? true : (() => {
+      if (typeof value.sideHairDepthSwap !== "boolean") throw new PuppetLoomError("INVALID_INPUT", `${path}.sideHairDepthSwap 必须是布尔值。`);
+      return value.sideHairDepthSwap;
+    })()
   };
 }
 
@@ -240,7 +259,11 @@ function defaultPartSpecification(part: ModelAgentPart): ModelAgentPartSpecifica
   return {
     part: part as PrimaryPartSpecification["part"],
     intent: part === "headFace"
-      ? { amplitude: 0.9, response: 0.72, stability: 0.7, yawDegrees: 12, pitchUpDegrees: 12, pitchDownDegrees: 14 }
+      ? {
+        amplitude: 0.9, response: 0.72, stability: 0.7, yawDegrees: 12, pitchUpDegrees: 12, pitchDownDegrees: 14,
+        contourStrength: 1, depthStrength: 1, farEyeOpacity: 0.68, farBrowOpacity: 0.76,
+        farEarOpacity: 0.55, farSideHairOpacity: 0.72, occlusionFadeStart: 0.58, sideHairDepthSwap: true
+      }
       : { amplitude: 0.76, response: 0.72, stability: 0.66 },
     rationale: ["自然、克制的主运动基线；外部 Agent 应在看图后调整。"]
   };

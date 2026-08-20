@@ -22,7 +22,7 @@
 
 ## 运行姿态字段
 
-新建且能可靠定位脸部的语义项目使用 `runtime.profile: "coherent-v3"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度和透视强度。`runtime.semanticCage` 保存 23 个标准化控制点、脸部与头骨三角形、受作用语义组，以及定位后的检查、修正和综合置信度。运行时让脸型与五官使用脸部控制网，让头发、耳朵和头饰使用头骨控制网；两者共享头部根节点，再按语义深度和局部权重混合。项目不保存针对某一张角色图手写的顶点动画。
+新建且能可靠定位脸部的语义项目使用 `runtime.profile: "coherent-v3"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度、透视强度，以及可选的轮廓和语义深度强度。`faceDepthProfile` 用从脸顶到脸底的标准位置保存额头、鼻根、鼻尖、上唇、下唇和下巴六个语义深度点；它只参与非中立姿态的 Z 投影。`runtime.poseOcclusion` 保存远侧部件开始淡出的 yaw 阈值、远侧眼/眉/耳/侧发的最低透明度，以及侧发是否按转向交换前后深度。可选的 `runtime.torsoVolumeProfile` 用肩线到髋线的四个语义点描述角色或服装确实需要的侧面体积，不自动套用统一身体假设。没有显式字段的旧姿势场使用稳定默认值，不会改写项目。`runtime.semanticCage` 保存 23 个标准化控制点、脸部与头骨三角形、受作用语义组，以及定位后的检查、修正和综合置信度。运行时让脸型与五官使用脸部控制网，让头发、耳朵和头饰使用头骨控制网；两者共享头部根节点，再按语义深度和局部权重混合。
 
 `runtime.motionTuning` 的 `amplitude`、`response` 和 `stability` 分别控制动作总幅度、追随速度和阻尼稳定度。它们作用于同一个头部目标，不会为不同部位生成互不相关的随机运动。读取器继续兼容 `coherent-v2` 双表面、`coherent-v1` 单表面和没有姿态场的 `calm-v1` 项目；没有控制笼的旧项目保持原来的双表面路径。
 
@@ -36,6 +36,8 @@
 
 `model.expressions` 是命名参数预设；`model.behaviors` 用参数或表情轨道、严格递增的时间关键帧、循环和可选自动播放组织状态变化；`model.physics` 用输入/输出参数、响应、阻尼和缩放建立无环参数物理。实时控制器以固定顺序推进物理，离线 authoring 证据可按 `settleSeconds` 预运行同一物理后再截图。
 
+桌面运行时控制不写进项目文件。每个来源包含稳定 ID、优先级、混合权重、可选 TTL，以及运动值、自定义参数和表情权重；高优先级来源在自主动作之后混合，过期来源自动释放。动作触发器可以指定强度和时长，循环与非循环行为使用项目自身时间线。输入会话 JSON 记录经过协议验证的 set、trigger 和 release 事件及相对时间，不包含摄像头画面或麦克风原始音频。
+
 ## 图层字段
 
 每个图层包含：
@@ -43,8 +45,8 @@
 - 可稳定引用的 `id`、原名称 `sourceName` 和完整分组路径 `sourcePath`；
 - 语义 `role`、左右侧 `side`、原顺序 `order`、`opacity` 和 `blendMode`；
 - 标准化 `bounds` 与相对纹理路径 `texture`；
-- 变形中心 `pivot`、渲染网格顶点/UV/三角形，以及可选的局部固定点 `secondaryAnchors`；`mesh.topology` 为 `art` 时，`mesh.art` 还保存纹理尺寸、Alpha 阈值、细节尺度和由外轮廓/孔洞组成的可重建区域；`grid` 仅保留 `rows/cols`；
-- 可选的逐顶点 `mesh.influences`：`face`、`skull`、`head`、`body`、`gaze`、`physics` 和 `pin`。前两项分别调节语义脸部控制笼和头骨控制笼，随后四项调节整体头部、身体、视线和次级运动，`pin` 用于固定根部或必须保持连接的位置；
+- 变形中心 `pivot`、渲染网格顶点/UV/三角形，以及可选的局部固定点 `secondaryAnchors`；`mesh.topology` 为 `art` 时，`mesh.art` 还保存纹理尺寸、Alpha 阈值、细节尺度和由外轮廓/孔洞组成的可重建区域；`grid` 仅保留 `rows/cols`；头发层还可包含 `hairStrands`，每条保存稳定 ID、根部、末端、影响宽度、识别置信度、弹簧参数以及与网格等长的归属和释放数组；
+- 可选的逐顶点 `mesh.influences`：`face`、`skull`、`head`、`body`、`gaze`、`physics`、`pin`、`headAttachment` 和 `physicsRelease`。`headAttachment` 表示发根跟随头皮姿态的程度，`physicsRelease` 表示从根部到自由端释放惯性的程度；两者与普通固定 `pin` 分开，避免为了锁住发根而冻结整个发片；
 - 头部、身体、视线和惯性的作用权重；
 - 所属头部或身体组、可选父图层 `parentLayerId`、可选 authoring 变形器 `deformerId`、可选的编辑锁定与运行可见性、虹膜可选的 `clipLayerId`，以及嘴部可选的 `mouthVariant`（`closed`、`slight` 或 `open`）。父图层和变形器层级不能指向自身、缺失节点或形成循环；运行绘制使用参数求值后的顺序和可见性。
 
@@ -54,7 +56,7 @@
 
 ## 报告
 
-`reports/build-report.json` 是面向调用者的摘要，包含最终绑定等级、识别数量、安全缩放、启用/禁用功能、警告、补充请求数量和关键点校准摘要。
+`reports/build-report.json` 是面向调用者的摘要，包含最终绑定等级、识别数量、安全缩放、启用/禁用功能、警告、补充请求数量、关键点校准摘要和 Alpha 预检汇总。`reports/import-preflight.json` 保存逐层连通区域、面积、全局边界、Alpha 质心、高置信度噪点、保留的疑似绘画细节、清理模式、各区域处置结果，以及成对部件采用的 `components`、`center-fallback` 或 `single-side` 决策。默认创建自动清理高置信度噪点；`--preserve-alpha-noise` 保留所有区域，`--clean-alpha` 激进移除全部微小区域，后者可能误伤细节。三种模式都只作用于项目输出纹理，`source/source.psd` 始终是原文件副本。
 
 `reports/neutral.png` 是 PSD 中立合成。`reports/pose-sheet.png` 为 960×960 诊断图，按顺序绘制中立、左右转头、半幅转头、上下俯仰、左右倾斜和四个组合姿态。每格标签来自同一次安全检查。
 
@@ -62,7 +64,9 @@
 
 角色窗口运行后会按需创建 `reports/runtime.log`。它使用逐行 JSON 记录启动参数、项目读取、窗口创建、页面加载、渲染进程异常和正常关闭事件，用于诊断“进程存在但窗口没有出现”等桌面问题；它不包含纹理像素或用户素材。日志先写 `runtime-log-policy.json`，单段达到 5 MiB 后通过移动归档，总量默认限制为 64 MiB；达到上限后停止追加，只报告候选，不自动删除。
 
-`describe --layer <id>` 会从对应纹理 Alpha 计算有意义的四连通区域，报告像素数量和归一化边界，并列出完整网格的基准位置、当前位置、delta、UV、三角形与逐顶点作用权重。该结果是 Agent 构造稀疏补丁的接口，不需要也不允许直接改 `puppetloom.json`。
+`reports/input-sessions/*.runtime-input.json` 是角色窗口保存的驱动事件时间线，可按原节奏确定性回放。`reports/performances/*.webm` 是角色画布的最终呈现，麦克风开启时可带音轨；同名 `.performance.json` 记录项目、revision、画布、编码、时长和字节数。录制中使用 `.partial.webm` 分块追加，窗口或应用中断时保留 partial 和原因，不把未完成文件冒充正式视频。
+
+`describe --layer <id>` 会从对应纹理 Alpha 计算有意义的四连通区域，报告像素数量和归一化边界，并列出完整网格的基准位置、当前位置、delta、UV、三角形、九个逐顶点作用通道和头发房束规格。该结果是 Agent 构造稀疏补丁的接口，不需要也不允许直接改 `puppetloom.json`。
 
 `record` 在调用者指定的目录生成 `<mode>.webm`、局部 WebM、接触表和 `<mode>-report.json`。报告保存基础项目哈希、准确 revision、画布与窗口比例、采样时刻、帧差、动作极值及 ffmpeg 路径。已有同名证据不会被覆盖。
 

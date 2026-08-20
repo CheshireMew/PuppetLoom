@@ -42,8 +42,11 @@ describe("PSD inspection and conservative fallback", () => {
 
   it("splits merged paired eye layers by image position", async () => {
     const imported = await importPsd(resolve(fixtures, "combined-eyes.psd"));
+    expect(imported.preflight).toMatchObject({ componentSplitCount: 4, fallbackSplitCount: 0 });
     for (const role of ["eyeWhite", "iris", "eyelash", "eyebrow"] as const) {
-      expect(imported.layers.filter((layer) => layer.role === role).map((layer) => layer.side).sort()).toEqual(["left", "right"]);
+      const layers = imported.layers.filter((layer) => layer.role === role);
+      expect(layers.map((layer) => layer.side).sort()).toEqual(["left", "right"]);
+      expect(layers.every((layer) => layer.alpha?.pairSplit.method === "components")).toBe(true);
     }
   });
 
@@ -55,6 +58,17 @@ describe("PSD inspection and conservative fallback", () => {
     expect(layer.blendMode).toBe("multiply");
     expect(layer.bounds.x + layer.bounds.width).toBeLessThanOrEqual(65);
     expect(layer.opaquePixels).toBeGreaterThan(1000);
+  });
+
+  it("automatically removes confirmed Alpha noise while preserving it only by explicit override", async () => {
+    const automatic = await importPsd(resolve(fixtures, "unknown-noise.psd"));
+    const preserved = await importPsd(resolve(fixtures, "unknown-noise.psd"), { alphaCleanup: "preserve-all" });
+    const aggressive = await importPsd(resolve(fixtures, "unknown-noise.psd"), { alphaCleanup: "remove-all-tiny" });
+    expect(automatic.preflight).toMatchObject({ cleanupMode: "automatic", confirmedNoiseComponentCount: 1, confirmedNoisePixelCount: 1, suspectedDetailComponentCount: 0, cleanupApplied: true });
+    expect(preserved.preflight).toMatchObject({ cleanupMode: "preserve-all", confirmedNoiseComponentCount: 1, cleanupApplied: false });
+    expect(aggressive.preflight).toMatchObject({ cleanupMode: "remove-all-tiny", cleanupApplied: true });
+    expect(preserved.layers[0]!.opaquePixels - automatic.layers[0]!.opaquePixels).toBe(1);
+    expect(automatic.layers[0]!.opaquePixels).toBe(aggressive.layers[0]!.opaquePixels);
   });
 
   it.each(["empty.psd", "corrupted.psd"])("rejects invalid input %s", async (name) => {
@@ -76,7 +90,7 @@ describe("project creation", () => {
     for (const relative of [
       "puppetloom.json", "source/source.psd", "source/reference.png", "reports/build-report.json",
       "reports/neutral.png", "reports/pose-sheet.png", "reports/semantic-cage.png", "reports/semantic-cage-head.png",
-      "reports/landmark-report.json", "requests/asset-requests.json"
+      "reports/landmark-report.json", "reports/import-preflight.json", "requests/asset-requests.json"
     ]) expect((await stat(resolve(semanticOutput, relative))).isFile()).toBe(true);
   });
 

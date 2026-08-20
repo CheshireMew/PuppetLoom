@@ -6,7 +6,9 @@ Codex 一类外部 Agent 通过 CLI 完成从 PSD 到可运行角色的工作，
 
 ## 从零创建
 
-先运行 `inspect --input <psd> --json`，再运行 `create --input <psd> [--reference <image>] --output <new-directory> --seed 42 --json`。参考图必须与 PSD 对应；没有就省略，不得找别的图片代替。`grouped` 或 `minimal` 是保守的可用结果，不是失败。
+先运行 `inspect --input <psd> --json`，检查 `preflight` 中的连通区域、高置信度噪点、保留的疑似绘画细节、成对部件拆分依据和回退数量，再运行 `create --input <psd> [--reference <image>] --output <new-directory> --seed 42 --json`。默认创建会自动清理透明度很低、范围极小且与主体断开的高置信度噪点，同时保留眼睛高光、细发丝和装饰等不确定区域；只有为了诊断才使用 `--preserve-alpha-noise` 保留全部区域，只有用户明确接受可能误删绘画细节时才使用激进的 `--clean-alpha`。这些选项都只作用于输出纹理，复制进项目的源 PSD 不变。参考图必须与 PSD 对应；没有就省略，不得找别的图片代替。`grouped` 或 `minimal` 是保守的可用结果，不是失败。
+
+现有项目只缺少后来新增的多房束、侧脸深度或躯干体积字段时，先运行 `extensions plan --project <directory> [--torso-volume] --json`，确认实际存在可升级的头发和服装图层，再运行 `extensions apply` 写入当前项目的下一条 revision。该流程复用项目已经保存的 PSD、网格、校准和历史，不新建项目；只有源 PSD 本身变化时才使用 `migrate` 创建新目录。
 
 创建后依次运行：
 
@@ -39,11 +41,33 @@ node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\front
 
 模板只是安全起点，不能原样执行。`plan` 不写项目。正式规格计划返回 `inputMode: structured-specification`、当前 `baseRevision`、请求范围、草稿接管情况、各部位目标图层、检查、自动返修、素材请求、`canApply` 和 `blockers`。规格过期或数值越界时应重新看当前画面并生成新规格，不能只改 revision 绕过。确认范围和基线后才运行 `apply`。执行时，每个存在且通过计划的部位单独形成可恢复 revision；最终 JSON 返回总 `status`、from/to revision、各部位结果、最终 `verification`、跨部位 `coherenceChecks`、总 `blockers` 和 `reportPath`。整模任务会声明并检查与实际范围有关的结构约束：头脸、眼睛和头饰必须保持同一转头关系；已有前发制作不得被头脸任务静默清除；上衣与裙子连接处、身体与尾根不得出现相对滑动。任一必需检查失败时，结果会阻断而不是伪装成完成。
 
+`headFace.intent` 除 yaw、pitch 和 perspective 外，还可以填写 `contourStrength`、`depthStrength`、`occlusionFadeStart`、远侧眼/眉/耳/侧发的保留透明度，以及 `sideHairDepthSwap`。Agent 应根据左右大角度证据判断这些值：轮廓强度解决脸缘体积，深度强度解决五官和头骨的相对位移，遮挡字段解决远侧部件仍完整贴在脸上的问题。不要用降低整头转角来掩盖单一遮挡穿帮。
+
 部位状态必须按原义报告：`completed` 是已经写入并产生证据，`not-present` 是项目没有相应语义图层，`needs-assets` 是闭眼或嘴形等可选素材尚缺，`blocked` 是自检、草稿、修订或最终验证阻止继续。不能新建不存在的假图层，也不能把缺素材或不存在说成制作完成。
 
 每个已完成部位会返回 `focusComparisonSheet`、4×4 `focusMotionSheet` 和用于定位单帧的 `focusMotionManifest`。外部 Agent 必须实际打开前后对比与连续运动接触表：头脸看体积和连接，眼嘴看形状与遮挡，头发和配饰看根部、滞后和回弹，身体与衣服看连接、呼吸和惯性。`verification.valid` 及 13 姿态全绿只证明结构安全，不能替代观感。最终应把这些证据交给用户看；用户反馈“幅度小一点”之类结果时，用同一 scope 再执行，而不是让用户自己拖网格。
 
 `agent front-hair plan/apply`、`agent secondary plan/apply` 和顶层 `--instruction/--scope` 是精确控制或旧调用兼容入口。它们不是正式的自然语言理解边界；理解、看图和决定返修属于外部 Agent。结构化规格无法表达的高层结构才交给下面的 `author inspect/apply`；只剩局部点位问题时才使用稀疏 `calibrate`。
+
+## 标准表演动作与运行中控制
+
+角色缺少可触发动作时先运行 `actions plan`。计划只会使用项目实际存在的眉毛、左右手臂/手、腿和脚；`actions apply` 以幂等 authoring revision 增加四个表情和点头、摇头、鞠躬、左右观察、双眨眼、短说话、身体弹动、左右挥手、原地踏步。缺少肢体的项目仍得到适用动作，不会生成不存在的假图层。
+
+```powershell
+node $cli actions plan --project E:\Puppets\CharacterName --json
+node $cli actions apply --project E:\Puppets\CharacterName --json
+```
+
+角色窗口打开后，外部 Agent 通过本机回环服务控制，不需要往产品里增加 Agent 对话框。先 `runtime inspect` 取得 viewer ID 和当前参数、表情、动作，再使用自己的 `source` ID。持续控制必须设置合理 TTL；一次性动作使用 trigger；结束时 release。不同来源按优先级和混合权重合成，摄像头、麦克风和用户快捷键仍可同时工作。
+
+```powershell
+node $cli runtime inspect --json
+node $cli runtime set --viewer 1 --source agent-demo --head-yaw 0.5 --gaze-x 0.8 --ttl 1000 --json
+node $cli runtime trigger --viewer 1 --source agent-demo --behavior action-wave-left --json
+node $cli runtime release --viewer 1 --source agent-demo --json
+```
+
+需要复现一次输入时用 `runtime record-start/record-stop/replay` 保存控制事件 JSON。它不是成片；用户看到的最终画面由角色窗口的视频按钮录成 WebM。Agent 不应把审计用动态证据、可回放输入和用户表演视频混为一件事。
 
 ## AI authoring 闭环
 
@@ -99,24 +123,28 @@ node $cli author apply --project E:\Puppets\CharacterName --patch E:\Puppets\aut
 
 ## 校准闭环
 
-先从 `describe` 读取稳定的图层 ID、控制点、轴心、网格规模和当前 revision，再使用 `describe --layer <id> [--revision <n>]` 读取该层完整顶点。每个顶点同时给出 `basePosition`、当前 `position`、相对基准的 `delta`、UV 和七个作用通道；补丁中的 `meshPointDeltas` 填写新的完整 delta，不是相对当前画面的二次增量。`alphaTopology.components` 用于发现一个纹理中互不相连的合并部件。只提交需要改变的稀疏字段，不复制整份 `puppetloom.json`。补丁示例：
+先从 `describe` 读取稳定的图层 ID、控制点、轴心、网格规模和当前 revision，再使用 `describe --layer <id> [--revision <n>]` 读取该层完整顶点。每个顶点同时给出 `basePosition`、当前 `position`、相对基准的 `delta`、UV 和九个作用通道；头发层还会返回每条 `hairStrands` 的根梢、置信度、弹簧参数、网格归属和释放数组。补丁中的 `meshPointDeltas` 填写新的完整 delta，不是相对当前画面的二次增量。`alphaTopology.components` 用于发现一个纹理中互不相连的合并部件。只提交需要改变的稀疏字段，不复制整份 `puppetloom.json`。补丁示例：
 
 ```json
 {
   "baseRevision": 0,
-  "label": "固定呆毛根部并降低头部作用",
+  "label": "固定发根并调整头皮附着和发梢释放",
   "overrides": {
     "layers": {
       "layer-000-front-hair": {
         "vertexInfluences": {
           "pin": { "0": 1 },
-          "head": { "0": 0.2 }
+          "head": { "0": 0.2 },
+          "headAttachment": { "0": 1, "18": 0.15 },
+          "physicsRelease": { "0": 0, "18": 0.9 }
         }
       }
     }
   }
 }
 ```
+
+侧脸仍不自然时，优先校准 `runtime.poseField.faceDepthProfile` 的额头、鼻根、鼻尖、上下唇和下巴六点，而不是用全局转角掩盖局部体积问题。`runtime.torsoVolumeProfile` 是完整替换的可选结构，只应在衣服或身体侧转证据确实需要体积时写入；不需要时保持缺省。两种曲线和整条 `hairStrands` 都属于 revision 数据，Agent 必须从当前 `describe` 读取完整结构后再提交，不能只传数组的一部分。
 
 保存与比较：
 
@@ -144,7 +172,7 @@ node $cli history --project E:\Puppets\CharacterName --json
 node $cli export --project E:\Puppets\CharacterName --output E:\Puppets\CharacterName-portable --json
 ```
 
-导出会把当前校准和 authoring 结果烘焙进新的 v3 基线，复制它实际引用的 PSD、参考图和纹理，创建 revision 0 校准并重新执行 `verify`。它不创建压缩包、不覆盖目标目录；来源目录和 revision 记录在 `reports/portable-export.json`。导出失败时未发布副本会保留并返回准确路径，不能把它当成成功交付物。
+导出会把当前校准和 authoring 结果烘焙进新的 v4 基线，复制它实际引用的 PSD、参考图和纹理，创建 revision 0 校准并重新执行 `verify`。它不创建压缩包、不覆盖目标目录；来源目录和 revision 记录在 `reports/portable-export.json`。导出失败时未发布副本会保留并返回准确路径，不能把它当成成功交付物。
 
 ## Cubism 官方格式交付
 
@@ -152,14 +180,21 @@ node $cli export --project E:\Puppets\CharacterName --output E:\Puppets\Characte
 
 ```powershell
 node $cli cubism plan --project E:\Puppets\CharacterName --json
+node $cli cubism handoff --project E:\Puppets\CharacterName --output E:\Puppets\CharacterName-cubism-handoff --json
 node $cli cubism editor inspect --json
+node $cli cubism editor validate --project E:\Puppets\CharacterName --stage pre-sync --json
 node $cli cubism editor preview --project E:\Puppets\CharacterName --pose left --json
 node $cli cubism editor sync --project E:\Puppets\CharacterName --json
+node $cli cubism editor validate --project E:\Puppets\CharacterName --stage post-sync --json
 node $cli cubism finalize --project E:\Puppets\CharacterName --editor-model E:\CubismExport\CharacterName.model3.json --output E:\Puppets\CharacterName-cubism --json
 node $cli cubism verify --model E:\Puppets\CharacterName-cubism\CharacterName.model3.json --json
 ```
 
-AI 必须先确认 Allow/Edit、API 版本、Modeling 模式和当前模型 UID，再同步。严格模式的阻断项不能擅自改成 `--allow-partial`；只有用户明确接受剩余网格要在 Editor 中制作时才可使用该选项。事务失败会自动回滚。最终还要在 Cubism Viewer 中检查中立、左右、上下、眨眼、嘴部和物理，不能把文件头与引用检查当成视觉验收。完整边界见 [Cubism 官方格式桥接](CUBISM_BRIDGE.md)。
+AI 必须交付并保留 handoff 的 revision、指纹、阻断清单和 Editor checklist，再确认 Allow/Edit、API 版本、Modeling 模式和当前模型 UID。严格模式的阻断项不能擅自改成 `--allow-partial`；只有用户明确接受剩余网格要在 Editor 中制作时才可使用该选项。事务失败会自动回滚。post-sync 校验能证明参数和同名对象覆盖，不能证明官方 API 读不到的顶点视觉等价。最终还要在 Cubism Viewer 中检查中立、左右、上下、眨眼、嘴部和物理，不能把文件头与引用检查当成视觉验收。完整边界见 [Cubism 官方格式桥接](CUBISM_BRIDGE.md)。
+
+## 真实角色批量回归
+
+新增真实角色时不要把授权不明的素材复制进仓库。按 [真实角色基准库](../benchmarks/real-characters/README.md) 登记项目路径、素材用途、revision、难点标签和该角色应保持的门槛，再运行 `benchmark validate/run`。结果中的项目指纹用于防止换了 revision 仍沿用旧结论；空清单的 `readyForMaterials: true` 只表示基础设施已就绪，不表示已经有真实角色通过。
 
 ## 应该改哪里
 

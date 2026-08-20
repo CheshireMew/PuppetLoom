@@ -1,12 +1,16 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadProject, loadProjectRevision } from "@puppetloom/core";
+import { loadProject, loadProjectRevision, parseRuntimeControlRequest, parseRuntimeControlServiceRequest, parseRuntimeInputSession } from "@puppetloom/core";
+import type { RuntimeControlSetRequest, RuntimeInputSession } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, protocol, screen, session } from "electron";
 import type { ViewerState, WindowShellAction, WindowShellState } from "./global.js";
 import { CalibrationIpcService } from "./calibration-ipc.js";
 import { ProjectIpcService } from "./project-ipc.js";
+import { PerformanceRecordingService } from "./performance-recording-service.js";
+import { RuntimeControlService } from "./runtime-control-service.js";
 
 const electronDirectory = dirname(fileURLToPath(import.meta.url));
 const preload = join(electronDirectory, "preload.cjs");
@@ -18,6 +22,8 @@ const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 const viewerAspectRatios = new Map<number, number>();
 let runtimeLogPath: string | undefined;
 let viewerMouseTrackingPreference: boolean | undefined;
+let runtimeControlService: RuntimeControlService | undefined;
+const performanceRecordingService = new PerformanceRecordingService();
 const editorWindows = new Map<number, string>();
 const editorCloseReady = new Set<number>();
 const RUNTIME_LOG_ROTATE_BYTES = 5 * 1024 ** 2;
@@ -27,6 +33,39 @@ const CONTROL_WINDOW_HEIGHT = 900;
 const CONTROL_WINDOW_MIN_WIDTH = 1100;
 const CONTROL_WINDOW_MIN_HEIGHT = 700;
 const CONTROL_WINDOW_SHELL = { strategy: "integrated", frame: false } as const;
+const MEDIAPIPE_WASM_FILES = new Set([
+  "vision_wasm_internal.js", "vision_wasm_internal.wasm",
+  "vision_wasm_module_internal.js", "vision_wasm_module_internal.wasm",
+  "vision_wasm_nosimd_internal.js", "vision_wasm_nosimd_internal.wasm"
+]);
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: "puppetloom-runtime",
+  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+}]);
+
+function runtimeAssetLocations(): { wasmBaseUrl: string; faceLandmarkerModelUrl: string } {
+  return {
+    wasmBaseUrl: "puppetloom-runtime://mediapipe/wasm",
+    faceLandmarkerModelUrl: "puppetloom-runtime://mediapipe/face_landmarker.task"
+  };
+}
+
+function registerRuntimeAssetProtocol(): void {
+  const wasmDirectory = resolve(electronDirectory, "../../../../node_modules/@mediapipe/tasks-vision/wasm");
+  const modelDirectory = process.env.PUPPETLOOM_RUNTIME_ASSET_DIRECTORY ?? join("D:\\Tools", "PuppetLoom", "runtime-assets", "mediapipe");
+  protocol.handle("puppetloom-runtime", (request) => {
+    const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const requested = parts.at(-1) ?? "";
+    let path: string | undefined;
+    if (parts[0] === "wasm" && MEDIAPIPE_WASM_FILES.has(requested)) path = join(wasmDirectory, requested);
+    if (parts.length === 1 && requested === "face_landmarker.task") path = join(modelDirectory, requested);
+    if (!path || !existsSync(path)) return new Response("Runtime asset not found", { status: 404 });
+    const contentType = requested.endsWith(".wasm") ? "application/wasm" : requested.endsWith(".js") ? "text/javascript; charset=utf-8" : "application/octet-stream";
+    return new Response(readFileSync(path), { status: 200, headers: { "content-type": contentType, "cache-control": "public, max-age=31536000, immutable", "access-control-allow-origin": "*" } });
+  });
+}
 
 function runtimeLog(event: string, details: Record<string, unknown> = {}): void {
   if (!runtimeLogPath) return;
@@ -85,6 +124,16 @@ function errorMessage(cause: unknown): string {
 
 function samePath(left: string, right: string): boolean {
   return resolve(left).toLocaleLowerCase() === resolve(right).toLocaleLowerCase();
+}
+
+function saveInputSession(projectDirectory: string, sessionDocument: RuntimeInputSession): string {
+  const directory = join(projectDirectory, "reports", "input-sessions");
+  mkdirSync(directory, { recursive: true });
+  const stamp = sessionDocument.recordedAt.replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
+  let path = join(directory, `${stamp}-${sessionDocument.id.slice(0, 8)}.runtime-input.json`);
+  if (existsSync(path)) path = join(directory, `${stamp}-${sessionDocument.id}.runtime-input.json`);
+  writeFileSync(path, `${JSON.stringify(sessionDocument, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  return path;
 }
 
 function launchFromAdditionalData(value: unknown): { project?: string; edit: boolean; revision?: number } {
@@ -271,6 +320,15 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     x: 0.5,
     y: ((project.anchors.headTop?.y ?? 0.04) + (project.anchors.chin?.y ?? 0.36)) * 0.5
   });
+  runtimeControlService?.registerViewer({
+    id: window.id,
+    projectDirectory: resolvedProject,
+    projectName: project.name,
+    ...(revision === undefined ? {} : { revision }),
+    parameters: project.model.parameters.map(({ id, name, min, default: defaultValue, max, semantic }) => ({ id, name, min, default: defaultValue, max, ...(semantic ? { semantic } : {}) })),
+    expressions: project.model.expressions.map(({ id, name }) => ({ id, name })),
+    behaviors: project.model.behaviors.map(({ id, name, duration, loop }) => ({ id, name, duration, loop }))
+  });
   runtimeLog("viewer-window-created", { id: window.id, width, height });
   window.once("ready-to-show", () => runtimeLog("viewer-ready-to-show", { id: window.id }));
   window.webContents.on("did-finish-load", () => {
@@ -281,11 +339,13 @@ async function createViewer(projectDirectory: string, revision?: number, capture
   window.on("unresponsive", () => runtimeLog("viewer-unresponsive", { id: window.id }));
   window.once("closed", () => {
     runtimeLog("viewer-closed", { id: window.id });
+    performanceRecordingService.interruptViewer(window.id, "角色窗口在录制结束前关闭。" );
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
     viewerRevisions.delete(window.id);
     viewerLookOrigins.delete(window.id);
     viewerAspectRatios.delete(window.id);
+    runtimeControlService?.unregisterViewer(window.id);
   });
   try {
     await window.loadFile(rendererPage, { query: {
@@ -300,6 +360,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     viewerRevisions.delete(window.id);
     viewerLookOrigins.delete(window.id);
     viewerAspectRatios.delete(window.id);
+    runtimeControlService?.unregisterViewer(window.id);
     window.destroy();
     throw cause;
   }
@@ -382,6 +443,19 @@ if (hasInstanceLock && !allowMultipleInstances) {
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   runtimeLog("app-ready");
+  registerRuntimeAssetProtocol();
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => permission === "media" && Boolean(webContents?.getURL().startsWith("file:")));
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(permission === "media" && webContents.getURL().startsWith("file:")));
+  runtimeControlService = new RuntimeControlService({
+    profileDirectory: applicationProfile,
+    port: allowMultipleInstances ? 0 : Number(process.env.PUPPETLOOM_CONTROL_PORT ?? 31_987),
+    log: runtimeLog,
+    onChange: (viewerId, snapshot) => {
+      const viewer = BrowserWindow.fromId(viewerId);
+      if (viewer && !viewer.isDestroyed() && !viewer.webContents.isDestroyed()) viewer.webContents.send("viewer:runtime-control-changed", snapshot);
+    }
+  });
+  await runtimeControlService.start();
   const projectIpc = new ProjectIpcService(applicationProfile);
   projectIpc.register();
   const calibrationIpc = new CalibrationIpcService((directory) => projectIpc.rememberProject(directory));
@@ -392,6 +466,9 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     if (enabled) {
       if (!directory) throw new Error("进入编辑器时必须提供项目目录。" );
       editorWindows.set(window.id, resolve(directory));
+      if (window.isMinimized()) window.restore();
+      if (!window.isVisible()) window.show();
+      window.focus();
       window.setMinimumSize(CONTROL_WINDOW_MIN_WIDTH, CONTROL_WINDOW_MIN_HEIGHT);
       const [width = CONTROL_WINDOW_MIN_WIDTH, height = CONTROL_WINDOW_MIN_HEIGHT] = window.getSize();
       if (width < 1320 || height < 820) window.setSize(Math.max(width, CONTROL_WINDOW_WIDTH), Math.max(height, CONTROL_WINDOW_HEIGHT), true);
@@ -454,6 +531,105 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     const workArea = screen.getDisplayMatching(bounds).workArea;
     return pointerTargetFromScreen(cursor, bounds, workArea, viewerLookOrigins.get(window.id));
   });
+  ipcMain.handle("viewer:runtime-control", (event) => {
+    const window = ownerWindow(event);
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口没有运行时控制状态。" );
+    return runtimeControlService.snapshot(window.id);
+  });
+  ipcMain.handle("viewer:runtime-descriptor", (event) => {
+    const window = ownerWindow(event);
+    if (!window || !runtimeControlService) throw new Error("当前窗口没有运行时能力描述。" );
+    return runtimeControlService.store.inspect().find((viewer) => viewer.id === window.id);
+  });
+  ipcMain.handle("runtime:assets", () => runtimeAssetLocations());
+  ipcMain.handle("viewer:runtime-set", (event, source: RuntimeControlSetRequest["source"]) => {
+    const window = ownerWindow(event);
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口不能接收运行时输入。" );
+    return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "set", viewerId: window.id, source }));
+  });
+  ipcMain.handle("viewer:runtime-release", (event, sourceId: string) => {
+    const window = ownerWindow(event);
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) return false;
+    return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "release", viewerId: window.id, sourceId }));
+  });
+  ipcMain.handle("viewer:runtime-trigger", (event, target: { behaviorId?: string; expressionId?: string; durationMs?: number }) => {
+    const window = ownerWindow(event);
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口不能触发表情或动作。" );
+    return runtimeControlService.applyLocal(parseRuntimeControlRequest({
+      version: 1, requestId: randomUUID(), op: "trigger", viewerId: window.id, sourceId: "viewer-action-panel",
+      ...(target.behaviorId ? { behaviorId: target.behaviorId } : {}),
+      ...(target.expressionId ? { expressionId: target.expressionId } : {}),
+      ...(target.durationMs === undefined ? {} : { durationMs: target.durationMs }),
+      priority: 80
+    }));
+  });
+  ipcMain.handle("viewer:input-recording", (event, action: "start" | "stop") => {
+    const window = ownerWindow(event);
+    if (!window || !runtimeControlService) throw new Error("当前窗口不能录制运行时输入。" );
+    const projectDirectory = viewerProjects.get(window.id);
+    if (!projectDirectory) throw new Error("当前窗口没有角色项目。" );
+    if (action === "start") return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "record-start", viewerId: window.id }));
+    if (action !== "stop") throw new Error(`未知输入录制操作：${String(action)}`);
+    const result = runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "record-stop", viewerId: window.id })) as { session: RuntimeInputSession };
+    const output = saveInputSession(projectDirectory, result.session);
+    return { recording: false, output, durationMs: result.session.durationMs, events: result.session.events.length };
+  });
+  ipcMain.handle("viewer:input-replay", async (event, action: "start" | "stop") => {
+    const window = ownerWindow(event);
+    if (!window || !runtimeControlService) throw new Error("当前窗口不能回放运行时输入。" );
+    const projectDirectory = viewerProjects.get(window.id);
+    if (!projectDirectory) throw new Error("当前窗口没有角色项目。" );
+    if (action === "stop") return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "replay-stop", viewerId: window.id }));
+    if (action !== "start") throw new Error(`未知输入回放操作：${String(action)}`);
+    const selection = await dialog.showOpenDialog(window, {
+      title: "选择 PuppetLoom 输入会话",
+      defaultPath: join(projectDirectory, "reports", "input-sessions"),
+      properties: ["openFile"],
+      filters: [{ name: "PuppetLoom runtime input", extensions: ["json"] }]
+    });
+    const path = selection.filePaths[0];
+    if (selection.canceled || !path) return { replaying: false, canceled: true };
+    const sessionDocument = parseRuntimeInputSession(JSON.parse(readFileSync(path, "utf8")) as unknown);
+    const result = runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({
+      version: 1, requestId: randomUUID(), op: "replay-start", viewerId: window.id, session: sessionDocument, speed: 1, loop: false
+    }));
+    return { ...(result as Record<string, unknown>), input: path };
+  });
+  ipcMain.handle("viewer:performance-recording-start", (event, metadata: import("./performance-recording-service.js").PerformanceRecordingMetadata) => {
+    const window = ownerWindow(event);
+    if (!window) throw new Error("找不到发起录制的角色窗口。" );
+    const projectDirectory = viewerProjects.get(window.id);
+    const descriptor = runtimeControlService?.store.inspect().find((viewer) => viewer.id === window.id);
+    if (!projectDirectory || !descriptor) throw new Error("当前窗口没有可录制的角色项目。" );
+    const result = performanceRecordingService.start({
+      viewerId: window.id,
+      projectDirectory,
+      projectName: descriptor.projectName,
+      ...(descriptor.revision === undefined ? {} : { revision: descriptor.revision }),
+      metadata
+    });
+    runtimeLog("performance-recording-start", { viewerId: window.id, id: result.id, output: result.output });
+    return result;
+  });
+  ipcMain.handle("viewer:performance-recording-append", (event, id: string, bytes: Uint8Array) => {
+    const window = ownerWindow(event);
+    if (!window) throw new Error("找不到录制窗口。" );
+    return performanceRecordingService.append(window.id, id, bytes);
+  });
+  ipcMain.handle("viewer:performance-recording-stop", (event, id: string, durationMs: number) => {
+    const window = ownerWindow(event);
+    if (!window) throw new Error("找不到录制窗口。" );
+    const result = performanceRecordingService.stop(window.id, id, durationMs);
+    runtimeLog("performance-recording-complete", { viewerId: window.id, id, output: result.output, durationMs, bytes: result.bytes });
+    return result;
+  });
+  ipcMain.handle("viewer:performance-recording-fail", (event, id: string, error: string) => {
+    const window = ownerWindow(event);
+    if (!window) throw new Error("找不到录制窗口。" );
+    performanceRecordingService.fail(window.id, id, error);
+    runtimeLog("performance-recording-failed", { viewerId: window.id, id, error });
+    return true;
+  });
 
   globalShortcut.register("CommandOrControl+Shift+P", () => {
     for (const id of viewerStates.keys()) {
@@ -461,6 +637,47 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       if (window && stateFor(window).clickThrough) controlViewer(window, "click-through");
     }
   });
+  for (let index = 0; index < 4; index += 1) {
+    const accelerator = `CommandOrControl+Shift+${index + 1}`;
+    const registered = globalShortcut.register(accelerator, () => {
+      if (!runtimeControlService) return;
+      for (const viewer of runtimeControlService.store.inspect()) {
+        const expression = viewer.expressions[index];
+        if (!expression) continue;
+        runtimeControlService.applyLocal(parseRuntimeControlRequest({
+          version: 1,
+          requestId: randomUUID(),
+          op: "trigger",
+          viewerId: viewer.id,
+          sourceId: `hotkey-expression-${index + 1}`,
+          expressionId: expression.id,
+          durationMs: 1200,
+          priority: 80
+        }));
+      }
+    });
+    runtimeLog("runtime-hotkey-register", { accelerator, registered });
+  }
+  for (let index = 0; index < 4; index += 1) {
+    const accelerator = `CommandOrControl+Shift+${index + 5}`;
+    const registered = globalShortcut.register(accelerator, () => {
+      if (!runtimeControlService) return;
+      for (const viewer of runtimeControlService.store.inspect()) {
+        const behavior = viewer.behaviors[index];
+        if (!behavior) continue;
+        runtimeControlService.applyLocal(parseRuntimeControlRequest({
+          version: 1,
+          requestId: randomUUID(),
+          op: "trigger",
+          viewerId: viewer.id,
+          sourceId: `hotkey-behavior-${index + 1}`,
+          behaviorId: behavior.id,
+          priority: 80
+        }));
+      }
+    });
+    runtimeLog("runtime-hotkey-register", { accelerator, registered });
+  }
 
   const project = initialProject;
   if (project) {
@@ -481,7 +698,9 @@ if (hasInstanceLock) app.whenReady().then(async () => {
 app.on("before-quit", () => runtimeLog("app-before-quit"));
 app.on("will-quit", () => {
   runtimeLog("app-will-quit");
+  performanceRecordingService.interruptAll("PuppetLoom 在录制结束前退出。" );
   globalShortcut.unregisterAll();
+  void runtimeControlService?.stop();
 });
 app.on("window-all-closed", () => {
   runtimeLog("window-all-closed");

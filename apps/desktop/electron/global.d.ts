@@ -9,6 +9,9 @@ import type {
   LayerBinding,
   MotionState,
   PuppetLoomProject,
+  RuntimeControlSnapshot,
+  RuntimeControlSetRequest,
+  RuntimeViewerDescriptor,
   RevisionComparisonResult,
   VerifyResult
 } from "@puppetloom/core";
@@ -20,6 +23,7 @@ export interface DesktopCreateRequest {
   reference?: string;
   seed?: number;
   name?: string;
+  preserveAlphaNoise?: boolean;
 }
 
 export interface DesktopCreateResponse {
@@ -72,6 +76,25 @@ export interface RecentProject {
   openedAt: string;
 }
 
+export interface PerformanceRecordingMetadata {
+  mimeType: string;
+  fps: number;
+  width: number;
+  height: number;
+  hasAudio: boolean;
+  startedAt: string;
+}
+
+export interface PerformanceRecordingResult {
+  id: string;
+  viewerId: number;
+  output: string;
+  report: string;
+  durationMs: number;
+  bytes: number;
+  hasAudio: boolean;
+}
+
 export interface PuppetLoomDesktopApi {
   choosePsd(): Promise<string | null>;
   chooseReference(): Promise<string | null>;
@@ -102,6 +125,19 @@ export interface PuppetLoomDesktopApi {
   controlViewer(id: number, action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   viewerAction(action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   pointerTarget(): Promise<PointerLookTarget>;
+  runtimeControl(): Promise<RuntimeControlSnapshot>;
+  runtimeDescriptor(): Promise<RuntimeViewerDescriptor>;
+  runtimeAssets(): Promise<{ wasmBaseUrl: string; faceLandmarkerModelUrl: string }>;
+  setRuntimeSource(source: RuntimeControlSetRequest["source"]): Promise<unknown>;
+  releaseRuntimeSource(sourceId: string): Promise<unknown>;
+  triggerRuntimeTarget(target: { behaviorId?: string; expressionId?: string; durationMs?: number }): Promise<unknown>;
+  inputRecording(action: "start" | "stop"): Promise<{ recording: boolean; output?: string; durationMs?: number; events?: number }>;
+  inputReplay(action: "start" | "stop"): Promise<{ replaying: boolean; canceled?: boolean; input?: string }>;
+  onRuntimeControl(listener: (snapshot: RuntimeControlSnapshot) => void): () => void;
+  startPerformanceRecording(metadata: PerformanceRecordingMetadata): Promise<{ id: string; viewerId: number; output: string; report: string }>;
+  appendPerformanceRecording(id: string, bytes: Uint8Array): Promise<{ id: string; bytes: number }>;
+  stopPerformanceRecording(id: string, durationMs: number): Promise<PerformanceRecordingResult>;
+  failPerformanceRecording(id: string, error: string): Promise<boolean>;
   onViewerState(listener: (state: ViewerState) => void): () => void;
 }
 
@@ -109,6 +145,7 @@ declare global {
   interface Window {
     puppetloom: PuppetLoomDesktopApi;
     puppetloomRenderTestPose?: (state: Partial<MotionState>) => boolean;
+    puppetloomRenderCurrentFrame?: () => boolean;
   }
 }
 

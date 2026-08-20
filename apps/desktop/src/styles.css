@@ -85,9 +85,18 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .viewer-controls button { width: 34px; height: 34px; min-width: 34px; padding: 0; border: 1px solid #ffffff33; color: #d6dbea; background: #111520d9; backdrop-filter: blur(8px); }
 .viewer-controls button:hover { color: #fff; background: #292d3bd9; }
 .viewer-controls button.is-active { border-color: #9b91ff; color: #fff; background: #5f56bdd9; }
+.viewer-controls button.is-recording { border-color: #ff8a9a; color: #fff; background: #a82f3bd9; }
 .viewer-controls button.viewer-close:hover { border-color: #e05261; background: #a82f3bd9; }
 .viewer-controls button svg { width: 15px; height: 15px; }
 .shortcut-hint { position: absolute; left: 50%; bottom: 48px; transform: translateX(-50%); padding: 6px 9px; border-radius: 8px; color: white; background: #111520c9; font-size: 11px; }
+.input-status { position: absolute; left: 50%; bottom: 48px; max-width: calc(100% - 32px); transform: translateX(-50%); padding: 7px 10px; border: 1px solid #ffffff2b; border-radius: 8px; color: white; background: #111520df; font-size: 11px; text-align: center; }
+.session-status { -webkit-app-region: no-drag; position: absolute; left: 50%; top: 40px; max-width: calc(100% - 32px); transform: translateX(-50%); padding: 7px 10px; border: 1px solid #ffffff2b; border-radius: 8px; color: white; background: #111520df; font-size: 11px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.action-panel { -webkit-app-region: no-drag; position: absolute; right: 8px; bottom: 50px; width: min(300px, calc(100% - 16px)); max-height: min(420px, calc(100% - 92px)); padding: 10px; border: 1px solid #ffffff2b; border-radius: 12px; color: white; background: #111520ed; backdrop-filter: blur(10px); overflow: auto; }
+.action-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.action-group + .action-group { margin-top: 10px; }
+.action-group strong { flex: 0 0 100%; color: #bfc5d8; font-size: 11px; font-weight: 600; }
+.action-group button { width: auto; min-width: 0; height: auto; padding: 6px 8px; border: 1px solid #ffffff24; border-radius: 7px; color: #ecefff; background: #292d3bcf; font-size: 11px; }
+.action-group button:hover { border-color: #9b91ff; background: #514a9acf; }
 .viewer-error { position: absolute; inset: auto 10px 10px; }
 
 .editor-shell { display: grid; grid-template-rows: 70px 72px 52px minmax(0, 1fr); width: 100%; min-width: 1100px; height: 100%; min-height: 0; overflow: hidden; background: #0c1017; color: #eaf0f8; }
@@ -146,6 +155,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .anchor-handle { fill: #ffbb45; }
 .pivot-handle { fill: #a279ff; }
 .secondary-handle { fill: #46d6c8; }
+.hair-strand-line { stroke: #ffd166; stroke-width: 1.35px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hair-strand-root { fill: #48d9ff; stroke: #092e3b; stroke-width: .7px; vector-effect: non-scaling-stroke; }
+.hair-strand-tip { fill: #ffd166; stroke: #3b2a08; stroke-width: .7px; vector-effect: non-scaling-stroke; }
+.hair-strand-guide text { fill: #ffe7a3; font-size: .018px; paint-order: stroke; stroke: #17140a; stroke-width: .003px; pointer-events: none; }
 .mesh-handle { fill: #f7fff9; stroke: #173326; stroke-width: .6px; }
 .mesh-handle.hovered { fill: #edf0f4; stroke: #ffffff; stroke-width: 1px; filter: drop-shadow(0 0 2px #ffffff88); }
 .mesh-handle.selected, .mesh-handle.selected.hovered { fill: #ffc857; stroke: #3b2a08; stroke-width: .75px; filter: drop-shadow(0 0 1px #ffc85788); }

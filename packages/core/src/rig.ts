@@ -6,6 +6,8 @@ import { makeGridMesh } from "./mesh.js";
 import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 import { createDefaultAuthoringModel } from "./model.js";
 import { frontHairPhysicsMask } from "./front-hair-geometry.js";
+import { hairAttachmentInfluences, inferHairStrands } from "./hair-strands.js";
+import { defaultFaceDepthProfile } from "./rig-extension-defaults.js";
 import type {
   AnchorGraph,
   LayerBinding,
@@ -313,7 +315,8 @@ function poseFieldFor(anchors: AnchorGraph, level: RigLevel): CoherentPoseField 
     skullRadiusY: Number((Math.max(faceHeight * 0.72, (anchors.chin.y - (anchors.headTop?.y ?? anchors.forehead.y)) * 0.5)).toFixed(6)),
     maxYawRadians: level === "semantic" ? 0.3 : 0.14,
     maxPitchRadians: level === "semantic" ? 0.32 : 0.14,
-    perspective: level === "semantic" ? 0.1 : 0.05
+    perspective: level === "semantic" ? 0.1 : 0.05,
+    faceDepthProfile: defaultFaceDepthProfile()
   };
 }
 
@@ -395,8 +398,26 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       ...(layer.role === "mouth" ? { mouthVariant: "closed" as const } : {}),
       parentGroup
     };
-    if (binding.role === "frontHair" && binding.mesh.influences) {
+    if (binding.role === "frontHair") {
+      binding.mesh.influences = binding.mesh.influences ?? {};
       binding.mesh.influences.physics = binding.mesh.points.map((point) => frontHairPhysicsMask(binding, point));
+    }
+    if (hairRoles.has(binding.role)) {
+      const hairStrands = inferHairStrands(layer, binding, imported.canvas);
+      if (hairStrands.length >= 2) {
+        binding.hairStrands = hairStrands;
+        const attachment = hairAttachmentInfluences(binding, hairStrands);
+        binding.mesh.influences = {
+          ...(binding.mesh.influences ?? {}),
+          headAttachment: attachment.headAttachment,
+          physicsRelease: attachment.physicsRelease,
+          physics: binding.mesh.points.map((point, index) => Math.max(
+            binding.mesh.influences?.physics?.[index] ?? 0,
+            attachment.physicsRelease[index] ?? 0,
+            binding.role === "frontHair" ? frontHairPhysicsMask(binding, point) : 0
+          ))
+        };
+      }
     }
     return binding;
   });

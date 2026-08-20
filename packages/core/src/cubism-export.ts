@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access, copyFile, mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import sharp from "sharp";
@@ -9,6 +9,7 @@ import type {
   CubismFinalizeOptions,
   CubismFinalizeResult,
   CubismGeneratedSidecars,
+  CubismHandoffManifest,
   CubismModel3Json,
   CubismPhysicsJson,
   CubismPrepareResult,
@@ -144,10 +145,62 @@ export async function prepareCubismExport(projectDirectory: string, output: stri
   plan.strictReady = !plan.issues.some((issue) => issue.severity === "blocking");
   const parent = dirname(outputDirectory);
   const staging = join(parent, `.${basename(outputDirectory)}.cubism-prepare-${randomUUID()}`);
+  const projectRoot = resolve(projectDirectory);
+  const generatedSidecars = [
+    ...sidecars.expressions.map((item) => item.file),
+    ...sidecars.motions.map((item) => item.file),
+    ...(sidecars.physics ? [sidecars.physics.file] : []),
+    sidecars.displayInfo.file
+  ];
+  const handoff: CubismHandoffManifest = {
+    version: 1,
+    kind: "puppetloom-cubism-handoff",
+    createdAt: new Date().toISOString(),
+    source: {
+      projectDirectory: projectRoot,
+      projectName: project.name,
+      revision: calibration.revision,
+      fingerprint: createHash("sha256").update(JSON.stringify({ revision: calibration.revision, project })).digest("hex"),
+      psd: resolve(projectRoot, project.source.psdPath)
+    },
+    readiness: {
+      strictAutomaticSync: plan.strictReady,
+      partialSyncAvailable: plan.partialSyncAvailable,
+      officialMoc3Present: false,
+      readyForRuntimeDelivery: false
+    },
+    blockedAutomation: plan.issues.filter((issue) => issue.severity === "blocking"),
+    generatedSidecars,
+    editorSteps: [
+      { id: "open-source", owner: "operator", required: true, instruction: "在 Cubism Editor 中从源 PSD 建立或打开建模文件，确认 ArtMesh 名称可唯一对应 PSD 图层名。" },
+      { id: "grant-api", owner: "Cubism Editor", required: true, instruction: "开启外部应用程序集成并授予 PuppetLoom Allow；需要结构同步时还要授予 Edit。" },
+      { id: "validate-pre-sync", owner: "PuppetLoom", required: true, instruction: "运行 cubism editor validate --stage pre-sync，先解决对象缺失、参数范围冲突和 Editor 模式问题。" },
+      { id: "sync", owner: "PuppetLoom", required: true, instruction: `运行 cubism editor sync${plan.strictReady ? "" : " --allow-partial"}；部分同步不会声称已写入官方 API 不支持的网格关键形态。` },
+      { id: "manual-geometry", owner: "operator", required: !plan.strictReady, instruction: "在 Editor 中人工补齐 blockedAutomation 所列网格、Warp 或程序化变形，并检查遮挡、轮廓和极限姿态。" },
+      { id: "validate-post-sync", owner: "PuppetLoom", required: true, instruction: "运行 cubism editor validate --stage post-sync，确认参数、范围和对象覆盖；几何视觉项仍需人工签核。" },
+      { id: "export-official-runtime", owner: "Cubism Editor", required: true, instruction: "由 Cubism Editor 官方导出 moc3、model3.json 和纹理。PuppetLoom 不生成或伪造 moc3。" },
+      { id: "finalize-and-verify", owner: "PuppetLoom", required: true, instruction: "运行 cubism finalize 合并侧车，再运行 cubism verify 验证全部引用和 MOC3 文件头。" }
+    ],
+    finalCommands: [
+      `puppetloom cubism editor validate --project \"${projectRoot}\" --stage pre-sync`,
+      `puppetloom cubism editor sync --project \"${projectRoot}\"${plan.strictReady ? "" : " --allow-partial"}`,
+      `puppetloom cubism editor validate --project \"${projectRoot}\" --stage post-sync`,
+      `puppetloom cubism finalize --project \"${projectRoot}\" --editor-model <Editor导出的model3.json> --output <新的运行时目录>`,
+      "puppetloom cubism verify --model <最终运行时目录中的model3.json>"
+    ]
+  };
   try {
     await mkdir(staging, { recursive: false });
     await writeSidecars(staging, sidecars);
     await writeJson(join(staging, "puppetloom", "cubism-bridge.json"), plan);
+    await writeJson(join(staging, "puppetloom", "handoff.json"), handoff);
+    await writeJson(join(staging, "puppetloom", "editor-checklist.json"), {
+      version: 1,
+      sourceFingerprint: handoff.source.fingerprint,
+      sourceRevision: handoff.source.revision,
+      items: handoff.editorSteps.map((step) => ({ ...step, status: "pending", evidence: "" }))
+    });
+    await writeFile(join(staging, "HANDOFF.md"), `# ${project.name} 的 Cubism 官方交接\n\n来源 revision：${calibration.revision}\n\n自动严格同步：${plan.strictReady ? "可用" : "不可用"}。当前目录不含 moc3，也不是可交付运行时。\n\n## 自动化阻断项\n\n${handoff.blockedAutomation.length ? handoff.blockedAutomation.map((issue) => `- [${issue.code}] ${issue.message}`).join("\n") : "- 无"}\n\n## 必须完成\n\n${handoff.editorSteps.map((step) => `- [ ] ${step.instruction}`).join("\n")}\n`, "utf8");
     await writeJson(join(staging, "README.json"), {
       format: "PuppetLoom Cubism bridge workspace",
       next: "在 Cubism Editor 5.4 alpha 或更新版本中同步可写结构，再由 Editor 导出 moc3/model3.json；最后运行 puppetloom cubism finalize。",
@@ -155,7 +208,7 @@ export async function prepareCubismExport(projectDirectory: string, output: stri
     });
     const files = await listFiles(staging);
     await rename(staging, outputDirectory);
-    return { outputDirectory, plan, files };
+    return { outputDirectory, plan, handoff, files };
   } catch (error) {
     throw new PuppetLoomError("IO_ERROR", `Cubism 准备失败；未发布内容保留在 ${staging}`, { cause: error });
   }
@@ -294,6 +347,15 @@ export async function finalizeCubismExport(options: CubismFinalizeOptions): Prom
     });
     const verification = await verifyCubismModel(modelTarget);
     if (!verification.valid) throw new Error(`最终 Cubism 目录未通过验证：${verification.issues.filter((issue) => issue.severity === "error").map((issue) => issue.message).join("；")}`);
+    await writeJson(join(staging, "puppetloom", "official-runtime-verification.json"), {
+      version: 1,
+      kind: "puppetloom-cubism-runtime-verification",
+      verifiedAt: new Date().toISOString(),
+      sourceProject: projectDirectory,
+      sourceRevision: calibration.revision,
+      editorModel: editorModelPath,
+      verification
+    });
     const files = await listFiles(staging);
     await rename(staging, outputDirectory);
     return {

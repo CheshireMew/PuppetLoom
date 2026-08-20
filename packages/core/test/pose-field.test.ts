@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCoherentPoseField } from "../src/pose-field.js";
+import { applyCoherentPoseField, faceDepthAt } from "../src/pose-field.js";
 import { makeGridMesh } from "../src/rig.js";
 import type { CoherentPoseField, LayerBinding, SemanticRole } from "../src/types.js";
 
@@ -26,6 +26,29 @@ function layer(role: SemanticRole, side: "left" | "right" | "center" = "center")
 }
 
 describe("coherent semantic pose field", () => {
+  it("interpolates the authored semantic side-depth curve without changing neutral points", () => {
+    const profiled: CoherentPoseField = {
+      ...field,
+      faceDepthProfile: {
+        kind: "semantic-depth-v1",
+        points: [
+          { id: "forehead", position: 0.1, depth: 0 },
+          { id: "noseRoot", position: 0.3, depth: 0.05 },
+          { id: "noseTip", position: 0.5, depth: 0.2 },
+          { id: "upperLip", position: 0.65, depth: 0.08 },
+          { id: "lowerLip", position: 0.74, depth: 0.06 },
+          { id: "chin", position: 0.92, depth: 0.02 }
+        ]
+      }
+    };
+    expect(faceDepthAt(profiled, 0.5)).toBeCloseTo(0.2, 8);
+    expect(faceDepthAt(profiled, 0.4)).toBeGreaterThan(0.05);
+    const face = layer("face");
+    const point = { x: 0.5, y: 0.3 };
+    expect(applyCoherentPoseField(profiled, face, point, 0, 0)).toEqual(point);
+    expect(applyCoherentPoseField(profiled, face, point, 0.8, 0).x).toBeGreaterThan(applyCoherentPoseField(field, face, point, 0.8, 0).x);
+  });
+
   it("preserves every point exactly at the neutral pose", () => {
     const face = layer("face");
     for (const point of face.mesh.points) expect(applyCoherentPoseField(field, face, point, 0, 0)).toEqual(point);

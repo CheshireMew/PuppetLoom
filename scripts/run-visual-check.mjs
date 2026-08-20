@@ -21,24 +21,25 @@ try {
   const viewer = await electronApp.firstWindow();
   await viewer.getByTestId("viewer").waitFor();
   await viewer.waitForFunction(() => typeof window.puppetloomRenderTestPose === "function", undefined, { timeout: 30_000 });
-  const firstVisible = await viewer.evaluate(() => {
+  const firstDataUrl = await viewer.evaluate(() => {
     window.puppetloomRenderTestPose?.({ headYaw: -0.65, headPitch: 0.25, breath: 0.02 });
     const canvas = document.querySelector("canvas");
-    if (!canvas) return false;
+    if (!canvas) return "";
     const gl = canvas.getContext("webgl2");
-    if (!gl) return false;
+    if (!gl) return "";
     const pixels = new Uint8Array(canvas.width * canvas.height * 4);
     gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return true;
-    return false;
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) return canvas.toDataURL("image/png");
+    return "";
   });
-  if (!firstVisible) throw new Error("视觉检查失败：第一个姿态没有渲染出可见像素。" );
+  if (!firstDataUrl) throw new Error("视觉检查失败：第一个姿态没有渲染出可见像素。" );
   const contextAttributes = await viewer.locator("canvas").evaluate((canvas) => canvas.getContext("webgl2")?.getContextAttributes());
   if (!contextAttributes?.stencil) throw new Error("视觉检查失败：WebGL2 没有启用眼部动态蒙版所需的模板缓冲。" );
-  const firstDataUrl = await viewer.locator("canvas").evaluate((canvas) => canvas.toDataURL("image/png"));
   await writeFile(firstPath, Buffer.from(firstDataUrl.split(",")[1], "base64"));
-  await viewer.evaluate(() => window.puppetloomRenderTestPose?.({ headYaw: 0.65, headPitch: -0.25, breath: -0.02, blink: 0.8 }));
-  const secondDataUrl = await viewer.locator("canvas").evaluate((canvas) => canvas.toDataURL("image/png"));
+  const secondDataUrl = await viewer.evaluate(() => {
+    window.puppetloomRenderTestPose?.({ headYaw: 0.65, headPitch: -0.25, breath: -0.02, blink: 0.8 });
+    return document.querySelector("canvas")?.toDataURL("image/png") ?? "";
+  });
   await writeFile(secondPath, Buffer.from(secondDataUrl.split(",")[1], "base64"));
 
   const first = await sharp(firstPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });

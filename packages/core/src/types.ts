@@ -73,7 +73,7 @@ export interface MeshBinding {
   influences?: MeshInfluences;
 }
 
-export type MeshInfluenceChannel = "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin";
+export type MeshInfluenceChannel = "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin" | "headAttachment" | "physicsRelease";
 
 export type MeshInfluences = Partial<Record<MeshInfluenceChannel, number[]>>;
 
@@ -95,6 +95,26 @@ export interface LayerSecondaryAnchors {
   ahogeRoot?: Point;
 }
 
+export interface HairStrandSpec {
+  /** Stable project-wide identifier used to connect authored geometry to runtime state. */
+  id: string;
+  root: Point;
+  tip: Point;
+  /** Gaussian ownership radius in normalized canvas coordinates. */
+  width: number;
+  confidence: number;
+  source: "alpha-contour" | "corrected";
+  physics: {
+    stiffness: number;
+    damping: number;
+    segments: number;
+    maxDisplacement: number;
+  };
+  /** Normalized ownership and root-to-tip release for every mesh vertex. */
+  weights: number[];
+  release: number[];
+}
+
 export interface LayerBinding {
   id: string;
   sourceName: string;
@@ -108,6 +128,7 @@ export interface LayerBinding {
   texture: string;
   pivot: Point;
   secondaryAnchors?: LayerSecondaryAnchors;
+  hairStrands?: HairStrandSpec[];
   mesh: MeshBinding;
   weights: LayerWeights;
   clipLayerId?: string;
@@ -340,6 +361,50 @@ export interface CoherentPoseField {
   maxPitchUpRadians?: number;
   maxPitchDownRadians?: number;
   perspective: number;
+  /** Scales semantic silhouette corrections without changing the authored turn angle. */
+  contourStrength?: number;
+  /** Scales role-specific depth parallax on the shared head surfaces. */
+  depthStrength?: number;
+  /** Editable vertical facial depth shared by the face artwork and semantic landmarks. */
+  faceDepthProfile?: FaceDepthProfile;
+}
+
+export type FaceDepthLandmark = "forehead" | "noseRoot" | "noseTip" | "upperLip" | "lowerLip" | "chin";
+
+export interface FaceDepthProfile {
+  kind: "semantic-depth-v1";
+  points: Array<{
+    id: FaceDepthLandmark;
+    /** Vertical position from face top (0) to face bottom (1). */
+    position: number;
+    /** Additive normalized Z depth on the face surface. */
+    depth: number;
+  }>;
+}
+
+export type TorsoVolumeLandmark = "upperChest" | "chest" | "waist" | "hip";
+
+export interface TorsoVolumeProfile {
+  kind: "torso-volume-v1";
+  strength: number;
+  points: Array<{
+    id: TorsoVolumeLandmark;
+    /** Vertical position from shoulder line (0) to hip line (1). */
+    position: number;
+    /** Signed side depth relative to estimated face width. */
+    depth: number;
+  }>;
+}
+
+export interface PoseOcclusionProfile {
+  kind: "semantic-occlusion-v1";
+  /** Normalized absolute yaw where far-side feature fading begins. */
+  fadeStart: number;
+  farEyeOpacity: number;
+  farBrowOpacity: number;
+  farEarOpacity: number;
+  farSideHairOpacity: number;
+  sideHairDepthSwap: boolean;
 }
 
 export interface MotionTuning {
@@ -367,6 +432,9 @@ export interface RuntimeSettings {
   envelope: MotionEnvelope;
   features: RuntimeFeatures;
   poseField?: CoherentPoseField;
+  poseOcclusion?: PoseOcclusionProfile;
+  /** Optional because clothing and body types must not receive one universal volume assumption. */
+  torsoVolumeProfile?: TorsoVolumeProfile;
   semanticCage?: SemanticControlCage;
   motionTuning?: MotionTuning;
   secondaryMotionTuning?: SecondaryMotionTuning;
@@ -437,6 +505,8 @@ export interface LayerCalibrationOverride {
   locked?: boolean;
   pivot?: Point;
   secondaryAnchors?: LayerSecondaryAnchors;
+  /** Complete replacement so roots, ownership, release and physics remain revision-consistent. */
+  hairStrands?: HairStrandSpec[];
   weights?: Partial<LayerWeights>;
   /** Complete replacement mesh, used to non-destructively upgrade legacy grids in calibration. */
   mesh?: MeshBinding;
@@ -454,7 +524,9 @@ export interface CalibrationOverrides {
   layers?: Record<string, LayerCalibrationOverride>;
   runtime?: {
     envelope?: Partial<MotionEnvelope>;
-    poseField?: Partial<Pick<CoherentPoseField, "maxYawRadians" | "maxPitchRadians" | "maxPitchUpRadians" | "maxPitchDownRadians" | "perspective">>;
+    poseField?: Partial<Pick<CoherentPoseField, "maxYawRadians" | "maxPitchRadians" | "maxPitchUpRadians" | "maxPitchDownRadians" | "perspective" | "contourStrength" | "depthStrength" | "faceDepthProfile">>;
+    poseOcclusion?: Partial<Omit<PoseOcclusionProfile, "kind">>;
+    torsoVolumeProfile?: TorsoVolumeProfile;
     motionTuning?: Partial<MotionTuning>;
     secondaryMotionTuning?: Partial<Record<SecondaryMotionPart, Partial<MotionTuning>>>;
   };
@@ -482,7 +554,7 @@ export interface CalibrationPatch {
     anchors?: Array<keyof AnchorGraph>;
     semanticPoints?: SemanticCagePointId[];
     layers?: string[];
-    runtime?: Array<"envelope" | "poseField" | "motionTuning" | "secondaryMotionTuning">;
+    runtime?: Array<"envelope" | "poseField" | "poseOcclusion" | "torsoVolumeProfile" | "motionTuning" | "secondaryMotionTuning">;
   };
 }
 
@@ -622,6 +694,7 @@ export interface DetailedLayerDescription {
   bounds: Rect;
   pivot: Point;
   secondaryAnchors?: LayerSecondaryAnchors;
+  hairStrands?: HairStrandSpec[];
   weights: LayerWeights;
   clipLayerId?: string;
   mouthVariant?: MouthVariant;
@@ -676,6 +749,7 @@ export interface ProjectDescription {
     bounds: Rect;
     pivot: Point;
     secondaryAnchors?: LayerSecondaryAnchors;
+    hairStrands?: HairStrandSpec[];
     mesh: {
       topology: MeshBinding["topology"];
       rows?: number;
@@ -827,6 +901,57 @@ export interface LayerInspection {
   bounds: Rect;
   opaquePixels: number;
   visible: boolean;
+  alpha: LayerImportAlphaAnalysis;
+}
+
+export type PairSplitMethod = "components" | "center-fallback" | "single-side" | "not-applicable";
+export type AlphaCleanupMode = "automatic" | "preserve-all" | "remove-all-tiny";
+
+export interface LayerImportAlphaAnalysis {
+  alphaThreshold: number;
+  sourceOpaquePixels: number;
+  retainedOpaquePixels: number;
+  removedTinyPixels: number;
+  minimumMeaningfulPixels: number;
+  componentCount: number;
+  meaningfulComponentCount: number;
+  tinyComponentCount: number;
+  confirmedNoiseComponentCount: number;
+  confirmedNoisePixelCount: number;
+  suspectedDetailComponentCount: number;
+  suspectedDetailPixelCount: number;
+  cleanupMode: AlphaCleanupMode;
+  cleanupApplied: boolean;
+  pairSplit: {
+    method: PairSplitMethod;
+    confidence: number;
+    sourceComponentIndices: number[];
+  };
+  components: Array<{
+    index: number;
+    pixelCount: number;
+    bounds: Rect;
+    centroid: Point;
+    disposition: "retained" | "suspected-detail" | "confirmed-noise";
+    retained: boolean;
+  }>;
+}
+
+export interface ImportPreflightSummary {
+  analyzedLayerCount: number;
+  sourceComponentCount: number;
+  meaningfulComponentCount: number;
+  tinyComponentCount: number;
+  tinyPixelCount: number;
+  confirmedNoiseComponentCount: number;
+  confirmedNoisePixelCount: number;
+  suspectedDetailComponentCount: number;
+  suspectedDetailPixelCount: number;
+  cleanupMode: AlphaCleanupMode;
+  componentSplitCount: number;
+  fallbackSplitCount: number;
+  singleSideCount: number;
+  cleanupApplied: boolean;
 }
 
 export interface InspectionReport {
@@ -837,6 +962,7 @@ export interface InspectionReport {
   recognizedLayerCount: number;
   unknownLayerCount: number;
   suggestedRigLevel: RigLevel;
+  preflight: ImportPreflightSummary;
   layers: LayerInspection[];
   warnings: string[];
 }
@@ -853,6 +979,7 @@ export interface BuildReport {
   warnings: string[];
   quality: QualitySummary;
   assetRequestCount: number;
+  importPreflight: ImportPreflightSummary;
   landmarkCalibration?: SemanticControlCage["validation"] & { pointCount: number };
 }
 
@@ -873,6 +1000,10 @@ export interface CreateOptions {
   name?: string;
   reference?: string;
   seed?: number;
+  /** Alpha cleanup policy. Default: automatically remove only high-confidence faint isolated noise. */
+  alphaCleanup?: AlphaCleanupMode;
+  /** @deprecated Use alphaCleanup. true removes every tiny component; false preserves every component. */
+  cleanAlpha?: boolean;
 }
 
 export interface EnhanceOptions {
@@ -953,8 +1084,8 @@ export interface MotionState {
   parameters?: Record<string, number>;
   /** Named expression weights in 0..1. */
   expressions?: Record<string, number>;
-  /** One explicitly selected behavior and its local playback time. */
-  behavior?: { id: string; timeSeconds: number };
+  /** One explicitly selected behavior, its local playback time, and optional 0..1 intensity. */
+  behavior?: { id: string; timeSeconds: number; weight?: number };
   /** Runtime clock used by autoplay behaviors and model physics. */
   timeSeconds?: number;
 }
@@ -975,4 +1106,6 @@ export interface SecondaryMotionState {
   skirt: MotionChainState;
   tail: MotionChainState;
   accessory: MotionChainState;
+  /** Dynamic states keyed by HairStrandSpec.id. */
+  hairStrands?: Record<string, MotionChainState>;
 }

@@ -4,6 +4,7 @@ import type {
   AnchorGraph,
   CalibrationOverrides,
   CalibrationSessionDocument,
+  FaceDepthLandmark,
   LayerBinding,
   Point,
   PuppetLoomProject,
@@ -11,7 +12,8 @@ import type {
   SecondaryMotionPart,
   SemanticCagePointId,
   SemanticRole,
-  Side
+  Side,
+  TorsoVolumeLandmark
 } from "@puppetloom/core";
 import { ArrowDown, ArrowUp, Ban, Check, Eye, EyeOff, Lock, LockOpen, RotateCcw, Save, Scan, ScanEye, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useViewportNavigation } from "./useViewportNavigation.js";
@@ -37,7 +39,7 @@ export interface ComparisonImages {
 }
 
 type LayerPatch = NonNullable<CalibrationOverrides["layers"]>[string];
-type VertexChannel = "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin";
+type VertexChannel = "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin" | "headAttachment" | "physicsRelease";
 
 function meshEdgePath(points: Point[], triangles: number[]): string {
   const commands: string[] = [];
@@ -467,6 +469,12 @@ export function EditorViewportPanel({
           {mode === "layer" && selectedLayer && <>
             <circle cx={selectedLayer.pivot.x} cy={selectedLayer.pivot.y} r="0.011" className={`handle pivot-handle ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 轴心`} aria-valuetext={`${selectedLayer.pivot.x.toFixed(3)}, ${selectedLayer.pivot.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "pivot" })} onPointerDown={(event) => onBeginDrag(event, { kind: "pivot" })} />
             <text x={selectedLayer.pivot.x + 0.012} y={selectedLayer.pivot.y - 0.01}>pivot</text>
+            {selectedLayer.hairStrands?.map((strand, index) => <g key={strand.id} className="hair-strand-guide">
+              <line x1={strand.root.x} y1={strand.root.y} x2={strand.tip.x} y2={strand.tip.y} className="hair-strand-line" />
+              <circle cx={strand.root.x} cy={strand.root.y} r="0.004" className="hair-strand-root" />
+              <circle cx={strand.tip.x} cy={strand.tip.y} r="0.004" className="hair-strand-tip" />
+              <text x={strand.tip.x + 0.006} y={strand.tip.y}>{index + 1}</text>
+            </g>)}
             {Object.entries(selectedLayer.secondaryAnchors ?? {}).map(([id, point]) => point && <g key={id}>
               <circle cx={point.x} cy={point.y} r="0.009" className={`handle secondary-handle ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 次级锚点 ${id}`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "secondary", key: id as keyof NonNullable<LayerBinding["secondaryAnchors"]> })} onPointerDown={(event) => onBeginDrag(event, { kind: "secondary", key: id as keyof NonNullable<LayerBinding["secondaryAnchors"]> })} />
               <text x={point.x + 0.01} y={point.y - 0.009}>{id}</text>
@@ -550,6 +558,8 @@ export function EditorInspectorPanel({
   onRuntimeTuning,
   onSecondaryPart,
   onSecondaryTuning,
+  onFaceDepth,
+  onTorsoVolume,
   onLabel,
   onSave,
   onDiscard,
@@ -582,6 +592,8 @@ export function EditorInspectorPanel({
   onRuntimeTuning: (kind: "motionTuning" | "envelope", key: string, value: number) => void;
   onSecondaryPart: (part: SecondaryMotionPart) => void;
   onSecondaryTuning: (part: SecondaryMotionPart, key: "amplitude" | "response" | "stability", value: number) => void;
+  onFaceDepth: (landmark: FaceDepthLandmark, depth: number) => void;
+  onTorsoVolume: (landmark: TorsoVolumeLandmark | "strength", value: number) => void;
   onLabel: (label: string) => void;
   onSave: () => void;
   onDiscard: () => void;
@@ -604,6 +616,7 @@ export function EditorInspectorPanel({
           <dt>图层</dt><dd>{selectedLayer.sourceName}</dd>
           <dt>网格</dt><dd>{selectedLayer.mesh.topology === "art" ? "Alpha ArtMesh" : `${selectedLayer.mesh.rows} × ${selectedLayer.mesh.cols} 规则网格`}</dd>
           <dt>顶点 / 三角形</dt><dd>{selectedLayer.mesh.points.length} / {Math.floor(selectedLayer.mesh.triangles.length / 3)}</dd>
+          {selectedLayer.hairStrands && <><dt>头发房束</dt><dd>{selectedLayer.hairStrands.length} 条 · 平均置信度 {(selectedLayer.hairStrands.reduce((sum, strand) => sum + strand.confidence, 0) / selectedLayer.hairStrands.length).toFixed(2)}</dd></>}
           {meshQuality && <><dt>网格质量</dt><dd className={meshQuality.balanced ? "mesh-quality-good" : "mesh-quality-warning"}>{meshQuality.label}</dd></>}
         </dl>
         <label className="check-row"><input type="checkbox" checked={selectedLayer.visible !== false} onChange={(event) => onLayerProperty({ visible: event.target.checked })} />参与渲染</label>
@@ -633,11 +646,17 @@ export function EditorInspectorPanel({
           <h3>顶点 {selectedVertex}</h3><p>x {meshPoints[selectedVertex]?.x.toFixed(5)} · y {meshPoints[selectedVertex]?.y.toFixed(5)}</p>
           <label className="check-row"><input type="checkbox" checked={softSelectionEnabled} onChange={(event) => onSoftSelectionEnabled(event.target.checked)} />带动相邻顶点（软选择）</label>
           <label className="range-row"><span>影响半径 {softRadius.toFixed(3)}</span><input disabled={!softSelectionEnabled} type="range" min="0.005" max="0.2" step="0.005" value={softRadius} onChange={(event) => onSoftRadius(Number(event.target.value))} /></label>
-          {(["face", "skull", "head", "body", "gaze", "physics", "pin"] as const).map((channel) => {
-            const fallback = channel === "pin" ? 0 : 1;
+          {(["face", "skull", "head", "body", "gaze", "physics", "pin", "headAttachment", "physicsRelease"] as const).map((channel) => {
+            const fallback = channel === "pin" || channel === "physicsRelease" ? 0 : 1;
             const influenceChannels = selectedLayer.mesh.influences as Record<string, number[] | undefined> | undefined;
             const value = influenceChannels?.[channel]?.[selectedVertex] ?? fallback;
-            const channelLabel = channel === "pin" ? "固定强度" : channel === "face" ? "脸部控制笼" : channel === "skull" ? "头骨控制笼" : channel === "physics" ? "次级运动" : `${channel} 顶点权重`;
+            const channelLabel = channel === "pin" ? "固定强度"
+              : channel === "headAttachment" ? "头皮吸附"
+                : channel === "physicsRelease" ? "物理释放"
+                  : channel === "face" ? "脸部控制笼"
+                    : channel === "skull" ? "头骨控制笼"
+                      : channel === "physics" ? "次级运动"
+                        : `${channel} 顶点权重`;
             return <label className="range-row" key={channel}><span>{channelLabel} {value.toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.05" value={value} onChange={(event) => onVertexInfluence(channel, Number(event.target.value))} /></label>;
           })}
         </section>}
@@ -671,9 +690,19 @@ export function EditorInspectorPanel({
         {(["amplitude", "response", "stability"] as const).map((key) => { const value = project.runtime.motionTuning?.[key] ?? ({ amplitude: 1, response: 0.72, stability: 0.42 }[key]); return <label className="range-row" key={key}><span>{key} {value.toFixed(2)}</span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={value} onChange={(event) => onRuntimeTuning("motionTuning", key, Number(event.target.value))} /></label>; })}
         {(["headYaw", "headPitch", "breath"] as const).map((key) => { const value = project.runtime.envelope[key]; const maximum = key === "breath" ? 0.08 : 1; return <label className="range-row" key={key}><span>{key} {value.toFixed(3)}</span><input type="range" min="0" max={maximum} step={key === "breath" ? "0.001" : "0.01"} value={value} onChange={(event) => onRuntimeTuning("envelope", key, Number(event.target.value))} /></label>; })}
 
+        {project.runtime.poseField?.faceDepthProfile && <>
+          <h3>侧脸深度</h3>
+          <small>按额头、鼻根、鼻尖、上下唇和下巴控制转头时的前后层次；正面中立状态不受影响。</small>
+          {project.runtime.poseField.faceDepthProfile.points.map((point) => <label className="range-row" key={point.id}><span>{point.id} {point.depth.toFixed(3)}</span><input type="range" min="-0.2" max="0.35" step="0.005" value={point.depth} onChange={(event) => onFaceDepth(point.id, Number(event.target.value))} /></label>)}
+        </>}
+
+        <h3>躯干体积（可选）</h3>
+        <label className="range-row"><span>作用强度 {(project.runtime.torsoVolumeProfile?.strength ?? 0).toFixed(2)}</span><input type="range" min="0" max="2" step="0.05" value={project.runtime.torsoVolumeProfile?.strength ?? 0} onChange={(event) => onTorsoVolume("strength", Number(event.target.value))} /></label>
+        {project.runtime.torsoVolumeProfile?.points.map((point) => <label className="range-row" key={point.id}><span>{point.id} {point.depth.toFixed(3)}</span><input type="range" min="-0.3" max="0.3" step="0.005" value={point.depth} onChange={(event) => onTorsoVolume(point.id, Number(event.target.value))} /></label>)}
+
         <h3>分部响应</h3>
         <label>部件<select value={secondaryPart} onChange={(event) => onSecondaryPart(event.target.value as SecondaryMotionPart)}>{secondaryParts.map((part) => <option key={part.id} value={part.id}>{part.label}</option>)}</select></label>
-        {(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{key} {selectedTuning[key].toFixed(2)}</span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={selectedTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}
+        {(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{key} {selectedTuning[key].toFixed(2)}</span><input data-testid={`secondary-${key}`} type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={selectedTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}
 
         <label>校准说明<input value={label} onChange={(event) => onLabel(event.target.value)} placeholder="例如：固定耳根并调整右眼外角" /></label>
         <button className="primary with-icon" disabled={!hasPending || busy} onClick={onSave}><Save aria-hidden="true" />{busy ? "正在验证并生成证据…" : "保存校准"}</button>

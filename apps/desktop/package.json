@@ -5,10 +5,12 @@
   "type": "module",
   "main": "dist/electron/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.electron.json && vite build",
+    "assets:prepare": "node scripts/prepare-runtime-assets.mjs",
+    "build": "npm run assets:prepare && tsc -p tsconfig.electron.json && vite build",
     "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
     "@puppetloom/core": "0.1.0",
     "@puppetloom/renderer": "0.1.0",
     "@vitejs/plugin-react": "^5.0.2",

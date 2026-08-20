@@ -1,4 +1,4 @@
-import { authoredLayersInRenderOrder, authoredOpacityFor, deformedPoints, normalizedBlendMode, type LayerBinding, type MotionState, type PuppetLoomProject } from "@puppetloom/core/browser";
+import { authoredRenderFrame, createDeformationFrameContext, deformedAuthoredPoints, normalizedBlendMode, type LayerBinding, type MotionState, type PuppetLoomProject, type RuntimeControlSnapshot } from "@puppetloom/core/browser";
 import { CalmMotionController } from "./motion.js";
 import type { PointerLookTarget } from "./pointer.js";
 
@@ -6,8 +6,18 @@ export type TextureResolver = (layer: LayerBinding) => Promise<Blob | ImageBitma
 
 interface LayerGpuResources {
   texture: WebGLTexture;
+  vertexBuffer: WebGLBuffer;
   indexBuffer: WebGLBuffer;
   indexCount: number;
+  vertices: Float32Array;
+}
+
+interface ProgramLocations {
+  position: number;
+  uv: number;
+  opacity: WebGLUniformLocation;
+  alphaThreshold: WebGLUniformLocation;
+  aspectScale: WebGLUniformLocation;
 }
 
 const vertexShaderSource = `#version 300 es
@@ -137,7 +147,7 @@ export class PuppetRenderer {
   private currentProject: PuppetLoomProject;
   controller: CalmMotionController;
   private readonly program: WebGLProgram;
-  private readonly vertexBuffer: WebGLBuffer;
+  private readonly locations: ProgramLocations;
   private readonly resources = new Map<string, LayerGpuResources>();
   private animationFrame = 0;
   private startedAt = 0;
@@ -146,17 +156,37 @@ export class PuppetRenderer {
   private pausedDuration = 0;
   private lastState: MotionState | undefined;
   private lookTarget: PointerLookTarget = { x: 0, y: 0, strength: 0 };
+  private runtimeControl: RuntimeControlSnapshot | undefined;
 
   private constructor(canvas: HTMLCanvasElement, project: PuppetLoomProject) {
     this.canvas = canvas;
     this.currentProject = project;
-    const gl = canvas.getContext("webgl2", { alpha: true, antialias: true, stencil: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+    // Artwork edges are already antialiased in each alpha texture and mesh
+    // triangles share their edge vertices. Avoiding an additional full-canvas
+    // multisample resolve keeps transparent desktop playback on the v-sync budget.
+    const gl = canvas.getContext("webgl2", {
+      alpha: true,
+      antialias: false,
+      stencil: true,
+      premultipliedAlpha: true,
+      preserveDrawingBuffer: false,
+      powerPreference: "high-performance"
+    });
     if (!gl) throw new Error("当前环境不支持 WebGL2。" );
     this.gl = gl;
     this.program = createProgram(gl);
-    const vertexBuffer = gl.createBuffer();
-    if (!vertexBuffer) throw new Error("无法创建 WebGL 顶点缓冲区。" );
-    this.vertexBuffer = vertexBuffer;
+    const opacity = gl.getUniformLocation(this.program, "u_opacity");
+    const alphaThreshold = gl.getUniformLocation(this.program, "u_alphaThreshold");
+    const aspectScale = gl.getUniformLocation(this.program, "u_aspectScale");
+    if (!opacity || !alphaThreshold || !aspectScale) throw new Error("WebGL 程序缺少必要的 uniform。" );
+    this.locations = {
+      position: gl.getAttribLocation(this.program, "a_position"),
+      uv: gl.getAttribLocation(this.program, "a_uv"),
+      opacity,
+      alphaThreshold,
+      aspectScale
+    };
+    gl.clearStencil(0);
     this.controller = new CalmMotionController(project);
   }
 
@@ -180,8 +210,9 @@ export class PuppetRenderer {
     const gl = this.gl;
     for (const layer of this.project.layers) {
       const texture = gl.createTexture();
+      const vertexBuffer = gl.createBuffer();
       const indexBuffer = gl.createBuffer();
-      if (!texture || !indexBuffer) throw new Error(`无法为 ${layer.sourceName} 创建 GPU 资源。`);
+      if (!texture || !vertexBuffer || !indexBuffer) throw new Error(`无法为 ${layer.sourceName} 创建 GPU 资源。`);
       const bitmap = await toImageBitmap(await resolveTexture(layer));
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
@@ -191,9 +222,12 @@ export class PuppetRenderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       bitmap.close();
+      const vertices = new Float32Array(layer.mesh.points.length * 4);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices.byteLength, gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(layer.mesh.triangles), gl.STATIC_DRAW);
-      this.resources.set(layer.id, { texture, indexBuffer, indexCount: layer.mesh.triangles.length });
+      this.resources.set(layer.id, { texture, vertexBuffer, indexBuffer, indexCount: layer.mesh.triangles.length, vertices });
     }
   }
 
@@ -212,16 +246,11 @@ export class PuppetRenderer {
     const gl = this.gl;
     this.resize();
     gl.clearColor(0, 0, 0, 0);
-    gl.clearStencil(0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.program);
-    const positionLocation = gl.getAttribLocation(this.program, "a_position");
-    const uvLocation = gl.getAttribLocation(this.program, "a_uv");
-    const opacityLocation = gl.getUniformLocation(this.program, "u_opacity");
-    const alphaThresholdLocation = gl.getUniformLocation(this.program, "u_alphaThreshold");
-    const aspectScaleLocation = gl.getUniformLocation(this.program, "u_aspectScale");
+    const { position: positionLocation, uv: uvLocation, opacity: opacityLocation, alphaThreshold: alphaThresholdLocation, aspectScale: aspectScaleLocation } = this.locations;
     const aspectScale = aspectFitScale(
       this.project.canvas.width,
       this.project.canvas.height,
@@ -229,16 +258,18 @@ export class PuppetRenderer {
       this.canvas.height
     );
     gl.uniform2f(aspectScaleLocation, aspectScale.x, aspectScale.y);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
     gl.enableVertexAttribArray(positionLocation);
     gl.enableVertexAttribArray(uvLocation);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
-    gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, 16, 8);
 
-    const drawLayer = (layer: LayerBinding, points: ReturnType<typeof deformedPoints>, opacity: number, alphaThreshold = 0): void => {
+    const drawLayer = (layer: LayerBinding, points: ReturnType<typeof deformedAuthoredPoints>, opacity: number, alphaThreshold = 0): void => {
       const resource = this.resources.get(layer.id);
       if (!resource) return;
-      const vertices = new Float32Array(points.length * 4);
+      if (resource.vertices.length !== points.length * 4) {
+        resource.vertices = new Float32Array(points.length * 4);
+        gl.bindBuffer(gl.ARRAY_BUFFER, resource.vertexBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, resource.vertices.byteLength, gl.DYNAMIC_DRAW);
+      }
+      const vertices = resource.vertices;
       for (let index = 0; index < points.length; index += 1) {
         const point = points[index]!;
         const uv = layer.mesh.uvs[index]!;
@@ -247,7 +278,12 @@ export class PuppetRenderer {
         vertices[index * 4 + 2] = uv.x;
         vertices[index * 4 + 3] = uv.y;
       }
+      gl.bindBuffer(gl.ARRAY_BUFFER, resource.vertexBuffer);
+      // Re-specifying the store lets the driver orphan a buffer still consumed by the GPU,
+      // avoiding a periodic CPU/GPU synchronization stall while reusing the JS array.
       gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+      gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, 16, 8);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, resource.texture);
       gl.uniform1f(opacityLocation, opacity);
@@ -256,8 +292,11 @@ export class PuppetRenderer {
       gl.drawElements(gl.TRIANGLES, resource.indexCount, gl.UNSIGNED_SHORT, 0);
     };
 
-    for (const layer of authoredLayersInRenderOrder(this.project, state)) {
-      const points = deformedPoints(this.project, layer, state);
+    const frame = authoredRenderFrame(this.project, state);
+    const deformationFrame = createDeformationFrameContext(this.project, frame.state);
+    for (const entry of frame.layers) {
+      const { layer } = entry;
+      const points = deformedAuthoredPoints(this.project, layer, entry.authoring.points, frame.state, deformationFrame);
       const clipLayer = layer.clipLayerId ? this.project.layers.find((candidate) => candidate.id === layer.clipLayerId) : undefined;
       if (clipLayer) {
         gl.enable(gl.STENCIL_TEST);
@@ -267,7 +306,8 @@ export class PuppetRenderer {
         gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
         gl.colorMask(false, false, false, false);
         gl.disable(gl.BLEND);
-        drawLayer(clipLayer, deformedPoints(this.project, clipLayer, state), 1, 0.01);
+        const clipAuthoring = frame.authoringByLayerId.get(clipLayer.id);
+        drawLayer(clipLayer, clipAuthoring ? deformedAuthoredPoints(this.project, clipLayer, clipAuthoring.points, frame.state, deformationFrame) : clipLayer.mesh.points, 1, 0.01);
 
         gl.colorMask(true, true, true, true);
         gl.stencilMask(0x00);
@@ -277,7 +317,7 @@ export class PuppetRenderer {
 
       gl.enable(gl.BLEND);
       applyBlendMode(gl, layer.blendMode);
-      drawLayer(layer, points, authoredOpacityFor(this.project, layer, state));
+      drawLayer(layer, points, entry.opacity);
 
       if (clipLayer) {
         gl.disable(gl.STENCIL_TEST);
@@ -293,7 +333,7 @@ export class PuppetRenderer {
     this.pausedAt = undefined;
     const loop = (now: number) => {
       if (!this.paused) {
-        this.render(this.controller.sample(activeElapsedSeconds(this.startedAt, now, this.pausedDuration, this.pausedAt), { lookTarget: this.lookTarget }));
+        this.render(this.controller.sample(activeElapsedSeconds(this.startedAt, now, this.pausedDuration, this.pausedAt), { lookTarget: this.lookTarget, ...(this.runtimeControl ? { runtimeControl: this.runtimeControl } : {}), nowMs: Date.now() }));
       } else {
         const width = Math.max(1, Math.round(this.canvas.clientWidth * window.devicePixelRatio));
         const height = Math.max(1, Math.round(this.canvas.clientHeight * window.devicePixelRatio));
@@ -325,6 +365,10 @@ export class PuppetRenderer {
     };
   }
 
+  setRuntimeControl(snapshot: RuntimeControlSnapshot | undefined): void {
+    this.runtimeControl = snapshot;
+  }
+
   updateProject(project: PuppetLoomProject): void {
     const currentIds = new Set(this.currentProject.layers.map((layer) => layer.id));
     if (project.layers.length !== currentIds.size || project.layers.some((layer) => !currentIds.has(layer.id))) {
@@ -333,6 +377,11 @@ export class PuppetRenderer {
     for (const layer of project.layers) {
       const resource = this.resources.get(layer.id);
       if (!resource) continue;
+      if (resource.vertices.length !== layer.mesh.points.length * 4) {
+        resource.vertices = new Float32Array(layer.mesh.points.length * 4);
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, resource.vertexBuffer);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, resource.vertices.byteLength, this.gl.DYNAMIC_DRAW);
+      }
       this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
       this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(layer.mesh.triangles), this.gl.STATIC_DRAW);
       resource.indexCount = layer.mesh.triangles.length;
@@ -345,9 +394,9 @@ export class PuppetRenderer {
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     for (const resource of this.resources.values()) {
       this.gl.deleteTexture(resource.texture);
+      this.gl.deleteBuffer(resource.vertexBuffer);
       this.gl.deleteBuffer(resource.indexBuffer);
     }
-    this.gl.deleteBuffer(this.vertexBuffer);
     this.gl.deleteProgram(this.program);
     this.resources.clear();
   }
