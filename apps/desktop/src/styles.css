@@ -58,6 +58,12 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .text-field input:focus { border-color: #8579ff; box-shadow: 0 0 0 2px #8579ff33; }
 .alpha-policy { display: grid; gap: 7px; margin: 16px 0; padding: 13px; border: 1px solid #343946; border-radius: 11px; }
 .alpha-policy legend { padding: 0 6px; color: #cbd1dc; font-size: 13px; }
+.alpha-default { padding: 10px; border: 1px solid #426b58; border-radius: 8px; background: #16271f; }
+.alpha-default strong, .alpha-default small { display: block; }
+.alpha-default strong { color: #c3efd5; font-size: 13px; }
+.alpha-default small { margin-top: 4px; color: #91aa9c; line-height: 1.45; }
+.alpha-policy details { border-radius: 8px; background: #11141c; }
+.alpha-policy summary { padding: 9px 10px; color: #9da6b7; font-size: 12px; cursor: pointer; }
 .alpha-policy label { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 9px; padding: 8px; border-radius: 8px; background: #151821; }
 .alpha-policy input { margin-top: 3px; accent-color: #8176ee; }
 .alpha-policy strong, .alpha-policy small { display: block; }
@@ -116,6 +122,23 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .action-group button { width: auto; min-width: 0; height: auto; padding: 6px 8px; border: 1px solid #ffffff24; border-radius: 7px; color: #ecefff; background: #292d3bcf; font-size: 11px; }
 .action-group button:hover { border-color: #9b91ff; background: #514a9acf; }
 .hotkey-warning { margin: 10px 0 0; color: #e5bc77; font-size: 10px; line-height: 1.45; }
+.recording-panel, .recording-preview { -webkit-app-region: no-drag; position: absolute; z-index: 3; bottom: 50px; width: min(330px, calc(100% - 16px)); padding: 11px; border: 1px solid #ffffff2b; border-radius: 12px; color: white; background: #111520f2; box-shadow: 0 12px 34px #0009; backdrop-filter: blur(10px); }
+.recording-panel { right: 8px; max-height: min(520px, calc(100% - 92px)); overflow: auto; }
+.recording-panel-heading, .recording-preview > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.recording-panel-heading > button, .recording-preview > div > button { display: grid; place-items: center; width: 26px; min-width: 26px; height: 26px; padding: 0; }
+.recording-panel-heading svg, .recording-preview svg { width: 13px; height: 13px; }
+.recording-panel > label, .recording-grid label { display: grid; gap: 4px; margin-top: 9px; color: #c7cede; font-size: 10px; }
+.recording-panel select, .recording-panel input { width: 100%; min-width: 0; padding: 6px 7px; border: 1px solid #ffffff26; border-radius: 7px; color: white; background: #292d3b; }
+.recording-panel input[type="color"] { height: 32px; padding: 3px; }
+.recording-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+.recording-grid small { color: #8f98aa; }
+.recording-panel .recording-checkbox { display: flex; align-items: center; gap: 7px; }
+.recording-checkbox input { width: auto; }
+.recording-panel p { margin: 9px 0; color: #aab3c4; font-size: 10px; line-height: 1.45; }
+.recording-panel .recording-start { width: 100%; padding: 8px; border-color: #8d82ff; color: white; background: #655bd1; }
+.recording-preview { left: 8px; }
+.recording-preview video { display: block; width: 100%; max-height: 240px; margin: 9px 0; border-radius: 8px; background: #050609; }
+.recording-preview > button { width: 100%; padding: 6px; }
 .viewer-error { position: absolute; inset: auto 10px 10px; }
 
 .editor-shell { position: relative; display: grid; grid-template-rows: 70px 72px 52px minmax(0, 1fr); width: 100%; min-width: 0; height: 100%; min-height: 0; overflow: hidden; background: #0c1017; color: #eaf0f8; }

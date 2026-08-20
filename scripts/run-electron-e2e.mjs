@@ -76,6 +76,8 @@ const electronApp = await electron.launch({
 try {
   const control = await electronApp.firstWindow();
   await control.getByTestId("creator").waitFor();
+  await control.getByText("自动清理确认噪点", { exact: true }).waitFor();
+  if (await control.locator('input[name="preserve-alpha-noise"]').isChecked()) throw new Error("创建页默认开启了保留全部 Alpha 噪点，而不是自动清理确认噪点。" );
   const titlebar = control.getByTestId("window-titlebar");
   await titlebar.waitFor();
   if (await titlebar.getAttribute("data-window-shell") !== "integrated" || await titlebar.getAttribute("data-window-frame") !== "false") throw new Error("启动器没有消费一体化外壳状态。" );
@@ -131,6 +133,7 @@ try {
     return window.puppetloom.create({ input, output: outputDirectory, seed: 42 });
   }, { input: resolve("test/fixtures/semantic.psd"), outputDirectory: output });
   if (!createResult.verify.valid) throw new Error(`桌面创建链没有返回有效项目：${JSON.stringify(createResult)}`);
+  if (createResult.report.importPreflight.cleanupMode !== "automatic") throw new Error(`桌面创建默认没有采用 automatic Alpha 清理：${JSON.stringify(createResult.report.importPreflight)}`);
   const creationRigRegression = createResult.report.rigLevel === "semantic"
     ? undefined
     : `相同 semantic fixture 预期 semantic，实际为 ${createResult.report.rigLevel}`;
@@ -635,10 +638,19 @@ try {
   if (inputSession.events.length < 1 || !inputSession.events.some((event) => event.source?.id === "e2e-control")) throw new Error(`驱动输入会话缺少外部控制事件：${JSON.stringify(inputSession)}`);
 
   await viewer.getByRole("button", { name: "录制 WebM 表演" }).click();
-  await viewer.getByText("正在录制 WebM 表演", { exact: true }).waitFor();
+  await viewer.getByRole("complementary", { name: "WebM 录制设置" }).waitFor();
+  await viewer.getByLabel("录制背景").selectOption("green");
+  await viewer.getByLabel("录制宽度").fill("960");
+  await viewer.getByLabel("录制高度").fill("540");
+  await viewer.getByLabel("录制帧率").selectOption("24");
+  await viewer.getByLabel("录制时长秒数").fill("0");
+  await viewer.getByRole("button", { name: "开始录制表演" }).click();
+  await viewer.getByText("正在录制 WebM 表演与同步输入", { exact: true }).waitFor();
+  await viewer.evaluate(() => window.puppetloom.setRuntimeSource({ id: "e2e-performance-control", priority: 91, ttlMs: 800, motion: { headPitch: 0.5, bodySway: -0.35 } }));
   await viewer.waitForTimeout(2_200);
   await viewer.getByRole("button", { name: "停止并保存 WebM 表演" }).click();
-  await viewer.getByText(/WebM 表演已保存/).waitFor({ timeout: 15_000 });
+  await viewer.getByText(/WebM 表演与同步输入已保存/).waitFor({ timeout: 15_000 });
+  await viewer.getByLabel("WebM 录制预览视频").waitFor();
   const performanceDirectory = resolve(output, "reports", "performances");
   const performanceFiles = await readdir(performanceDirectory);
   const webmName = performanceFiles.find((name) => name.endsWith(".webm") && !name.endsWith(".partial.webm"));
@@ -647,7 +659,31 @@ try {
   const performanceReport = JSON.parse(await readFile(resolve(performanceDirectory, reportName), "utf8"));
   const webmHeader = await readFile(resolve(performanceDirectory, webmName));
   if (performanceReport.status !== "completed" || performanceReport.media?.bytes < 1 || (await stat(resolve(performanceDirectory, webmName))).size !== performanceReport.media.bytes) throw new Error(`WebM 报告与视频不一致：${JSON.stringify(performanceReport)}`);
+  if (performanceReport.media?.fps !== 24 || performanceReport.media?.width !== 960 || performanceReport.media?.height !== 540 || performanceReport.media?.background?.mode !== "solid" || performanceReport.media?.background?.color !== "#00ff00") throw new Error(`WebM 没有采用界面选择的录制参数：${JSON.stringify(performanceReport.media)}`);
+  if (!performanceReport.inputSession?.output || performanceReport.inputSession.events < 1) throw new Error(`WebM 报告缺少同步输入会话：${JSON.stringify(performanceReport)}`);
+  const performanceInput = JSON.parse(await readFile(performanceReport.inputSession.output, "utf8"));
+  if (!performanceInput.events.some((event) => event.source?.id === "e2e-performance-control")) throw new Error(`同步输入会话缺少录制期间的控制事件：${JSON.stringify(performanceInput)}`);
   if (!webmHeader.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) throw new Error("录制结果没有 WebM EBML 文件头。" );
+
+  const filesBeforeTimedRecording = new Set(await readdir(performanceDirectory));
+  await viewer.getByRole("button", { name: "录制 WebM 表演" }).click();
+  await viewer.getByRole("complementary", { name: "WebM 录制设置" }).waitFor();
+  await viewer.getByLabel("录制时长秒数").fill("1");
+  await viewer.getByRole("button", { name: "开始录制表演" }).click();
+  await viewer.getByText("正在录制 WebM 表演与同步输入", { exact: true }).waitFor();
+  await viewer.evaluate(() => window.puppetloom.setRuntimeSource({ id: "e2e-timed-performance-control", priority: 92, ttlMs: 800, motion: { bodyPitch: 0.4 } }));
+  await viewer.getByText(/WebM 表演与同步输入已保存/).waitFor({ timeout: 15_000 });
+  const timedFiles = (await readdir(performanceDirectory)).filter((name) => !filesBeforeTimedRecording.has(name));
+  const timedWebmName = timedFiles.find((name) => name.endsWith(".webm") && !name.endsWith(".partial.webm"));
+  const timedReportName = timedFiles.find((name) => name.endsWith(".performance.json"));
+  if (!timedWebmName || !timedReportName || timedFiles.some((name) => name.endsWith(".partial.webm"))) throw new Error(`定时录制没有自动形成完整文件和报告：${JSON.stringify(timedFiles)}`);
+  const timedReport = JSON.parse(await readFile(resolve(performanceDirectory, timedReportName), "utf8"));
+  if (timedReport.status !== "completed" || timedReport.media?.targetDurationMs !== 1_000 || timedReport.durationMs < 750 || timedReport.durationMs > 2_500) throw new Error(`定时录制没有按 1 秒自动停止：${JSON.stringify(timedReport)}`);
+  if (!timedReport.inputSession?.output || timedReport.inputSession.events < 1) throw new Error(`定时录制没有关联自己的输入会话：${JSON.stringify(timedReport)}`);
+  const timedInput = JSON.parse(await readFile(timedReport.inputSession.output, "utf8"));
+  if (!timedInput.events.some((event) => event.source?.id === "e2e-timed-performance-control")) throw new Error(`定时录制的同步输入缺少录制期间事件：${JSON.stringify(timedInput)}`);
+  const timedWebmHeader = await readFile(resolve(performanceDirectory, timedWebmName));
+  if (!timedWebmHeader.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) throw new Error("定时录制结果没有 WebM EBML 文件头。" );
 
   const viewerWindow = await electronApp.browserWindow(viewer);
   const viewerId = await viewerWindow.evaluate((window) => window.id);

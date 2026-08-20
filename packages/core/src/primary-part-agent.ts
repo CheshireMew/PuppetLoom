@@ -127,8 +127,8 @@ function intentFor(_instruction: string): PrimaryPartIntent {
     pitchDownDegrees: 14,
     contourStrength: 1,
     depthStrength: 1,
-    farEyeOpacity: 0.68,
-    farBrowOpacity: 0.76,
+    farEyeOpacity: 1,
+    farBrowOpacity: 1,
     farEarOpacity: 0.55,
     farSideHairOpacity: 0.72,
     occlusionFadeStart: 0.58,
@@ -195,8 +195,10 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
         } : {}),
         poseOcclusion: {
           fadeStart: rounded(clamp(intent.occlusionFadeStart ?? 0.58, 0, 0.95)),
-          farEyeOpacity: rounded(clamp(intent.farEyeOpacity ?? 0.68, 0, 1)),
-          farBrowOpacity: rounded(clamp(intent.farBrowOpacity ?? 0.76, 0, 1)),
+          // Retain the serialized fields for project-format compatibility, but painted face
+          // features must remain opaque. Perspective comes from geometry, never transparency.
+          farEyeOpacity: 1,
+          farBrowOpacity: 1,
           farEarOpacity: rounded(clamp(intent.farEarOpacity ?? 0.55, 0, 1)),
           farSideHairOpacity: rounded(clamp(intent.farSideHairOpacity ?? 0.72, 0, 1)),
           sideHairDepthSwap: intent.sideHairDepthSwap ?? true

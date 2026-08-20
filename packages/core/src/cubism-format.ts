@@ -25,7 +25,7 @@ interface SemanticTarget {
   offset: number;
 }
 
-const semanticTargets: Record<MotionParameterSemantic, SemanticTarget> = {
+const semanticTargets: Partial<Record<MotionParameterSemantic, SemanticTarget>> = {
   "head-yaw": { ids: ["ParamAngleX"], range: { min: -30, default: 0, max: 30 }, scale: 30, offset: 0 },
   "head-pitch": { ids: ["ParamAngleY"], range: { min: -30, default: 0, max: 30 }, scale: 30, offset: 0 },
   "head-roll": { ids: ["ParamAngleZ"], range: { min: -30, default: 0, max: 30 }, scale: 30, offset: 0 },

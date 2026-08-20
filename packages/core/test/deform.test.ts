@@ -167,6 +167,45 @@ describe("secondary motion anchoring", () => {
     expect(Math.abs(movedHem.x - hem.x)).toBeGreaterThan(Math.abs(movedHem.y - hem.y) * 4);
   });
 
+  it("moves a supported bell skirt as one shell without collapsing its span", () => {
+    const layer = secondaryLayer("bottomWear");
+    layer.garmentStructure = "supported";
+    const waist = { x: layer.pivot.x, y: layer.bounds.y + layer.bounds.height * 0.18 };
+    const leftHem = { x: layer.bounds.x + layer.bounds.width * 0.12, y: layer.bounds.y + layer.bounds.height * 0.92 };
+    const rightHem = { x: layer.bounds.x + layer.bounds.width * 0.88, y: layer.bounds.y + layer.bounds.height * 0.92 };
+    const state = { ...neutralMotionState, clothX: 0.05 };
+    const movedLeft = deformPoint(project, layer, leftHem, state);
+    const movedRight = deformPoint(project, layer, rightHem, state);
+    const originalSpan = Math.hypot(rightHem.x - leftHem.x, rightHem.y - leftHem.y);
+    const movedSpan = Math.hypot(movedRight.x - movedLeft.x, movedRight.y - movedLeft.y);
+
+    expect(deformPoint(project, layer, waist, state)).toEqual(waist);
+    expect(movement(leftHem, movedLeft)).toBeGreaterThan(0.02);
+    expect(movedSpan).toBeCloseTo(originalSpan, 10);
+  });
+
+  it("lets a supported skirt yield slightly below the waist without becoming soft cloth", () => {
+    const layer = secondaryLayer("bottomWear");
+    layer.garmentStructure = "supported";
+    layer.garmentFlexibility = 0.2;
+    const pivot = { ...layer.pivot };
+    const upperShell = { x: layer.bounds.x + layer.bounds.width * 0.22, y: layer.bounds.y + layer.bounds.height * 0.54 };
+    const lowerShell = { x: layer.bounds.x + layer.bounds.width * 0.22, y: layer.bounds.y + layer.bounds.height * 0.92 };
+    const state = { ...neutralMotionState, clothX: 0.05 };
+    const movedUpper = deformPoint(project, layer, upperShell, state);
+    const movedLower = deformPoint(project, layer, lowerShell, state);
+    const angularChange = (before: typeof upperShell, after: typeof upperShell) =>
+      Math.atan2(after.y - pivot.y, after.x - pivot.x) - Math.atan2(before.y - pivot.y, before.x - pivot.x);
+    const differential = Math.abs(angularChange(lowerShell, movedLower) - angularChange(upperShell, movedUpper));
+
+    expect(differential).toBeGreaterThan(0.0005);
+    expect(differential).toBeLessThan(0.025);
+    expect(Math.hypot(movedLower.x - pivot.x, movedLower.y - pivot.y)).toBeCloseTo(
+      Math.hypot(lowerShell.x - pivot.x, lowerShell.y - pivot.y),
+      10
+    );
+  });
+
   it("locks both sides of the clothing seam while allowing fabric away from the waist to move", () => {
     const top = secondaryLayer("topWear", { x: 0.42, y: 0.3, width: 0.16, height: 0.2 });
     const skirt = secondaryLayer("bottomWear", { x: 0.35, y: 0.5, width: 0.3, height: 0.3 });

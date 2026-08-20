@@ -127,6 +127,10 @@ export interface LayerBinding {
   bounds: Rect;
   texture: string;
   pivot: Point;
+  /** How a merged garment layer responds to secondary motion. */
+  garmentStructure?: "soft" | "supported";
+  /** Controlled lower-shell give for supported garments. Zero is rigid; 0.5 is the safe maximum. */
+  garmentFlexibility?: number;
   secondaryAnchors?: LayerSecondaryAnchors;
   hairStrands?: HairStrandSpec[];
   mesh: MeshBinding;
@@ -152,7 +156,11 @@ export type MotionParameterSemantic =
   | "gaze-y"
   | "breath"
   | "blink"
-  | "mouth-open";
+  | "mouth-open"
+  | "ear-x"
+  | "ear-y"
+  | "tail-x"
+  | "tail-y";
 
 export interface ModelParameter {
   id: string;
@@ -398,9 +406,11 @@ export interface TorsoVolumeProfile {
 
 export interface PoseOcclusionProfile {
   kind: "semantic-occlusion-v1";
-  /** Normalized absolute yaw where far-side feature fading begins. */
+  /** Normalized absolute yaw where peripheral far-side fading begins. */
   fadeStart: number;
+  /** Legacy compatibility field. Painted eyes stay opaque and use pose geometry for perspective. */
   farEyeOpacity: number;
+  /** Legacy compatibility field. Painted eyebrows stay opaque and use pose geometry for perspective. */
   farBrowOpacity: number;
   farEarOpacity: number;
   farSideHairOpacity: number;
@@ -504,6 +514,8 @@ export interface LayerCalibrationOverride {
   visible?: boolean;
   locked?: boolean;
   pivot?: Point;
+  garmentStructure?: LayerBinding["garmentStructure"];
+  garmentFlexibility?: number;
   secondaryAnchors?: LayerSecondaryAnchors;
   /** Complete replacement so roots, ownership, release and physics remain revision-consistent. */
   hairStrands?: HairStrandSpec[];
@@ -613,6 +625,18 @@ export interface CalibrationSessionDocument {
   parentSessionId?: string;
   operationId?: string;
   evidenceDirectory?: string;
+}
+
+/** Lightweight calibration history entry for list views and editor startup. */
+export interface CalibrationSessionSummary {
+  id: string;
+  createdAt: string;
+  label: string;
+  fromRevision: number;
+  toRevision: number;
+  evidenceStatus: CalibrationSessionDocument["evidenceStatus"];
+  parentSessionId?: string;
+  operationId?: string;
 }
 
 export type DurableOperationStatus = "pending" | "succeeded" | "failed" | "interrupted";

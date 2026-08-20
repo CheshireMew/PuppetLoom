@@ -1,13 +1,27 @@
 import { closeSync, existsSync, mkdirSync, openSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
+
+export type PerformanceRecordingBackground =
+  | { mode: "transparent" }
+  | { mode: "solid"; color: string };
+
+export interface PerformanceRecordingInputSession {
+  output: string;
+  durationMs: number;
+  events: number;
+}
 
 export interface PerformanceRecordingMetadata {
   mimeType: string;
   fps: number;
   width: number;
   height: number;
+  sourceWidth: number;
+  sourceHeight: number;
   hasAudio: boolean;
+  background: PerformanceRecordingBackground;
+  targetDurationMs?: number;
   startedAt: string;
 }
 
@@ -24,12 +38,15 @@ export interface PerformanceRecordingSession {
   viewerId: number;
   output: string;
   report: string;
+  relativeOutput: string;
+  relativeReport: string;
 }
 
 export interface PerformanceRecordingResult extends PerformanceRecordingSession {
   durationMs: number;
   bytes: number;
   hasAudio: boolean;
+  inputSession?: PerformanceRecordingInputSession;
 }
 
 interface ActiveRecording extends PerformanceRecordingSession {
@@ -58,13 +75,30 @@ function validateMetadata(value: PerformanceRecordingMetadata): PerformanceRecor
   if (!Number.isInteger(value.width) || value.width < 1 || value.width > 16384 || !Number.isInteger(value.height) || value.height < 1 || value.height > 16384) {
     throw new Error("录制画布尺寸无效。" );
   }
+  if (!Number.isInteger(value.sourceWidth) || value.sourceWidth < 1 || value.sourceWidth > 16384 || !Number.isInteger(value.sourceHeight) || value.sourceHeight < 1 || value.sourceHeight > 16384) {
+    throw new Error("录制来源画布尺寸无效。" );
+  }
   if (typeof value.hasAudio !== "boolean") throw new Error("录制音轨标记无效。" );
+  if (!value.background || (value.background.mode !== "transparent" && value.background.mode !== "solid")) throw new Error("录制背景设置无效。" );
+  if (value.background.mode === "solid" && (typeof value.background.color !== "string" || !/^#[0-9a-f]{6}$/i.test(value.background.color))) throw new Error("纯色录制背景必须是 #RRGGBB。" );
+  if (value.targetDurationMs !== undefined && (!Number.isFinite(value.targetDurationMs) || value.targetDurationMs <= 0 || value.targetDurationMs > 24 * 60 * 60 * 1000)) throw new Error("自动停止时长必须大于 0 且不超过 24 小时。" );
   if (typeof value.startedAt !== "string" || !Number.isFinite(Date.parse(value.startedAt))) throw new Error("录制开始时间无效。" );
-  return { ...value };
+  return { ...value, background: { ...value.background } };
 }
 
 function safeStamp(iso: string): string {
   return iso.replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
+}
+
+function relativeProjectPath(projectDirectory: string, target: string): string {
+  return relative(projectDirectory, target).replaceAll("\\", "/");
+}
+
+function validateInputSession(value: PerformanceRecordingInputSession | undefined): PerformanceRecordingInputSession | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value.output !== "string" || value.output.length < 1) throw new Error("同步输入会话路径无效。" );
+  if (!Number.isFinite(value.durationMs) || value.durationMs < 0 || !Number.isInteger(value.events) || value.events < 0) throw new Error("同步输入会话摘要无效。" );
+  return { ...value };
 }
 
 /** Owns append-only WebM files. Interrupted recordings remain recoverable as .partial.webm. */
@@ -90,12 +124,27 @@ export class PerformanceRecordingService {
     const active: ActiveRecording = {
       id, viewerId: request.viewerId, projectDirectory, projectName: request.projectName,
       ...(request.revision === undefined ? {} : { revision: request.revision }),
-      output, partial, report, descriptor, bytes: 0, metadata, serverStartedAt
+      output,
+      partial,
+      report,
+      relativeOutput: relativeProjectPath(projectDirectory, output),
+      relativeReport: relativeProjectPath(projectDirectory, report),
+      descriptor,
+      bytes: 0,
+      metadata,
+      serverStartedAt
     };
     this.active.set(id, active);
     this.activeByViewer.set(request.viewerId, id);
     this.writeReport(active, "recording");
-    return { id, viewerId: request.viewerId, output, report };
+    return {
+      id,
+      viewerId: request.viewerId,
+      output,
+      report,
+      relativeOutput: relativeProjectPath(projectDirectory, output),
+      relativeReport: relativeProjectPath(projectDirectory, report)
+    };
   }
 
   append(viewerId: number, id: string, chunk: Uint8Array): { id: string; bytes: number } {
@@ -108,9 +157,10 @@ export class PerformanceRecordingService {
     return { id, bytes: active.bytes };
   }
 
-  stop(viewerId: number, id: string, durationMs: number): PerformanceRecordingResult {
+  stop(viewerId: number, id: string, durationMs: number, inputSession?: PerformanceRecordingInputSession): PerformanceRecordingResult {
     const active = this.owned(viewerId, id);
     if (!Number.isFinite(durationMs) || durationMs < 0) throw new Error("录制时长无效。" );
+    const linkedInput = validateInputSession(inputSession);
     if (active.bytes < 1) {
       this.finish(active, "failed", { durationMs, error: "MediaRecorder 没有产生视频数据。" });
       throw new Error("录制没有产生视频数据，已保留空的 partial 文件和失败报告。" );
@@ -119,8 +169,19 @@ export class PerformanceRecordingService {
     renameSync(active.partial, active.output);
     this.active.delete(id);
     this.activeByViewer.delete(viewerId);
-    this.writeReport(active, "completed", { durationMs, completedAt: new Date().toISOString() });
-    return { id, viewerId, output: active.output, report: active.report, durationMs, bytes: active.bytes, hasAudio: active.metadata.hasAudio };
+    this.writeReport(active, "completed", { durationMs, ...(linkedInput ? { inputSession: linkedInput } : {}), completedAt: new Date().toISOString() });
+    return {
+      id,
+      viewerId,
+      output: active.output,
+      report: active.report,
+      relativeOutput: relativeProjectPath(active.projectDirectory, active.output),
+      relativeReport: relativeProjectPath(active.projectDirectory, active.report),
+      durationMs,
+      bytes: active.bytes,
+      hasAudio: active.metadata.hasAudio,
+      ...(linkedInput ? { inputSession: linkedInput } : {})
+    };
   }
 
   fail(viewerId: number, id: string, error: unknown, durationMs?: number): void {

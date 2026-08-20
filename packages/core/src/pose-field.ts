@@ -125,6 +125,20 @@ interface PoseEvaluationCache {
 let poseEvaluationCache: PoseEvaluationCache | undefined;
 let angleCache: { yawAngle: number; pitchAngle: number; cosYaw: number; sinYaw: number; cosPitch: number; sinPitch: number } | undefined;
 const semanticCageMappingCaches = new WeakMap<CoherentPoseField, WeakMap<SemanticControlCage, SemanticCageMappingCache>>();
+const faceDepthCaches = new WeakMap<CoherentPoseField, WeakMap<Point, number>>();
+
+function cachedFaceDepth(field: CoherentPoseField, base: Point, normalizedFaceY: number): number {
+  let values = faceDepthCaches.get(field);
+  if (!values) {
+    values = new WeakMap();
+    faceDepthCaches.set(field, values);
+  }
+  const cached = values.get(base);
+  if (cached !== undefined) return cached;
+  const depth = faceDepthAt(field, normalizedFaceY);
+  values.set(base, depth);
+  return depth;
+}
 
 function evaluationCacheFor(
   field: CoherentPoseField,
@@ -869,7 +883,7 @@ function projectSurface(field: CoherentPoseField, layer: LayerBinding, base: Poi
   const ny = (base.y - surface.center.y) / surface.radiusY;
   const radial = nx * nx + ny * ny;
   const surfaceDepth = Math.sqrt(Math.max(0, 1 - Math.min(1, radial)));
-  const authoredDepth = faceDepthRoles.has(layer.role) ? faceDepthAt(field, (ny + 1) * 0.5) : 0;
+  const authoredDepth = faceDepthRoles.has(layer.role) ? cachedFaceDepth(field, base, (ny + 1) * 0.5) : 0;
   const z = surfaceDepth + (roleDepth(layer.role) + authoredDepth) * clamp(field.depthStrength ?? 1, 0.4, 1.6);
 
   let projected = projectedCoordinate(surface, nx, ny, z, yawAngle, pitchAngle, field.perspective);

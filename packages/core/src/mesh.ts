@@ -134,11 +134,11 @@ export function reprojectMeshInfluences(source: MeshBinding, target: MeshBinding
     // them absent on old projects preserves the earlier geometric heuristics.
     if ((channel === "headAttachment" || channel === "physicsRelease") && !values) return [];
     const fallback = channel === "pin" || channel === "physicsRelease" ? 0 : 1;
-    return [[channel, samples.map(({ indices, weights }) => (
+    return [[channel, samples.map(({ indices, weights }) => Math.max(0, Math.min(1,
       (values?.[indices[0]] ?? fallback) * weights[0]
       + (values?.[indices[1]] ?? fallback) * weights[1]
       + (values?.[indices[2]] ?? fallback) * weights[2]
-    ))]];
+    )))]];
   })) as MeshInfluences;
 }
 

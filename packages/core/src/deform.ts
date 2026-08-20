@@ -2,8 +2,14 @@ import { clamp } from "./math.js";
 import { evaluateLayerAuthoring, resolveMotionState } from "./model.js";
 import { applyCoherentPoseField } from "./pose-field.js";
 import { ahogeHingeWeight, frontHairSideGeometry } from "./front-hair-geometry.js";
-import { clothingBodyFollow, clothingSecondaryRelease } from "./clothing-geometry.js";
-import type { LayerBinding, MeshInfluenceChannel, MotionChainState, MotionState, Point, PuppetLoomProject, TorsoVolumeProfile } from "./types.js";
+import {
+  clothingBodyFollow,
+  clothingSecondaryRelease,
+  skirtElasticRelease,
+  skirtHemFlutterRelease,
+  skirtSupportPivot
+} from "./clothing-geometry.js";
+import type { HairStrandSpec, LayerBinding, MeshInfluenceChannel, MotionChainState, MotionState, Point, PuppetLoomProject, TorsoVolumeProfile } from "./types.js";
 
 function rotate(point: Point, pivot: Point, radians: number): Point {
   if (Math.abs(radians) < 1e-8) return point;
@@ -51,6 +57,28 @@ export function torsoVolumeAt(profile: TorsoVolumeProfile, normalizedTorsoY: num
     return left.depth + (right.depth - left.depth) * amount;
   }
   return 0;
+}
+
+const torsoVolumeDepthCaches = new WeakMap<PuppetLoomProject, WeakMap<Point, number>>();
+
+function cachedTorsoVolumeDepth(project: PuppetLoomProject, base: Point, bodyPivot: Point, faceHeight: number): number {
+  const profile = project.runtime.torsoVolumeProfile;
+  if (!profile) return 0;
+  let values = torsoVolumeDepthCaches.get(project);
+  if (!values) {
+    values = new WeakMap();
+    torsoVolumeDepthCaches.set(project, values);
+  }
+  const cached = values.get(base);
+  if (cached !== undefined) return cached;
+  const shoulderY = project.anchors.shoulderLeft && project.anchors.shoulderRight
+    ? (project.anchors.shoulderLeft.y + project.anchors.shoulderRight.y) * 0.5
+    : project.anchors.neck?.y ?? bodyPivot.y - faceHeight * 0.55;
+  const hipY = Math.max(shoulderY + faceHeight * 0.9, bodyPivot.y + faceHeight * 0.72);
+  const torsoY = clamp((base.y - shoulderY) / Math.max(1e-6, hipY - shoulderY), 0, 1);
+  const depth = torsoVolumeAt(profile, torsoY) * profile.strength;
+  values.set(base, depth);
+  return depth;
 }
 
 function chainValue(chain: MotionChainState | undefined, axis: "x" | "y", free: number): number {
@@ -180,30 +208,77 @@ function vertexInfluence(layer: LayerBinding, channel: MeshInfluenceChannel, ind
   return clamp(layer.mesh.influences?.[channel]?.[index] ?? fallback, 0, 1);
 }
 
+interface HairVertexBinding {
+  strandIndex: number;
+  strand: HairStrandSpec;
+  ownership: number;
+  release: number;
+}
+
+interface PreparedHairLayerMotion {
+  active: boolean;
+  chains: Array<MotionChainState | undefined>;
+  rotationScale: number;
+  liftScale: number;
+}
+
+const hairVertexBindings = new WeakMap<LayerBinding, HairVertexBinding[][]>();
+
+function vertexHairBindings(layer: LayerBinding): HairVertexBinding[][] {
+  const cached = hairVertexBindings.get(layer);
+  if (cached) return cached;
+  const bindings = Array.from({ length: layer.mesh.points.length }, (): HairVertexBinding[] => []);
+  for (const [strandIndex, strand] of (layer.hairStrands ?? []).entries()) {
+    for (let vertexIndex = 0; vertexIndex < bindings.length; vertexIndex += 1) {
+      const ownership = clamp(strand.weights[vertexIndex] ?? 0, 0, 1);
+      const release = clamp(strand.release[vertexIndex] ?? 0, 0, 1);
+      if (ownership <= 1e-6 || release <= 1e-6) continue;
+      bindings[vertexIndex]!.push({ strandIndex, strand, ownership, release });
+    }
+  }
+  hairVertexBindings.set(layer, bindings);
+  return bindings;
+}
+
+function preparedHairLayerMotion(frame: DeformationFrameContext, layer: LayerBinding): PreparedHairLayerMotion | undefined {
+  const cached = frame.hairLayerMotion.get(layer);
+  if (cached !== undefined) return cached ?? undefined;
+  const states = frame.state.secondary?.hairStrands;
+  if (!layer.hairStrands?.length || !states) {
+    frame.hairLayerMotion.set(layer, null);
+    return undefined;
+  }
+  const chains = layer.hairStrands.map((strand) => states[strand.id]);
+  const prepared = {
+    active: chains.some(Boolean),
+    chains,
+    rotationScale: layer.role === "frontHair" ? 2.45 : layer.role === "sideHair" ? 3.15 : 3.65,
+    liftScale: layer.role === "frontHair" ? 0.24 : layer.role === "sideHair" ? 0.64 : 0.84
+  };
+  frame.hairLayerMotion.set(layer, prepared);
+  return prepared;
+}
+
 function applyAuthoredHairStrands(
   point: Point,
   base: Point,
   layer: LayerBinding,
-  state: MotionState,
+  frame: DeformationFrameContext,
   vertexIndex: number | undefined,
   faceHeight: number,
   layerWeight: number
 ): boolean {
-  if (vertexIndex === undefined || !layer.hairStrands || !state.secondary?.hairStrands) return false;
-  const hasAuthoredState = layer.hairStrands.some((strand) => state.secondary?.hairStrands?.[strand.id]);
-  if (!hasAuthoredState) return false;
-  const rotationScale = layer.role === "frontHair" ? 2.45 : layer.role === "sideHair" ? 3.15 : 3.65;
-  const liftScale = layer.role === "frontHair" ? 0.24 : layer.role === "sideHair" ? 0.64 : 0.84;
-  for (const strand of layer.hairStrands) {
-    const chain = state.secondary.hairStrands[strand.id];
-    const ownership = clamp(strand.weights[vertexIndex] ?? 0, 0, 1);
-    const release = clamp(strand.release[vertexIndex] ?? 0, 0, 1);
-    if (!chain || ownership <= 1e-6 || release <= 1e-6) continue;
-    const strandWeight = layerWeight * ownership;
-    const bend = chainValue(chain, "x", release);
-    const lift = chainValue(chain, "y", release);
-    addLocalRotation(point, base, strand.root, bend * rotationScale * strandWeight, 1);
-    point.y += lift * faceHeight * liftScale * strandWeight * release;
+  if (vertexIndex === undefined) return false;
+  const motion = preparedHairLayerMotion(frame, layer);
+  if (!motion?.active) return false;
+  for (const binding of vertexHairBindings(layer)[vertexIndex] ?? []) {
+    const chain = motion.chains[binding.strandIndex];
+    if (!chain) continue;
+    const strandWeight = layerWeight * binding.ownership;
+    const bend = chainValue(chain, "x", binding.release);
+    const lift = chainValue(chain, "y", binding.release);
+    addLocalRotation(point, base, binding.strand.root, bend * motion.rotationScale * strandWeight, 1);
+    point.y += lift * faceHeight * motion.liftScale * strandWeight * binding.release;
   }
   // The authored strand system owns the whole layer, including pinned roots.
   // Returning true here prevents the legacy left/right chain from being
@@ -222,6 +297,7 @@ export interface DeformationFrameContext {
   pitch: number;
   headRoll: number;
   bodyRoll: number;
+  hairLayerMotion: WeakMap<LayerBinding, PreparedHairLayerMotion | null>;
 }
 
 /** Precomputes values shared by every vertex in one rendered frame. */
@@ -237,7 +313,8 @@ export function createDeformationFrameContext(project: PuppetLoomProject, resolv
     yaw: clamp(resolvedState.headYaw, -1, 1) * envelope.headYaw,
     pitch: clamp(resolvedState.headPitch, -1, 1) * envelope.headPitch,
     headRoll: (clamp(resolvedState.headRoll, -1, 1) * envelope.headRollDegrees * Math.PI) / 180,
-    bodyRoll: (clamp(resolvedState.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180
+    bodyRoll: (clamp(resolvedState.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180,
+    hairLayerMotion: new WeakMap()
   };
 }
 
@@ -284,12 +361,7 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
       point.x = bodyPivot.x + (point.x - bodyPivot.x) * pitchScale;
     }
     if (project.runtime.torsoVolumeProfile && (layer.role === "topWear" || layer.role === "bottomWear")) {
-      const shoulderY = project.anchors.shoulderLeft && project.anchors.shoulderRight
-        ? (project.anchors.shoulderLeft.y + project.anchors.shoulderRight.y) * 0.5
-        : project.anchors.neck?.y ?? bodyPivot.y - faceHeight * 0.55;
-      const hipY = Math.max(shoulderY + faceHeight * 0.9, bodyPivot.y + faceHeight * 0.72);
-      const torsoY = clamp((base.y - shoulderY) / Math.max(1e-6, hipY - shoulderY), 0, 1);
-      const depth = torsoVolumeAt(project.runtime.torsoVolumeProfile, torsoY) * project.runtime.torsoVolumeProfile.strength;
+      const depth = cachedTorsoVolumeDepth(project, base, bodyPivot, faceHeight);
       point.x += bodyTurn * faceWidth * depth * 0.24 * bodyLayerWeight;
     }
     if (layer.side !== "center") {
@@ -352,7 +424,7 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     const free = secondaryFree(layer, base);
     const weight = physicsLayerWeight;
     if (layer.role === "frontHair") {
-      if (!applyAuthoredHairStrands(point, base, layer, state, vertexIndex, faceHeight, weight)) {
+      if (!applyAuthoredHairStrands(point, base, layer, frame, vertexIndex, faceHeight, weight)) {
         const strand = frontHairSideGeometry(layer, base);
         const strandChain = strand.screenSide < 0 ? state.secondary?.frontHairLeft : state.secondary?.frontHairRight;
         const bangRelease = strand.bangRelease;
@@ -372,7 +444,7 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
         }
       }
     } else if (layer.role === "backHair" || layer.role === "sideHair") {
-      if (applyAuthoredHairStrands(point, base, layer, state, vertexIndex, faceHeight, weight)) {
+      if (applyAuthoredHairStrands(point, base, layer, frame, vertexIndex, faceHeight, weight)) {
         // Every vertex is owned by one or more persisted strands.
       } else if (state.secondary) {
         const bend = pairedChainValue(state.secondary.backHairLeft, state.secondary.backHairRight, "x", u, free);
@@ -399,6 +471,23 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
     } else if (layer.role === "ear") {
       const hinge = earHingeFor(layer, base);
       if (hinge) addLocalBend(point, base, hinge.pivot, (state.earY * hinge.mirror * 20 + state.earX * 6) * weight, free);
+    } else if (layer.role === "bottomWear" && layer.garmentStructure === "supported") {
+      const clothChain = state.secondary?.skirt;
+      const shellX = clothChain ? chainValue(clothChain, "x", 0.82) : state.clothX;
+      const shellY = clothChain ? chainValue(clothChain, "y", 0.82) : state.clothY;
+      const tipX = clothChain ? chainValue(clothChain, "x", 1) : shellX;
+      const tipY = clothChain ? chainValue(clothChain, "y", 1) : shellY;
+      const hemFlutter = skirtHemFlutterRelease(layer, base);
+      const elasticRelease = skirtElasticRelease(layer, base);
+      const flexibility = clamp(layer.garmentFlexibility ?? 0, 0, 0.5);
+      const sectionX = clothChain
+        ? chainValue(clothChain, "x", 0.46 + elasticRelease * 0.54)
+        : shellX * (0.65 + elasticRelease * 0.35);
+      const shellAngle = shellX * 2.9 + (tipX - shellX) * 0.48 * hemFlutter;
+      const elasticAngle = ((sectionX - shellX) * 1.6 + shellX * 1.6) * flexibility;
+      addLocalRotation(point, base, skirtSupportPivot(layer), (shellAngle + elasticAngle * elasticRelease) * weight, free);
+      point.y += shellY * faceHeight * 0.22 * weight * free;
+      point.y += (tipY - shellY) * faceHeight * 0.06 * weight * hemFlutter;
     } else if (layer.role === "topWear" || layer.role === "bottomWear") {
       const clothScale = layer.role === "bottomWear" ? 3.4 : 1.5;
       const clothChain = layer.role === "bottomWear" ? state.secondary?.skirt : state.secondary?.topCloth;

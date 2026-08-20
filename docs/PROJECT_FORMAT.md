@@ -22,7 +22,7 @@
 
 ## 运行姿态字段
 
-新建且能可靠定位脸部的语义项目使用 `runtime.profile: "coherent-v3"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度、透视强度，以及可选的轮廓和语义深度强度。`faceDepthProfile` 用从脸顶到脸底的标准位置保存额头、鼻根、鼻尖、上唇、下唇和下巴六个语义深度点；它只参与非中立姿态的 Z 投影。`runtime.poseOcclusion` 保存远侧部件开始淡出的 yaw 阈值、远侧眼/眉/耳/侧发的最低透明度，以及侧发是否按转向交换前后深度。可选的 `runtime.torsoVolumeProfile` 用肩线到髋线的四个语义点描述角色或服装确实需要的侧面体积，不自动套用统一身体假设。没有显式字段的旧姿势场使用稳定默认值，不会改写项目。`runtime.semanticCage` 保存 23 个标准化控制点、脸部与头骨三角形、受作用语义组，以及定位后的检查、修正和综合置信度。运行时让脸型与五官使用脸部控制网，让头发、耳朵和头饰使用头骨控制网；两者共享头部根节点，再按语义深度和局部权重混合。
+新建且能可靠定位脸部的语义项目使用 `runtime.profile: "coherent-v3"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度、透视强度，以及可选的轮廓和语义深度强度。`faceDepthProfile` 用从脸顶到脸底的标准位置保存额头、鼻根、鼻尖、上唇、下唇和下巴六个语义深度点；它只参与非中立姿态的 Z 投影。`runtime.poseOcclusion` 保存外围远侧部件开始淡出的 yaw 阈值、耳朵/侧发的最低透明度，以及侧发是否按转向交换前后深度。旧格式中的 `farEyeOpacity` 与 `farBrowOpacity` 字段继续解析，但运行时固定按 1 处理，防止浅色脸底透出形成白雾。可选的 `runtime.torsoVolumeProfile` 用肩线到髋线的四个语义点描述角色或服装确实需要的侧面体积，不自动套用统一身体假设。没有显式字段的旧姿势场使用稳定默认值，不会改写项目。`runtime.semanticCage` 保存 23 个标准化控制点、脸部与头骨三角形、受作用语义组，以及定位后的检查、修正和综合置信度。运行时让脸型与五官使用脸部控制网，让头发、耳朵和头饰使用头骨控制网；两者共享头部根节点，再按语义深度和局部权重混合。
 
 `runtime.motionTuning` 的 `amplitude`、`response` 和 `stability` 分别控制动作总幅度、追随速度和阻尼稳定度。它们作用于同一个头部目标，不会为不同部位生成互不相关的随机运动。读取器继续兼容 `coherent-v2` 双表面、`coherent-v1` 单表面和没有姿态场的 `calm-v1` 项目；没有控制笼的旧项目保持原来的双表面路径。
 
@@ -64,7 +64,7 @@
 
 角色窗口运行后会按需创建 `reports/runtime.log`。它使用逐行 JSON 记录启动参数、项目读取、窗口创建、页面加载、渲染进程异常和正常关闭事件，用于诊断“进程存在但窗口没有出现”等桌面问题；它不包含纹理像素或用户素材。日志先写 `runtime-log-policy.json`，单段达到 5 MiB 后通过移动归档，总量默认限制为 64 MiB；达到上限后停止追加，只报告候选，不自动删除。
 
-`reports/input-sessions/*.runtime-input.json` 是角色窗口保存的驱动事件时间线，可按原节奏确定性回放。`reports/performances/*.webm` 是角色画布的最终呈现，麦克风开启时可带音轨；同名 `.performance.json` 记录项目、revision、画布、编码、时长和字节数。录制中使用 `.partial.webm` 分块追加，窗口或应用中断时保留 partial 和原因，不把未完成文件冒充正式视频。
+`reports/input-sessions/*.runtime-input.json` 是角色窗口保存的驱动事件时间线，可按原节奏确定性回放。`reports/performances/*.webm` 是角色画布按用户选择的透明或纯色背景、输出尺寸和帧率得到的最终呈现，麦克风开启并在录制设置中勾选时可带音轨；同名 `.performance.json` 记录项目、revision、来源/输出画布、背景、编码、目标/实际时长、字节数及同步输入会话路径。录制中使用 `.partial.webm` 分块追加，窗口或应用中断时保留 partial 和原因，不把未完成文件冒充正式视频。
 
 `describe --layer <id>` 会从对应纹理 Alpha 计算有意义的四连通区域，报告像素数量和归一化边界，并列出完整网格的基准位置、当前位置、delta、UV、三角形、九个逐顶点作用通道和头发房束规格。该结果是 Agent 构造稀疏补丁的接口，不需要也不允许直接改 `puppetloom.json`。
 

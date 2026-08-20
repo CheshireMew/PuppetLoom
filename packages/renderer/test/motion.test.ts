@@ -91,6 +91,21 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...states.map((state) => Math.abs(state.tailY)))).toBeGreaterThan(0.04);
   });
 
+  it("keeps a supported skirt freely swaying while its geometry owns volume preservation", () => {
+    const supported = fixtureProject();
+    supported.layers = [{ role: "bottomWear", garmentStructure: "supported" } as PuppetLoomProject["layers"][number]];
+    supported.runtime.secondaryMotionTuning = {
+      skirt: { amplitude: 0.72, response: 0.42, stability: 0.5 }
+    };
+    const controller = new CalmMotionController(supported);
+    const states = Array.from({ length: 720 }, (_, index) => controller.sample(index / 60, { primaryMotion: false }));
+    const sway = states.map((state) => state.clothX);
+
+    expect(Math.min(...sway)).toBeLessThan(-0.01);
+    expect(Math.max(...sway)).toBeGreaterThan(0.01);
+    expect(sway.filter((value) => Math.abs(value) > 0.002).length / sway.length).toBeGreaterThan(0.75);
+  });
+
   it("creates deterministic independent chains for persisted hair strands", () => {
     const project = fixtureProject();
     project.layers = [{

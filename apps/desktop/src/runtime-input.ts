@@ -19,6 +19,23 @@ interface FaceAxes {
   gazeY: number;
 }
 
+const faceShapeNames = ["eyeBlinkLeft", "eyeBlinkRight", "jawOpen", "mouthFunnel", "mouthPucker"] as const;
+type FaceShapeName = typeof faceShapeNames[number];
+type FaceShapeBaseline = Record<FaceShapeName, number>;
+
+interface FaceShapeResponse {
+  deadZone: number;
+  activeRange: number;
+}
+
+const faceShapeResponses: Record<FaceShapeName, FaceShapeResponse> = {
+  eyeBlinkLeft: { deadZone: 0.06, activeRange: 0.55 },
+  eyeBlinkRight: { deadZone: 0.06, activeRange: 0.55 },
+  jawOpen: { deadZone: 0.045, activeRange: 0.42 },
+  mouthFunnel: { deadZone: 0.08, activeRange: 0.5 },
+  mouthPucker: { deadZone: 0.08, activeRange: 0.5 }
+};
+
 export interface InputAdapterStatus {
   state: "starting" | "calibrating" | "active" | "lost" | "error" | "stopped";
   message: string;
@@ -42,6 +59,42 @@ function average(points: FacePoint[]): FacePoint {
 
 function smooth(current: number, target: number, deltaMs: number, responseMs: number): number {
   return current + (target - current) * (1 - Math.exp(-Math.max(1, deltaMs) / responseMs));
+}
+
+function emptyFaceAxes(): FaceAxes {
+  return { yaw: 0, pitch: 0, roll: 0, gazeX: 0, gazeY: 0 };
+}
+
+function emptyShapeBaseline(): FaceShapeBaseline {
+  return { eyeBlinkLeft: 0, eyeBlinkRight: 0, jawOpen: 0, mouthFunnel: 0, mouthPucker: 0 };
+}
+
+function emptyShapeSamples(): Record<FaceShapeName, number[]> {
+  return { eyeBlinkLeft: [], eyeBlinkRight: [], jawOpen: [], mouthFunnel: [], mouthPucker: [] };
+}
+
+function neutralFaceOutput(): Required<Pick<RuntimeMotionInput, "headYaw" | "headPitch" | "headRoll" | "bodySway" | "bodyPitch" | "bodyRoll" | "gazeX" | "gazeY" | "blink" | "mouthOpen">> {
+  return { headYaw: 0, headPitch: 0, headRoll: 0, bodySway: 0, bodyPitch: 0, bodyRoll: 0, gazeX: 0, gazeY: 0, blink: 0, mouthOpen: 0 };
+}
+
+function shapeValue(shape: Record<string, number>, name: FaceShapeName): number {
+  const value = shape[name];
+  return Number.isFinite(value) ? clamp(value!, 0, 1) : 0;
+}
+
+function percentile(values: number[], fraction: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.round(clamp(fraction, 0, 1) * (sorted.length - 1))]!;
+}
+
+function smoothstep01(value: number): number {
+  const normalized = clamp(value, 0, 1);
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
+function calibratedShape(value: number, baseline: number, response: FaceShapeResponse): number {
+  return smoothstep01((value - baseline - response.deadZone) / response.activeRange);
 }
 
 function axesFromLandmarks(landmarks: FacePoint[]): FaceAxes | undefined {
@@ -69,10 +122,10 @@ function axesFromLandmarks(landmarks: FacePoint[]): FaceAxes | undefined {
 
 /** Calibrates a neutral face, then emits smoothed PuppetLoom semantic motion. */
 export class FaceInputMapper {
-  private baseline: FaceAxes = { yaw: 0, pitch: 0, roll: 0, gazeX: 0, gazeY: 0 };
-  private output: Required<Pick<RuntimeMotionInput, "headYaw" | "headPitch" | "headRoll" | "gazeX" | "gazeY" | "blink" | "mouthOpen">> = {
-    headYaw: 0, headPitch: 0, headRoll: 0, gazeX: 0, gazeY: 0, blink: 0, mouthOpen: 0
-  };
+  private baseline: FaceAxes = emptyFaceAxes();
+  private shapeBaseline: FaceShapeBaseline = emptyShapeBaseline();
+  private shapeSamples = emptyShapeSamples();
+  private output = neutralFaceOutput();
   private calibratedFrames = 0;
   private lastTimeMs: number | undefined;
   private lostFrames = 0;
@@ -89,26 +142,60 @@ export class FaceInputMapper {
     this.lostFrames = 0;
     const deltaMs = this.lastTimeMs === undefined ? 33 : Math.max(1, Math.min(100, nowMs - this.lastTimeMs));
     this.lastTimeMs = nowMs;
+    const shape = sample?.blendshapes ?? {};
     if (this.calibratedFrames < this.requiredCalibrationFrames) {
       const count = this.calibratedFrames + 1;
       for (const key of Object.keys(this.baseline) as Array<keyof FaceAxes>) this.baseline[key] += (axes[key] - this.baseline[key]) / count;
+      for (const name of faceShapeNames) this.shapeSamples[name].push(shapeValue(shape, name));
       this.calibratedFrames = count;
+      if (this.calibratedFrames >= this.requiredCalibrationFrames) {
+        // A low percentile represents the user's open-eye, closed-mouth state even
+        // when one or two natural blinks happen during the calibration window.
+        for (const name of faceShapeNames) this.shapeBaseline[name] = percentile(this.shapeSamples[name], 0.2);
+      }
     }
     const calibrated = this.calibratedFrames >= this.requiredCalibrationFrames;
-    const shape = sample?.blendshapes ?? {};
+    const headYaw = calibrated ? clamp((axes.yaw - this.baseline.yaw) * 3.6) : 0;
+    const headPitch = calibrated ? clamp((axes.pitch - this.baseline.pitch) * 5.2) : 0;
+    const headRoll = calibrated ? clamp((axes.roll - this.baseline.roll) / 0.42) : 0;
+    const normalizedShapes = Object.fromEntries(faceShapeNames.map((name) => {
+      const value = shapeValue(shape, name);
+      const response = faceShapeResponses[name];
+      if (calibrated && value <= this.shapeBaseline[name] + response.deadZone * 0.75) {
+        // Follow slow camera/model drift only while the channel still looks neutral.
+        // An actual blink or mouth movement must never be learned away.
+        this.shapeBaseline[name] = smooth(this.shapeBaseline[name], value, deltaMs, 4500);
+      }
+      return [name, calibrated ? calibratedShape(value, this.shapeBaseline[name], response) : 0];
+    })) as FaceShapeBaseline;
+    // PuppetLoom currently has one symmetric blink channel. Geometric agreement
+    // requires both eye scores to rise, so a one-eye tracking spike cannot fade
+    // both rendered eyes and create a washed-out face.
+    const blink = Math.sqrt(normalizedShapes.eyeBlinkLeft * normalizedShapes.eyeBlinkRight);
+    const mouthOpen = Math.max(
+      normalizedShapes.jawOpen,
+      normalizedShapes.mouthFunnel * 0.55,
+      normalizedShapes.mouthPucker * 0.45
+    );
     const target = {
-      headYaw: calibrated ? clamp((axes.yaw - this.baseline.yaw) * 3.6) : 0,
-      headPitch: calibrated ? clamp((axes.pitch - this.baseline.pitch) * 5.2) : 0,
-      headRoll: calibrated ? clamp((axes.roll - this.baseline.roll) / 0.42) : 0,
+      headYaw,
+      headPitch,
+      headRoll,
+      bodySway: headYaw * 0.62,
+      bodyPitch: headPitch * 0.46,
+      bodyRoll: clamp(headRoll * 0.52 + headYaw * 0.16),
       gazeX: calibrated ? clamp((axes.gazeX - this.baseline.gazeX) * 7.5) : 0,
       gazeY: calibrated ? clamp((axes.gazeY - this.baseline.gazeY) * 7.5) : 0,
-      blink: clamp(((shape.eyeBlinkLeft ?? 0) + (shape.eyeBlinkRight ?? 0)) * 0.5, 0, 1),
-      mouthOpen: clamp(Math.max(shape.jawOpen ?? 0, (shape.mouthFunnel ?? 0) * 0.55, (shape.mouthPucker ?? 0) * 0.45), 0, 1)
+      blink,
+      mouthOpen
     };
     this.output = {
       headYaw: smooth(this.output.headYaw, target.headYaw, deltaMs, 85),
       headPitch: smooth(this.output.headPitch, target.headPitch, deltaMs, 95),
       headRoll: smooth(this.output.headRoll, target.headRoll, deltaMs, 90),
+      bodySway: smooth(this.output.bodySway, target.bodySway, deltaMs, 105),
+      bodyPitch: smooth(this.output.bodyPitch, target.bodyPitch, deltaMs, 115),
+      bodyRoll: smooth(this.output.bodyRoll, target.bodyRoll, deltaMs, 110),
       gazeX: smooth(this.output.gazeX, target.gazeX, deltaMs, 55),
       gazeY: smooth(this.output.gazeY, target.gazeY, deltaMs, 55),
       blink: smooth(this.output.blink, target.blink, deltaMs, target.blink > this.output.blink ? 28 : 65),
@@ -119,8 +206,12 @@ export class FaceInputMapper {
 
   resetCalibration(): void {
     this.calibratedFrames = 0;
-    this.baseline = { yaw: 0, pitch: 0, roll: 0, gazeX: 0, gazeY: 0 };
+    this.baseline = emptyFaceAxes();
+    this.shapeBaseline = emptyShapeBaseline();
+    this.shapeSamples = emptyShapeSamples();
+    this.output = neutralFaceOutput();
     this.lastTimeMs = undefined;
+    this.lostFrames = 0;
   }
 
   get calibrated(): boolean {
@@ -196,7 +287,7 @@ export async function startFaceInput(
       const motion = mapper.sample(landmarks ? { landmarks, blendshapes: blendshapes(result) } : undefined, performance.now());
       if (motion) {
         onMotion(motion);
-        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然看向摄像头，正在校准…" });
+        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然睁眼、闭口看向摄像头，正在校准…" });
         hadFace = true;
       } else if (hadFace) {
         onStatus({ state: "lost", message: "暂时没有检测到面部，角色已回到自主动作" });

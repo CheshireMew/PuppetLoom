@@ -4,7 +4,7 @@ import type {
   CalibrationDraftDocument,
   CalibrationPatch,
   CalibrationSaveResult,
-  CalibrationSessionDocument,
+  CalibrationSessionSummary,
   InspectionReport,
   LayerBinding,
   MotionState,
@@ -74,7 +74,7 @@ export interface EditorWorkspace {
   baseProject: PuppetLoomProject;
   project: PuppetLoomProject;
   calibration: CalibrationDocument;
-  sessions: CalibrationSessionDocument[];
+  sessions: CalibrationSessionSummary[];
   draft?: CalibrationDraftDocument;
 }
 
@@ -93,8 +93,18 @@ export interface PerformanceRecordingMetadata {
   fps: number;
   width: number;
   height: number;
+  sourceWidth: number;
+  sourceHeight: number;
   hasAudio: boolean;
+  background: { mode: "transparent" } | { mode: "solid"; color: string };
+  targetDurationMs?: number;
   startedAt: string;
+}
+
+export interface PerformanceRecordingInputSession {
+  output: string;
+  durationMs: number;
+  events: number;
 }
 
 export interface PerformanceRecordingResult {
@@ -102,9 +112,12 @@ export interface PerformanceRecordingResult {
   viewerId: number;
   output: string;
   report: string;
+  relativeOutput: string;
+  relativeReport: string;
   durationMs: number;
   bytes: number;
   hasAudio: boolean;
+  inputSession?: PerformanceRecordingInputSession;
 }
 
 export interface PuppetLoomDesktopApi {
@@ -135,6 +148,8 @@ export interface PuppetLoomDesktopApi {
   onPrepareEditorClose(listener: () => void | Promise<void>): () => void;
   readAsset(projectDirectory: string, layer: LayerBinding): Promise<Blob>;
   readProjectFile(projectDirectory: string, relative: string): Promise<Blob>;
+  projectMediaUrl(projectDirectory: string, relative: string): Promise<string>;
+  releaseProjectMedia(mediaUrl: string): Promise<boolean>;
   launchViewer(projectDirectory: string, options?: ViewerLaunchOptions): Promise<{ id: number; state: ViewerState }>;
   viewerProject(): Promise<{ project: PuppetLoomProject; sourceLabel: string }>;
   viewerCapabilities(): Promise<ViewerCapabilities>;
@@ -154,9 +169,9 @@ export interface PuppetLoomDesktopApi {
   onRuntimeControl(listener: (snapshot: RuntimeControlSnapshot) => void): () => void;
   onViewerProject(listener: (payload: { project: PuppetLoomProject; sourceLabel: string }) => void): () => void;
   onInputReplayState(listener: (state: { replaying: boolean; reason: "started" | "finished" | "stopped" }) => void): () => void;
-  startPerformanceRecording(metadata: PerformanceRecordingMetadata): Promise<{ id: string; viewerId: number; output: string; report: string }>;
+  startPerformanceRecording(metadata: PerformanceRecordingMetadata): Promise<{ id: string; viewerId: number; output: string; report: string; relativeOutput: string; relativeReport: string }>;
   appendPerformanceRecording(id: string, bytes: Uint8Array): Promise<{ id: string; bytes: number }>;
-  stopPerformanceRecording(id: string, durationMs: number): Promise<PerformanceRecordingResult>;
+  stopPerformanceRecording(id: string, durationMs: number, inputSession?: PerformanceRecordingInputSession): Promise<PerformanceRecordingResult>;
   failPerformanceRecording(id: string, error: string): Promise<boolean>;
   onViewerState(listener: (state: ViewerState) => void): () => void;
 }

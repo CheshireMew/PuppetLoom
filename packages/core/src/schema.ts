@@ -124,7 +124,7 @@ const torsoVolumeProfileSchema = z.object({
 
 const motionParameterSemanticSchema = z.enum([
   "head-yaw", "head-pitch", "head-roll", "body-sway", "body-pitch", "body-roll",
-  "gaze-x", "gaze-y", "breath", "blink", "mouth-open"
+  "gaze-x", "gaze-y", "breath", "blink", "mouth-open", "ear-x", "ear-y", "tail-x", "tail-y"
 ]);
 const sparsePointMapSchema = z.record(z.string().regex(/^\d+$/), pointSchema);
 const keyformTransformSchema = z.object({
@@ -267,6 +267,8 @@ export const puppetLoomProjectSchema = z.object({
       bounds: rectSchema,
       texture: z.string().min(1),
       pivot: pointSchema,
+      garmentStructure: z.enum(["soft", "supported"]).optional(),
+      garmentFlexibility: z.number().min(0).max(0.5).optional(),
       secondaryAnchors: z.object({
         earHingeLeft: pointSchema.optional(),
         earHingeRight: pointSchema.optional(),
@@ -616,6 +618,8 @@ const layerCalibrationOverrideSchema = z.object({
   visible: z.boolean().optional(),
   locked: z.boolean().optional(),
   pivot: pointSchema.optional(),
+  garmentStructure: z.enum(["soft", "supported"]).optional(),
+  garmentFlexibility: z.number().min(0).max(0.5).optional(),
   secondaryAnchors: secondaryAnchorOverrideSchema.optional(),
   hairStrands: z.array(hairStrandSchema).min(2).max(12).optional(),
   weights: z.object({

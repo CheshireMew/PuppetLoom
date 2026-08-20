@@ -47,4 +47,24 @@ describe("runtime control blending", () => {
     expect(states.at(-1)!.mouthOpen).toBe(0.75);
     expect(states.some((state) => Math.abs(state.hairX) > 0.001)).toBe(true);
   });
+
+  it("returns smoothly to autonomous head and body motion when a TTL source expires", () => {
+    const controller = new CalmMotionController(project());
+    const runtimeControl = snapshot([{
+      id: "camera",
+      priority: 50,
+      blend: 1,
+      updatedAtMs: 1000,
+      expiresAtMs: 1320,
+      motion: { headYaw: 0.8, bodySway: 0.5, bodyPitch: -0.3 }
+    }]);
+    const states = Array.from({ length: 30 }, (_, index) => controller.sample(index / 60, { runtimeControl, nowMs: 1000 + index * 16 }));
+    const beforeExpiry = states[19]!;
+    const afterExpiry = states[20]!;
+    expect(Math.abs(afterExpiry.headYaw - beforeExpiry.headYaw)).toBeLessThan(0.08);
+    expect(Math.abs(afterExpiry.bodySway - beforeExpiry.bodySway)).toBeLessThan(0.08);
+    expect(Math.abs(afterExpiry.bodyPitch - beforeExpiry.bodyPitch)).toBeLessThan(0.08);
+    expect(states.at(-1)!.headYaw).toBeLessThan(beforeExpiry.headYaw);
+    expect(states.at(-1)!.bodySway).toBeLessThan(beforeExpiry.bodySway);
+  });
 });

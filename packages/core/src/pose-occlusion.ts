@@ -3,8 +3,8 @@ import type { LayerBinding, MotionState, PoseOcclusionProfile, PuppetLoomProject
 export const defaultPoseOcclusionProfile: PoseOcclusionProfile = {
   kind: "semantic-occlusion-v1",
   fadeStart: 0.58,
-  farEyeOpacity: 0.68,
-  farBrowOpacity: 0.76,
+  farEyeOpacity: 1,
+  farBrowOpacity: 1,
   farEarOpacity: 0.55,
   farSideHairOpacity: 0.72,
   sideHairDepthSwap: true
@@ -30,22 +30,30 @@ function profileFor(project: PuppetLoomProject): PoseOcclusionProfile | undefine
   return project.runtime.poseOcclusion ?? defaultPoseOcclusionProfile;
 }
 
-/** Smoothly hides only the far-side painted feature as it reaches the turned face silhouette. */
+function isPaintedFaceFeature(layer: LayerBinding): boolean {
+  return layer.role === "eyeWhite"
+    || layer.role === "iris"
+    || layer.role === "eyelash"
+    || layer.role === "eyeClosed"
+    || layer.role === "eyebrow";
+}
+
+/** Keeps painted face features opaque and only softens peripheral parts near the turned silhouette. */
 export function poseDependentOpacity(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): number {
+  // Eye and brow textures are already narrowed and displaced by the pose field. Making them
+  // translucent reveals the pale face beneath and reads as a white veil instead of occlusion.
+  // The early return also protects existing projects that persisted the old sub-1 defaults.
+  if (isPaintedFaceFeature(layer)) return 1;
   const profile = profileFor(project);
   if (!profile || layer.side === "center") return 1;
   const amount = farAmount(layer, state.headYaw);
   const fade = smoothstep((amount - profile.fadeStart) / Math.max(1e-6, 1 - profile.fadeStart));
   if (fade <= 0) return 1;
-  const floor = layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash" || layer.role === "eyeClosed"
-    ? profile.farEyeOpacity
-    : layer.role === "eyebrow"
-      ? profile.farBrowOpacity
-      : layer.role === "ear"
-        ? profile.farEarOpacity
-        : layer.role === "sideHair"
-          ? profile.farSideHairOpacity
-          : 1;
+  const floor = layer.role === "ear"
+    ? profile.farEarOpacity
+    : layer.role === "sideHair"
+      ? profile.farSideHairOpacity
+      : 1;
   return 1 + (floor - 1) * fade;
 }
 

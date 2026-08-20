@@ -40,6 +40,10 @@ export interface SecondaryPartIntentSpecification extends PrimaryPartIntentSpeci
   lagResponse: number;
   lagDamping: number;
   deformationScale: number;
+  /** Selects whether a bottom-wear layer hangs freely or preserves skirt support volume. */
+  garmentStructure?: "soft" | "supported";
+  /** Allows a supported shell to yield slightly below the waist without becoming soft cloth. */
+  garmentFlexibility?: number;
 }
 
 interface PartSpecificationBase {
@@ -133,8 +137,8 @@ function headFaceIntent(value: unknown, path: string): PrimaryPartIntentSpecific
     pitchDownDegrees: numberIn(value, "pitchDownDegrees", 8, 20, path),
     contourStrength: value.contourStrength === undefined ? 1 : numberIn(value, "contourStrength", 0.4, 1.6, path),
     depthStrength: value.depthStrength === undefined ? 1 : numberIn(value, "depthStrength", 0.4, 1.6, path),
-    farEyeOpacity: value.farEyeOpacity === undefined ? 0.68 : numberIn(value, "farEyeOpacity", 0, 1, path),
-    farBrowOpacity: value.farBrowOpacity === undefined ? 0.76 : numberIn(value, "farBrowOpacity", 0, 1, path),
+    farEyeOpacity: value.farEyeOpacity === undefined ? 1 : numberIn(value, "farEyeOpacity", 0, 1, path),
+    farBrowOpacity: value.farBrowOpacity === undefined ? 1 : numberIn(value, "farBrowOpacity", 0, 1, path),
     farEarOpacity: value.farEarOpacity === undefined ? 0.55 : numberIn(value, "farEarOpacity", 0, 1, path),
     farSideHairOpacity: value.farSideHairOpacity === undefined ? 0.72 : numberIn(value, "farSideHairOpacity", 0, 1, path),
     occlusionFadeStart: value.occlusionFadeStart === undefined ? 0.58 : numberIn(value, "occlusionFadeStart", 0, 0.95, path),
@@ -191,7 +195,16 @@ function partSpecification(value: unknown, index: number): ModelAgentPartSpecifi
         ...intent,
         lagResponse: numberIn(source, "lagResponse", 0.1, 30, `${path}.intent`),
         lagDamping: numberIn(source, "lagDamping", 0.1, 3, `${path}.intent`),
-        deformationScale: numberIn(source, "deformationScale", 0.1, 2, `${path}.intent`)
+        deformationScale: numberIn(source, "deformationScale", 0.1, 2, `${path}.intent`),
+        ...(part === "skirt" && source.garmentStructure !== undefined ? (() => {
+          if (source.garmentStructure !== "soft" && source.garmentStructure !== "supported") {
+            throw new PuppetLoomError("INVALID_INPUT", `${path}.intent.garmentStructure 必须是 soft 或 supported。`);
+          }
+          return { garmentStructure: source.garmentStructure };
+        })() : {}),
+        ...(part === "skirt" && source.garmentFlexibility !== undefined ? {
+          garmentFlexibility: numberIn(source, "garmentFlexibility", 0, 0.5, `${path}.intent`)
+        } : {})
       }
     };
   }
@@ -252,7 +265,8 @@ function defaultPartSpecification(part: ModelAgentPart): ModelAgentPartSpecifica
       stability: 0.5,
       lagResponse: 7.4,
       lagDamping: 0.82,
-      deformationScale: 0.88
+      deformationScale: 0.88,
+      ...(part === "skirt" ? { garmentStructure: "soft" as const, garmentFlexibility: 0 } : {})
     },
     rationale: ["该部位的自然跟随基线；外部 Agent 应在看图后调整。"]
   };
@@ -261,7 +275,7 @@ function defaultPartSpecification(part: ModelAgentPart): ModelAgentPartSpecifica
     intent: part === "headFace"
       ? {
         amplitude: 0.9, response: 0.72, stability: 0.7, yawDegrees: 12, pitchUpDegrees: 12, pitchDownDegrees: 14,
-        contourStrength: 1, depthStrength: 1, farEyeOpacity: 0.68, farBrowOpacity: 0.76,
+        contourStrength: 1, depthStrength: 1, farEyeOpacity: 1, farBrowOpacity: 1,
         farEarOpacity: 0.55, farSideHairOpacity: 0.72, occlusionFadeStart: 0.58, sideHairDepthSwap: true
       }
       : { amplitude: 0.76, response: 0.72, stability: 0.66 },

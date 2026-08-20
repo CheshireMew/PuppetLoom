@@ -19,7 +19,12 @@ function project(): PuppetLoomProject {
   return {
     version: 4, name: "occlusion", canvas: { width: 100, height: 100 },
     source: { originalFileName: "fixture.psd", psdSha256: "9".repeat(64), psdPath: "source/fixture.psd" }, rigLevel: "semantic",
-    layers: [layer("hair-left", "sideHair", "left", 9), layer("hair-right", "sideHair", "right", 9), layer("face", "face", "center", 10), layer("eye-left", "eyeWhite", "left", 15), layer("eye-right", "eyeWhite", "right", 15)],
+    layers: [
+      layer("hair-left", "sideHair", "left", 9), layer("hair-right", "sideHair", "right", 9),
+      layer("ear-left", "ear", "left", 9), layer("face", "face", "center", 10),
+      layer("eye-left", "eyeWhite", "left", 15), layer("eye-right", "eyeWhite", "right", 15),
+      layer("brow-left", "eyebrow", "left", 16)
+    ],
     model: createDefaultAuthoringModel(), anchors: {},
     runtime: {
       seed: 1, profile: "coherent-v1", features: { headTurn: true, bodyFollow: true, gaze: true, hairPhysics: false, blink: true, mouthMotion: true },
@@ -30,13 +35,24 @@ function project(): PuppetLoomProject {
 }
 
 describe("pose-dependent depth and occlusion", () => {
-  it("fades only the far eye after the configured turn threshold", () => {
+  it("keeps painted eyes and brows opaque while peripheral far-side parts can fade", () => {
     const value = project();
-    const far = value.layers.find((candidate) => candidate.id === "eye-left")!;
-    const near = value.layers.find((candidate) => candidate.id === "eye-right")!;
-    expect(authoredOpacityFor(value, far, { ...neutralMotionState, headYaw: 0.5 })).toBe(1);
-    expect(authoredOpacityFor(value, far, { ...neutralMotionState, headYaw: 1 })).toBeCloseTo(0.68);
-    expect(authoredOpacityFor(value, near, { ...neutralMotionState, headYaw: 1 })).toBe(1);
+    value.runtime.poseOcclusion = {
+      kind: "semantic-occlusion-v1", fadeStart: 0.58, farEyeOpacity: 0.2, farBrowOpacity: 0.3,
+      farEarOpacity: 0.55, farSideHairOpacity: 0.72, sideHairDepthSwap: true
+    };
+    const farEye = value.layers.find((candidate) => candidate.id === "eye-left")!;
+    const nearEye = value.layers.find((candidate) => candidate.id === "eye-right")!;
+    const farBrow = value.layers.find((candidate) => candidate.id === "brow-left")!;
+    const farEar = value.layers.find((candidate) => candidate.id === "ear-left")!;
+    const farHair = value.layers.find((candidate) => candidate.id === "hair-left")!;
+    const nearHair = value.layers.find((candidate) => candidate.id === "hair-right")!;
+    expect(authoredOpacityFor(value, farEye, { ...neutralMotionState, headYaw: 1 })).toBe(1);
+    expect(authoredOpacityFor(value, nearEye, { ...neutralMotionState, headYaw: 1 })).toBe(1);
+    expect(authoredOpacityFor(value, farBrow, { ...neutralMotionState, headYaw: 1 })).toBe(1);
+    expect(authoredOpacityFor(value, farEar, { ...neutralMotionState, headYaw: 1 })).toBeCloseTo(0.55);
+    expect(authoredOpacityFor(value, farHair, { ...neutralMotionState, headYaw: 1 })).toBeCloseTo(0.72);
+    expect(authoredOpacityFor(value, nearHair, { ...neutralMotionState, headYaw: 1 })).toBe(1);
   });
 
   it("moves far side hair behind the face and near side hair in front", () => {

@@ -42,10 +42,16 @@ const MEDIAPIPE_WASM_FILES = new Set([
   "vision_wasm_nosimd_internal.js", "vision_wasm_nosimd_internal.wasm"
 ]);
 
-protocol.registerSchemesAsPrivileged([{
-  scheme: "puppetloom-runtime",
-  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
-}]);
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "puppetloom-runtime",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+  },
+  {
+    scheme: "puppetloom-media",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+  }
+]);
 
 function runtimeAssetLocations(): { wasmBaseUrl: string; faceLandmarkerModelUrl: string } {
   return {
@@ -491,7 +497,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await runtimeControlService.start();
   const projectIpc = new ProjectIpcService(applicationProfile);
   projectIpc.register();
-  const calibrationIpc = new CalibrationIpcService((directory) => projectIpc.rememberProject(directory));
+  const calibrationIpc = new CalibrationIpcService((directory, project) => projectIpc.rememberProject(directory, project));
   calibrationIpc.register();
   ipcMain.handle("window:editor-mode", (event, enabled: boolean, directory?: string) => {
     const window = ownerWindow(event);
@@ -547,8 +553,9 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:launch", async (_event, directory: string, options?: ViewerLaunchOptions) => {
     const projectDirectory = resolve(directory);
-    await projectIpc.rememberProject(projectDirectory);
-    const window = await createViewer(projectDirectory, undefined, false, options?.project, options?.sourceLabel);
+    const project = options?.project ?? await loadProject(projectDirectory);
+    await projectIpc.rememberProject(projectDirectory, project);
+    const window = await createViewer(projectDirectory, undefined, false, project, options?.sourceLabel);
     return { id: window.id, state: stateFor(window) };
   });
   ipcMain.handle("viewer:project", (event) => {
@@ -668,10 +675,10 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     if (!window) throw new Error("找不到录制窗口。" );
     return performanceRecordingService.append(window.id, id, bytes);
   });
-  ipcMain.handle("viewer:performance-recording-stop", (event, id: string, durationMs: number) => {
+  ipcMain.handle("viewer:performance-recording-stop", (event, id: string, durationMs: number, inputSession?: import("./performance-recording-service.js").PerformanceRecordingInputSession) => {
     const window = ownerWindow(event);
     if (!window) throw new Error("找不到录制窗口。" );
-    const result = performanceRecordingService.stop(window.id, id, durationMs);
+    const result = performanceRecordingService.stop(window.id, id, durationMs, inputSession);
     runtimeLog("performance-recording-complete", { viewerId: window.id, id, output: result.output, durationMs, bytes: result.bytes });
     return result;
   });

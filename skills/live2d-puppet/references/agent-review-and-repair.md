@@ -16,7 +16,7 @@ PuppetLoom 负责读取 PSD 和项目、生成结构化规格模板、验证明�
 
 模板的 `kind` 固定为 `puppetloom-rig-spec`，`scope` 明确区分 `whole` 与 `selected`，`baseRevision` 绑定当前项目，`parts` 只包含项目实际存在且本轮获准处理的部位。整模计划仍必须逐项报告全部职责：不存在的部位标为 `not-present`，规格漏掉实际存在的部位则停止，不能静默使用默认值。外部 Agent 必须在看过基线后修改 `goal`、每个部位的 `intent` 和 `rationale`，再保存为 JSON。模板数值只是安全起点，不能原样当成“已经理解用户”。`layerIds` 只在自动目标不够精确时填写。
 
-主运动部位使用 `amplitude/response/stability`。前发额外使用 `ahogeAmplitude/ahogeResponse/ahogeStability/lagResponse/lagDamping/deformationScale`；其它次级运动使用 `lagResponse/lagDamping/deformationScale`。幅度表示目标可见度，response 表示跟随速度，stability 和 lagDamping 控制收敛与回弹，lagResponse 控制物理追赶速度，deformationScale 控制局部关键形变形。`rationale` 必须写看到了什么和为什么这样改，不能只复述数字。
+主运动部位使用 `amplitude/response/stability`。前发额外使用 `ahogeAmplitude/ahogeResponse/ahogeStability/lagResponse/lagDamping/deformationScale`；其它次级运动使用 `lagResponse/lagDamping/deformationScale`。幅度表示目标可见度，response 表示跟随速度，stability 和 lagDamping 控制收敛与回弹，lagResponse 控制物理追赶速度，deformationScale 控制局部关键形变形。裙摆还可使用 `garmentStructure` 区分软垂布料与保体积支撑结构，并用 `garmentFlexibility` 单独控制支撑结构中下段的受限弹性。支撑类型、整体摆动速度和局部柔性是三个独立判断：“塌陷”先修结构，“太慢”调 response/lag，“太硬”调 flexibility，不能靠降低摆幅把软布伪装成裙撑，也不能靠锁死整件裙子维持体积。`rationale` 必须写看到了什么和为什么这样改，不能只复述数字。
 
 ```powershell
 & <skill>\scripts\invoke_puppetloom.ps1 agent plan --project E:\Puppets\Character --spec E:\Puppets\rig-spec-r0.json --json

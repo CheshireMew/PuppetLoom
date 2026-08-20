@@ -5,9 +5,7 @@ import {
   artMeshDetailForRole,
   compareProjectRevisions,
   listCalibrationSessions,
-  loadBaseProject,
-  loadCalibration,
-  loadCalibrationDraft,
+  loadCalibrationWorkspace,
   loadProjectTextureSources,
   loadProject,
   makeAdaptiveMesh,
@@ -18,13 +16,13 @@ import {
   saveCalibrationPatch,
   setCalibrationEvidenceStatus
 } from "@puppetloom/core";
-import type { CalibrationOverrides, CalibrationPatch, MeshBinding, RevisionComparisonResult } from "@puppetloom/core";
+import type { CalibrationOverrides, CalibrationPatch, MeshBinding, PuppetLoomProject, RevisionComparisonResult } from "@puppetloom/core";
 import { ipcMain } from "electron";
 
 export class CalibrationIpcService {
   private readonly draftWrites = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly rememberProject: (projectDirectory: string) => Promise<unknown>) {}
+  constructor(private readonly rememberProject: (projectDirectory: string, project: PuppetLoomProject) => Promise<unknown>) {}
 
   private queueDraftWrite(projectDirectory: string, operation: () => Promise<unknown>): Promise<unknown> {
     const root = resolve(projectDirectory);
@@ -55,14 +53,11 @@ export class CalibrationIpcService {
   register(): void {
     ipcMain.handle("editor:read", async (_event, directory: string) => {
       const projectDirectory = resolve(directory);
-      await this.rememberProject(projectDirectory);
+      const workspace = await loadCalibrationWorkspace(projectDirectory);
+      await this.rememberProject(projectDirectory, workspace.project);
       return {
         projectDirectory,
-        baseProject: await loadBaseProject(projectDirectory),
-        project: await loadProject(projectDirectory),
-        calibration: await loadCalibration(projectDirectory),
-        sessions: await listCalibrationSessions(projectDirectory),
-        draft: await loadCalibrationDraft(projectDirectory)
+        ...workspace
       };
     });
     ipcMain.handle("editor:generate-art-meshes", async (_event, directory: string, layerIds: string[]) => {

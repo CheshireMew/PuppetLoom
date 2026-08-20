@@ -94,7 +94,9 @@ describe("primary model Agent", () => {
       }
     });
     expect(proposal.overrides.runtime?.poseField).toEqual(expect.objectContaining({ contourStrength: 1.2, depthStrength: 1.1 }));
-    expect(proposal.overrides.runtime?.poseOcclusion).toEqual(expect.objectContaining({ farEyeOpacity: 0.66, fadeStart: 0.55, sideHairDepthSwap: true }));
+    expect(proposal.overrides.runtime?.poseOcclusion).toEqual(expect.objectContaining({
+      farEyeOpacity: 1, farBrowOpacity: 1, fadeStart: 0.55, sideHairDepthSwap: true
+    }));
   });
 
   it("does not erase accepted front-hair authoring while improving the head", () => {

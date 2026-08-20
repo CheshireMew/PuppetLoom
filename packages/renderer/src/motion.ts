@@ -104,6 +104,13 @@ function advanceTracking(axis: TrackingAxis, target: number, delta: number, resp
   axis.value += axis.velocity * delta;
 }
 
+function advanceRateLimited(axis: TrackingAxis, target: number, delta: number, maximumSpeed: number): void {
+  const maximumStep = Math.max(0, maximumSpeed) * delta;
+  const step = Math.max(-maximumStep, Math.min(maximumStep, target - axis.value));
+  axis.velocity = step / delta;
+  axis.value += step;
+}
+
 function secondaryTuning(project: PuppetLoomProject, part: SecondaryMotionPart): MotionTuning {
   return { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[part] ?? {}) };
 }
@@ -316,8 +323,7 @@ export class CalmMotionController {
       [this.trackedBodyPitch, controlled("bodyPitch", pitch * 0.46)],
       [this.trackedBodyRoll, controlled("bodyRoll", roll * 0.52 + yaw * 0.16)]
     ] as const) {
-      axis.velocity = (target - axis.value) / delta;
-      axis.value = target;
+      advanceRateLimited(axis, target, delta, 3);
     }
 
     const headVelocity = Math.max(-2.5, Math.min(2.5, (yaw - this.previousHead) / delta));
@@ -386,7 +392,14 @@ export class CalmMotionController {
     const bodyVertical = this.trackedBodyPitch.velocity;
     advanceChain(this.topCloth, -bodyLateral * 0.021 + clothWind * 0.032, -bodyVertical * 0.008, delta, secondaryTuning(this.project, "topCloth"));
     const skirtSway = Math.sin(timeSeconds * 0.95 + phase * 0.74) * 0.25 + Math.sin(timeSeconds * 1.65 + phase * 0.29) * 0.07;
-    advanceChain(this.skirt, -bodyLateral * 0.031 + skirtSway * 0.115, -bodyVertical * 0.008, delta, secondaryTuning(this.project, "skirt"));
+    const supportedSkirt = this.project.layers?.some((layer) => layer.role === "bottomWear" && layer.garmentStructure === "supported") ?? false;
+    advanceChain(
+      this.skirt,
+      -bodyLateral * (supportedSkirt ? 0.032 : 0.031) + skirtSway * (supportedSkirt ? 0.085 : 0.115),
+      -bodyVertical * (supportedSkirt ? 0.007 : 0.008),
+      delta,
+      secondaryTuning(this.project, "skirt")
+    );
     const tailSwing = Math.sin(timeSeconds * 1.35 + phase * 0.76) * 0.056 + Math.sin(timeSeconds * 0.63 + phase * 1.32) * 0.012;
     advanceChain(this.tail, -bodyLateral * 0.01 + tailWind * 0.008, -bodyVertical * 0.015 + tailSwing, delta, secondaryTuning(this.project, "tail"));
     advanceChain(this.accessory, -hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta, secondaryTuning(this.project, "accessory"));

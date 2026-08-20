@@ -190,6 +190,8 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
     assertNormalized(override.pivot, `${layer.sourceName} 的轴心`);
     next.pivot = { ...override.pivot };
   }
+  if (override.garmentStructure) next.garmentStructure = override.garmentStructure;
+  if (override.garmentFlexibility !== undefined) next.garmentFlexibility = override.garmentFlexibility;
   if (override.secondaryAnchors) {
     for (const [name, point] of Object.entries(override.secondaryAnchors)) if (point) assertNormalized(point, `${layer.sourceName} 的 ${name}`);
     next.secondaryAnchors = { ...(next.secondaryAnchors ?? {}), ...clone(override.secondaryAnchors) };
@@ -277,8 +279,8 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
     next.runtime.poseOcclusion = {
       kind: "semantic-occlusion-v1",
       fadeStart: 0.58,
-      farEyeOpacity: 0.68,
-      farBrowOpacity: 0.76,
+      farEyeOpacity: 1,
+      farBrowOpacity: 1,
       farEarOpacity: 0.55,
       farSideHairOpacity: 0.72,
       sideHairDepthSwap: true,

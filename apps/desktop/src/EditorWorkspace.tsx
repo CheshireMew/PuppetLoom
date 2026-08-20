@@ -7,6 +7,7 @@ import type {
   MotionState,
   Point,
   PoseValidation,
+  PuppetLoomProject,
   RevisionComparisonResult,
   SecondaryMotionPart,
   TorsoVolumeLandmark,
@@ -136,6 +137,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [poseId, setPoseId] = useState("neutral");
   const [autonomous, setAutonomous] = useState(false);
   const [previewState, setPreviewState] = useState<MotionState>(() => clone(neutralMotionState));
+  const autonomousRef = useRef(autonomous);
+  const previewStateRef = useRef(previewState);
+  const renderProjectRef = useRef<PuppetLoomProject | undefined>(undefined);
   const [selectedParameterId, setSelectedParameterId] = useState("param-head-yaw");
   const [selectedBehaviorId, setSelectedBehaviorId] = useState("");
   const [behaviorTime, setBehaviorTime] = useState(0);
@@ -204,13 +208,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     return () => { void window.puppetloom.setEditorMode(false); };
   }, [projectDirectory]);
 
+  const hasPending = Object.keys(pending).length > 0;
   const effectiveOverrides = useMemo(() => workspace ? mergeCalibrationOverrides(workspace.calibration.overrides, pending) : pending, [workspace, pending]);
   // A draft must stay spatially stable while a point is dragged. Safety is
   // reported below and enforced by the save transaction, never by silently
   // shrinking the whole runtime envelope during pointer movement.
-  const project = useMemo(() => workspace ? applyCalibrationOverrides(workspace.baseProject, effectiveOverrides) : undefined, [workspace, effectiveOverrides]);
+  const project = useMemo(() => workspace
+    ? hasPending ? applyCalibrationOverrides(workspace.baseProject, effectiveOverrides) : workspace.project
+    : undefined, [workspace, effectiveOverrides, hasPending]);
   const selectedLayer = project?.layers.find((layer) => layer.id === selectedLayerId);
-  const hasPending = Object.keys(pending).length > 0;
   const interactionLocked = busy || meshUpgrading;
   const renderProject = useMemo(() => {
     const source = showDraftBefore ? workspace?.project : project;
@@ -222,6 +228,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         : { ...layer, visible: false })
     };
   }, [project, section, selectedLayerId, showDraftBefore, soloSelectedLayer, workspace?.project]);
+  autonomousRef.current = autonomous;
+  previewStateRef.current = previewState;
+  renderProjectRef.current = renderProject;
   const renderSelectedLayer = renderProject?.layers.find((layer) => layer.id === selectedLayerId);
   const posedMeshPoints = useMemo(() => renderProject && renderSelectedLayer
     ? deformedPoints(renderProject, renderSelectedLayer, previewState)
@@ -245,10 +254,17 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     let disposed = false;
     void PuppetRenderer.create(canvas.current, workspace.project, (layer) => window.puppetloom.readAsset(projectDirectory, layer)).then((created) => {
       if (disposed) { created.dispose(); return; }
-      renderer.current = created;
-      created.start();
-      created.setPaused(true);
-      created.render(previewState);
+      try {
+        const latestProject = renderProjectRef.current;
+        if (latestProject && latestProject !== created.project) created.updateProject(latestProject);
+        renderer.current = created;
+        created.start();
+        created.setPaused(!autonomousRef.current);
+        if (!autonomousRef.current) created.render(previewStateRef.current);
+      } catch (cause) {
+        created.dispose();
+        throw cause;
+      }
     }).catch((cause) => setError(messageOf(cause)));
     return () => {
       disposed = true;
@@ -260,13 +276,18 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   useEffect(() => {
     if (!renderProject || !renderer.current) return;
     try {
-      renderer.current.updateProject(renderProject);
-      renderer.current.setPaused(!autonomous);
-      if (!autonomous) renderer.current.render(previewState);
+      if (renderer.current.project !== renderProject) renderer.current.updateProject(renderProject);
+      if (!autonomousRef.current) renderer.current.render(previewStateRef.current);
     } catch (cause) {
       setError(messageOf(cause));
     }
-  }, [renderProject, previewState, autonomous]);
+  }, [renderProject]);
+
+  useEffect(() => {
+    if (!renderer.current) return;
+    renderer.current.setPaused(!autonomous);
+    if (!autonomous) renderer.current.render(previewState);
+  }, [previewState, autonomous]);
 
   useEffect(() => {
     if (!behaviorPlaying || !project) return;

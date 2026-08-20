@@ -20,6 +20,8 @@
 & <skill>\scripts\invoke_puppetloom.ps1 record --project E:\Puppets\Character --output E:\Puppets\Character\reports\agent-secondary-r0 --mode secondary --revision 0 --json
 ```
 
+先查看 `inspect` 返回的 `preflight`：普通创建保持自动 Alpha 清理，不传高级例外参数。系统默认只移除透明度很低、范围极小且与主体断开的高置信度噪点，眼睛高光、细发丝和装饰等疑似有效细节继续保留，源 PSD 始终不改。`--preserve-alpha-noise` 只用于诊断时保留全部区域；只有用户明确接受可能误删绘画细节时才使用 `--clean-alpha` 激进清理。不要把这两个高级例外变成普通用户创建角色前必须勾选或决定的步骤。
+
 `create` 输出必须是新目录或空目录；每次 `record` 也使用新的证据目录，软件不会覆盖同名证据。上面的 `record` 只在确实需要连续视频且用户允许时运行，不是固定交付物。参考图缺失时省略参数，不得代入不对应的图片。成功生成 `semantic/grouped/minimal` 任一等级都返回 0；2 是输入或补丁无效，3 是文件系统、项目或运行时错误。创建完成后始终维护一个规范项目目录，以内部 revision、session 和证据历史管理版本，不复制 `Character-r1/Character-r2` 一类目录。
 
 ## Agent-first 修改顺序
@@ -32,6 +34,8 @@
 4. `edit` 是用户明确想手调或公开 CLI 无法表达局部修正时的备用入口。桌面应用不运行 Agent 编排，不把用户变成人工网格制作员，也不继续补手工工具来绕开 Agent 任务。
 
 已有项目执行“完成整模”“检查遗漏”“继续做完”前先审查，后写入。运行 `history/verify/describe`，读取当前 revision、所有实际存在的部位、accepted/rejected/unreviewed session，并用准确 revision 的高分辨率整模和局部证据检查已接受结果。整模审查覆盖所有实际存在部位，但 `apply` 只覆盖确有可见缺陷且本轮获准修改的部位；不要为了覆盖部位清单而重做已经成立的结果。若没有待修缺陷，不执行 `apply`、`author apply` 或 `calibrate`，不创建新 revision。
+
+用户问“这轮最新版”“全部做完了吗”或要求查看这轮解决的问题时，先从完整任务、批注和后续纠正重建需求清单。逐项读取公开入口的实际默认值或本次调用参数、规范项目当前 revision 的真实数据、匹配证据和接受记录；不能从代码存在、帮助文本、测试夹具或隔离副本反推正式用户路径已经启用。`test/artifacts`、临时迁移目录和报告副本不能参与“哪个是最新版”的判断。后来的单项截图只修正该项，不自动取消此前仍在同一任务内的其它要求。
 
 整模的正式入口是先取得与当前 revision 绑定的模板，由外部 Agent 看图后编辑成 `rig-spec-rN.json`，再计划和执行：
 
@@ -70,6 +74,15 @@
 
 补丁只包含用户点名部位所需的参数、关键形、变形器或物理操作，并使用刚读取的 base revision。已有项目若被用户明确指定为只读对照，不在其中执行 `apply`、`author apply` 或 `calibrate`；只对另行获准的工作项目写入，并在交付前核对对照项目没有变化。用户在任务中追加的范围和素材限制立即生效：说“只使用现有素材”时不得运行 `enhance`、生成或下载新图、修改 PSD 或把参考图加入项目；允许继续制作现有素材能支持的部位，缺口只报告为 `needs-assets`。说“不要视频”时不得运行 `record`，不能把证据偏好擅自改写成素材或能力扩展。
 
+用户要求建立或补齐标准表情、肢体、耳朵、尾巴等可触发动作时，先按真实图层只读规划，再写入同一项目的可恢复 revision：
+
+```powershell
+& <skill>\scripts\invoke_puppetloom.ps1 actions plan --project E:\Puppets\Character --json
+& <skill>\scripts\invoke_puppetloom.ps1 actions apply --project E:\Puppets\Character --json
+```
+
+逐项核对 `completed/not-present/needs-assets`，不能因为动作库命令成功就把缺素材部位说成完成。重复计划应无待写入变化；若它仍提出相同修改，先查项目 revision 和幂等性，不继续制造 revision。
+
 ## 视觉复核
 
 始终查看准确 revision 的 `pose-sheet.png`、`motion-sheet.png`、每个 `focusComparisonSheet` 和 4×4 `focusMotionSheet`；只有需要定位单帧时才读取 `focusMotionManifest`，不能只读取路径或 JSON。需要新的高清证据时运行 `render --project <directory> --output <new-directory> --revision <n> --size 1080 --focus <part>`，并用 `play --project <directory> --revision <n>` 打开同一候选。打开新 revision 前关闭或明确替换旧角色窗口，不能让用户在多个过期窗口中猜哪个是当前结果。主姿态逐格检查中立、左右转、向上看、向下看和四个组合方向；动态进入、保持、退出确实影响判断且用户允许视频时，再运行 `record --project <directory> --output <new-directory> --mode autonomous --revision <n>`。secondary 证据必须证明主运动归零；若使用报告，其 `headAndBodyFrozen: true`，且头、身体、视线、呼吸、眨眼和嘴部极值都应为 0，再检查前后发、呆毛、耳朵、衣摆与尾巴的独立惯性。报告中的绝对项目路径、`baseProjectSha256`、`revision`、`currentRevisionAtStart` 和窗口比例必须匹配本次任务，不能拿旧进程、旧视频或文件名推测代替。放大查看脸缘、眼角、前发发梢、头皮/发饰边界和脖子连接，不能只看整张缩略图。
@@ -79,6 +92,17 @@
 视觉异常先用摘要 `describe` 找稳定 ID，再运行 `describe --layer <id> --revision <n>`。顶点补丁使用输出中的完整 `delta`，不是在当前画面上重复累加；权重使用该顶点的当前绝对值。`alphaTopology.componentCount/components` 用于识别一个纹理中合并的头饰、双耳或其它分离部件，再决定是否需要多个锚点、局部权重或重新分层。坐标原点在画面左上，X 向右、Y 向下；`side` 是角色自身的解剖学左右，角色 left 通常位于画面右侧。不要直接改 `puppetloom.json`。
 
 缺少闭眼或三态嘴形时，先检查 `requests/asset-requests.json`。只有用户允许新增素材，且补充 PNG 的尺寸、Alpha 和覆盖率都符合请求，才运行 `enhance --assets <directory>`；命令返回的 `accepted` 才算接入，`rejected` 不能当成成功。用户限定现有素材时保留请求但不执行增强。
+
+## 现有项目接入新增能力
+
+软件升级、CLI 新增能力或项目格式增加字段不等于源 PSD 变化。规范项目仍使用原来保存的同一 PSD，而只是缺少后来增加的多房束、侧脸深度或可选躯干体积数据时，先运行：
+
+```powershell
+& <skill>\scripts\invoke_puppetloom.ps1 extensions plan --project E:\Puppets\Character --json
+& <skill>\scripts\invoke_puppetloom.ps1 extensions apply --project E:\Puppets\Character --json
+```
+
+只有用户目标和素材确实需要躯干体积时才添加 `--torso-volume`，不能把它当成所有角色的默认身体效果。`plan` 必须读取项目自己的源 PSD，并把新增数据作为同一规范目录中的可恢复 revision；执行后重新检查需求清单，不能只凭 `extensions` 命令成功就宣称所有点名能力都已进入项目。
 
 ## 更新 PSD
 

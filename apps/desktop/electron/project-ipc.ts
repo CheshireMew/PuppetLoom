@@ -1,10 +1,13 @@
-import { mkdirSync } from "node:fs";
+import { createReadStream, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
 import { createProject, inspectPsd, loadProject, loadProjectRevision, verifyProject } from "@puppetloom/core";
-import { BrowserWindow, dialog, ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain, protocol } from "electron";
+import type { PuppetLoomProject } from "@puppetloom/core";
 import type { DesktopCreateRequest } from "./global.js";
+import { parseByteRange } from "./media-range.js";
 import { recentProjectDisplayName, usableRecentProjects } from "./recent-projects.js";
 
 export interface RecentProject {
@@ -28,6 +31,7 @@ function isWithin(root: string, target: string): boolean {
 
 export class ProjectIpcService {
   private readonly createControllers = new Map<string, AbortController>();
+  private readonly mediaFiles = new Map<string, string>();
   constructor(private readonly applicationProfile: string) {}
 
   async recentProjects(): Promise<RecentProject[]> {
@@ -39,9 +43,9 @@ export class ProjectIpcService {
     }
   }
 
-  async rememberProject(projectDirectory: string): Promise<RecentProject[]> {
+  async rememberProject(projectDirectory: string, loadedProject?: PuppetLoomProject): Promise<RecentProject[]> {
     const directory = resolve(projectDirectory);
-    const project = await loadProject(directory);
+    const project = loadedProject ?? await loadProject(directory);
     const current = (await this.recentProjects()).filter((entry) => !samePath(entry.directory, directory));
     const next = [{ directory, name: recentProjectDisplayName(project.name, directory), openedAt: new Date().toISOString() }, ...current].slice(0, 12);
     mkdirSync(this.applicationProfile, { recursive: true });
@@ -50,6 +54,38 @@ export class ProjectIpcService {
   }
 
   register(): void {
+    protocol.handle("puppetloom-media", async (request) => {
+      const token = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
+      const target = this.mediaFiles.get(token);
+      if (!target) return new Response("Media not found", { status: 404 });
+      let size = 0;
+      try {
+        const details = await stat(target);
+        if (!details.isFile()) return new Response("Media not found", { status: 404 });
+        size = details.size;
+      } catch {
+        return new Response("Media not found", { status: 404 });
+      }
+      const range = parseByteRange(request.headers.get("range"), size);
+      if (range === null) {
+        return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}`, "accept-ranges": "bytes" } });
+      }
+      const start = range?.start ?? 0;
+      const end = range?.end ?? Math.max(0, size - 1);
+      const headers = new Headers({
+        "accept-ranges": "bytes",
+        "access-control-allow-origin": "*",
+        "cache-control": "no-store",
+        "content-length": String(size === 0 ? 0 : end - start + 1),
+        "content-type": "video/webm"
+      });
+      if (range) headers.set("content-range", `bytes ${start}-${end}/${size}`);
+      if (request.method === "HEAD" || size === 0) return new Response(null, { status: range ? 206 : 200, headers });
+      const stream = createReadStream(target, { start, end });
+      const body = Readable.toWeb(stream) as unknown as ConstructorParameters<typeof Response>[0];
+      return new Response(body, { status: range ? 206 : 200, headers });
+    });
+
     const chooseFile = async (event: Electron.IpcMainInvokeEvent, filters: Electron.FileFilter[]): Promise<string | null> => {
       const owner = ownerWindow(event);
       const options = { properties: ["openFile"] as Array<"openFile">, filters };
@@ -71,7 +107,7 @@ export class ProjectIpcService {
       const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
-    ipcMain.handle("project:inspect", (_event, input: string, alphaCleanup: DesktopCreateRequest["alphaCleanup"] = "preserve-all") => inspectPsd(resolve(input), { alphaCleanup }));
+    ipcMain.handle("project:inspect", (_event, input: string, alphaCleanup: DesktopCreateRequest["alphaCleanup"] = "automatic") => inspectPsd(resolve(input), { alphaCleanup }));
     ipcMain.handle("project:create", async (event, request: DesktopCreateRequest) => {
       const operationId = request.operationId ?? randomUUID();
       if (this.createControllers.has(operationId)) throw new Error("同一个创建操作已经在运行。");
@@ -82,7 +118,7 @@ export class ProjectIpcService {
           input: resolve(request.input),
           output: resolve(request.output),
           seed: request.seed ?? 42,
-          alphaCleanup: request.alphaCleanup ?? "preserve-all",
+          alphaCleanup: request.alphaCleanup ?? "automatic",
           signal: controller.signal,
           onProgress: (phase) => { if (!event.sender.isDestroyed()) event.sender.send("project:create-progress", { operationId, phase }); },
           ...(request.reference ? { reference: resolve(request.reference) } : {}),
@@ -104,7 +140,7 @@ export class ProjectIpcService {
     ipcMain.handle("project:read", async (_event, directory: string, revision?: number) => {
       const projectDirectory = resolve(directory);
       const project = revision === undefined ? await loadProject(projectDirectory) : await loadProjectRevision(projectDirectory, revision);
-      await this.rememberProject(projectDirectory);
+      await this.rememberProject(projectDirectory, project);
       return project;
     });
     ipcMain.handle("project:asset", async (_event, directory: string, assetPath: string) => {
@@ -113,6 +149,28 @@ export class ProjectIpcService {
       if (!isWithin(root, target)) throw new Error("纹理路径超出项目目录。");
       const mime = extname(target).toLowerCase() === ".webp" ? "image/webp" : "image/png";
       return { mime, bytes: new Uint8Array(await readFile(target)) };
+    });
+    ipcMain.handle("project:media-url", async (_event, directory: string, mediaPath: string) => {
+      const root = resolve(directory);
+      const performanceRoot = resolve(root, "reports", "performances");
+      const target = resolve(root, mediaPath);
+      if (!isWithin(root, target) || !isWithin(performanceRoot, target) || extname(target).toLowerCase() !== ".webm") {
+        throw new Error("视频路径不属于当前项目的表演录制目录。");
+      }
+      const details = await stat(target);
+      if (!details.isFile()) throw new Error("录制视频不存在。");
+      const token = randomUUID();
+      this.mediaFiles.set(token, target);
+      return `puppetloom-media://local/${encodeURIComponent(token)}`;
+    });
+    ipcMain.handle("project:media-release", (_event, mediaUrl: string) => {
+      try {
+        const url = new URL(mediaUrl);
+        if (url.protocol !== "puppetloom-media:") return false;
+        return this.mediaFiles.delete(decodeURIComponent(url.pathname.replace(/^\//, "")));
+      } catch {
+        return false;
+      }
     });
   }
 }

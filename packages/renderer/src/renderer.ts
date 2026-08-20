@@ -9,6 +9,7 @@ interface LayerGpuResources {
   vertexBuffer: WebGLBuffer;
   indexBuffer: WebGLBuffer;
   indexCount: number;
+  indices: Uint16Array;
   vertices: Float32Array;
 }
 
@@ -86,6 +87,45 @@ async function toImageBitmap(source: Blob | ImageBitmapSource): Promise<ImageBit
 export interface AspectFitScale {
   x: number;
   y: number;
+}
+
+export interface DrawingBufferSize {
+  width: number;
+  height: number;
+}
+
+export const MAX_DRAWING_BUFFER_PIXELS = 2048 * 2048;
+export const MAX_DRAWING_BUFFER_DIMENSION = 4096;
+
+/**
+ * Preserves device-pixel sharpness until the drawing buffer reaches a bounded
+ * GPU budget, then scales both axes equally so aspect ratio never changes.
+ */
+export function drawingBufferSize(
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number,
+  maxPixels = MAX_DRAWING_BUFFER_PIXELS,
+  maxDimension = MAX_DRAWING_BUFFER_DIMENSION
+): DrawingBufferSize {
+  const safeWidth = Number.isFinite(cssWidth) && cssWidth > 0 ? cssWidth : 1;
+  const safeHeight = Number.isFinite(cssHeight) && cssHeight > 0 ? cssHeight : 1;
+  const safeRatio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  const desiredWidth = Math.max(1, Math.round(safeWidth * safeRatio));
+  const desiredHeight = Math.max(1, Math.round(safeHeight * safeRatio));
+  const safeMaxPixels = Number.isFinite(maxPixels) && maxPixels > 0 ? maxPixels : MAX_DRAWING_BUFFER_PIXELS;
+  const safeMaxDimension = Number.isFinite(maxDimension) && maxDimension > 0 ? maxDimension : MAX_DRAWING_BUFFER_DIMENSION;
+  const scale = Math.min(
+    1,
+    Math.sqrt(safeMaxPixels / (desiredWidth * desiredHeight)),
+    safeMaxDimension / desiredWidth,
+    safeMaxDimension / desiredHeight
+  );
+  const fit = (value: number) => scale < 1 ? Math.floor(value * scale) : value;
+  return {
+    width: Math.max(1, fit(desiredWidth)),
+    height: Math.max(1, fit(desiredHeight))
+  };
 }
 
 export function activeElapsedSeconds(startedAt: number, now: number, pausedDuration: number, pausedAt?: number): number {
@@ -226,14 +266,14 @@ export class PuppetRenderer {
       gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, vertices.byteLength, gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(layer.mesh.triangles), gl.STATIC_DRAW);
-      this.resources.set(layer.id, { texture, vertexBuffer, indexBuffer, indexCount: layer.mesh.triangles.length, vertices });
+      const indices = new Uint16Array(layer.mesh.triangles);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+      this.resources.set(layer.id, { texture, vertexBuffer, indexBuffer, indexCount: indices.length, indices, vertices });
     }
   }
 
   resize(): void {
-    const width = Math.max(1, Math.round(this.canvas.clientWidth * window.devicePixelRatio));
-    const height = Math.max(1, Math.round(this.canvas.clientHeight * window.devicePixelRatio));
+    const { width, height } = drawingBufferSize(this.canvas.clientWidth, this.canvas.clientHeight, window.devicePixelRatio);
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
@@ -335,8 +375,7 @@ export class PuppetRenderer {
       if (!this.paused) {
         this.render(this.controller.sample(activeElapsedSeconds(this.startedAt, now, this.pausedDuration, this.pausedAt), { lookTarget: this.lookTarget, ...(this.runtimeControl ? { runtimeControl: this.runtimeControl } : {}), nowMs: Date.now() }));
       } else {
-        const width = Math.max(1, Math.round(this.canvas.clientWidth * window.devicePixelRatio));
-        const height = Math.max(1, Math.round(this.canvas.clientHeight * window.devicePixelRatio));
+        const { width, height } = drawingBufferSize(this.canvas.clientWidth, this.canvas.clientHeight, window.devicePixelRatio);
         if (this.canvas.width !== width || this.canvas.height !== height) {
           this.render(this.lastState ?? this.controller.sample(0, { lookTarget: this.lookTarget }));
         }
@@ -382,9 +421,15 @@ export class PuppetRenderer {
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, resource.vertexBuffer);
         this.gl.bufferData(this.gl.ARRAY_BUFFER, resource.vertices.byteLength, this.gl.DYNAMIC_DRAW);
       }
-      this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
-      this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(layer.mesh.triangles), this.gl.STATIC_DRAW);
-      resource.indexCount = layer.mesh.triangles.length;
+      const triangles = layer.mesh.triangles;
+      const indicesChanged = resource.indices.length !== triangles.length
+        || resource.indices.some((value, index) => value !== triangles[index]);
+      if (indicesChanged) {
+        resource.indices = new Uint16Array(triangles);
+        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
+        this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, resource.indices, this.gl.STATIC_DRAW);
+        resource.indexCount = resource.indices.length;
+      }
     }
     this.currentProject = project;
     this.controller = new CalmMotionController(project);

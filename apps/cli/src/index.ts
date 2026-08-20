@@ -739,7 +739,7 @@ const actions = program.command("actions").description("建立并检查可由快
 
 actions
   .command("plan")
-  .description("按当前角色实际拥有的眉毛、手臂、手、腿和脚图层生成动作计划，不写入项目")
+  .description("按真实图层与耳部铰点规划表情、肢体、耳朵和尾巴动作，并逐部位报告 completed/not-present/needs-assets，不写入项目")
   .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
   .option("--json", "输出 JSON")
   .action(async (options: { project: string; json?: boolean }) => {
@@ -752,7 +752,7 @@ actions
 
 actions
   .command("apply")
-  .description("以可回滚修订写入标准表情、点头、摇头、鞠躬、观察、挥手、踏步、眨眼和短句动作")
+  .description("以可回滚修订写入标准表情、点头、摇头、鞠躬、观察、挥手、踏步、眨眼、短句、耳朵轻弹和尾巴摇摆动作")
   .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
   .option("--json", "输出 JSON")
   .action(async (options: { project: string; json?: boolean }) => {

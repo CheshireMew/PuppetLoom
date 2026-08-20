@@ -24,6 +24,7 @@ import type {
   CalibrationPatch,
   CalibrationSaveResult,
   CalibrationSessionDocument,
+  CalibrationSessionSummary,
   CreateOptions,
   ProjectDescription,
   PuppetLoomProject,
@@ -435,35 +436,56 @@ export async function loadBaseProject(projectDirectory: string): Promise<PuppetL
   return (await readBaseProject(projectDirectory)).project;
 }
 
-export async function loadCalibration(projectDirectory: string): Promise<CalibrationDocument> {
-  const root = resolve(projectDirectory);
-  const { hash } = await readBaseProject(root);
+async function readCalibrationDocument(root: string, baseProjectSha256: string): Promise<CalibrationDocument> {
   const path = join(root, "calibration", "current.json");
   try {
     const document = calibrationDocumentSchema.parse(JSON.parse(await readFile(path, "utf8"))) as CalibrationDocument;
-    if (document.baseProjectSha256 !== hash) {
-      if (document.revision === 0 && Object.keys(document.overrides).length === 0) return emptyCalibration(hash);
+    if (document.baseProjectSha256 !== baseProjectSha256) {
+      if (document.revision === 0 && Object.keys(document.overrides).length === 0) return emptyCalibration(baseProjectSha256);
       throw new Error("基础项目已改变，现有校准不能安全套用。" );
     }
     return document;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyCalibration(hash);
-    throw new PuppetLoomError("INVALID_PROJECT", `无法读取项目校准：${projectDirectory}`, { cause: error });
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyCalibration(baseProjectSha256);
+    throw new PuppetLoomError("INVALID_PROJECT", `无法读取项目校准：${root}`, { cause: error });
   }
 }
 
-export async function loadCalibrationDraft(projectDirectory: string): Promise<CalibrationDraftDocument | undefined> {
-  const root = resolve(projectDirectory);
-  const [{ hash }, calibration] = await Promise.all([readBaseProject(root), loadCalibration(root)]);
+async function readCalibrationDraftDocument(
+  root: string,
+  baseProjectSha256: string,
+  calibration: CalibrationDocument
+): Promise<CalibrationDraftDocument | undefined> {
   try {
     const draft = calibrationDraftSchema.parse(JSON.parse(await readFile(join(root, "calibration", "draft.json"), "utf8"))) as CalibrationDraftDocument;
-    if (draft.baseProjectSha256 !== hash || draft.baseRevision !== calibration.revision) return undefined;
+    if (draft.baseProjectSha256 !== baseProjectSha256 || draft.baseRevision !== calibration.revision) return undefined;
     if (Object.keys(draft.overrides).length === 0 && !draft.label) return undefined;
     return draft;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new PuppetLoomError("INVALID_PROJECT", `无法读取项目校准草稿：${projectDirectory}`, { cause: error });
+    throw new PuppetLoomError("INVALID_PROJECT", `无法读取项目校准草稿：${root}`, { cause: error });
   }
+}
+
+function applyStoredCalibration(base: PuppetLoomProject, calibration: CalibrationDocument, projectDirectory: string): PuppetLoomProject {
+  try {
+    return applySafetyLimits(applyCalibrationOverrides(base, calibration.overrides));
+  } catch (error) {
+    throw new PuppetLoomError("INVALID_PROJECT", `无法应用项目校准：${projectDirectory}`, { cause: error });
+  }
+}
+
+export async function loadCalibration(projectDirectory: string): Promise<CalibrationDocument> {
+  const root = resolve(projectDirectory);
+  const { hash } = await readBaseProject(root);
+  return readCalibrationDocument(root, hash);
+}
+
+export async function loadCalibrationDraft(projectDirectory: string): Promise<CalibrationDraftDocument | undefined> {
+  const root = resolve(projectDirectory);
+  const { hash } = await readBaseProject(root);
+  const calibration = await readCalibrationDocument(root, hash);
+  return readCalibrationDraftDocument(root, hash, calibration);
 }
 
 export async function saveCalibrationDraft(
@@ -502,13 +524,10 @@ export async function clearCalibrationDraft(projectDirectory: string): Promise<v
 }
 
 export async function loadProject(projectDirectory: string): Promise<PuppetLoomProject> {
-  const base = await loadBaseProject(projectDirectory);
-  const calibration = await loadCalibration(projectDirectory);
-  try {
-    return applySafetyLimits(applyCalibrationOverrides(base, calibration.overrides));
-  } catch (error) {
-    throw new PuppetLoomError("INVALID_PROJECT", `无法应用项目校准：${projectDirectory}`, { cause: error });
-  }
+  const root = resolve(projectDirectory);
+  const { project: base, hash } = await readBaseProject(root);
+  const calibration = await readCalibrationDocument(root, hash);
+  return applyStoredCalibration(base, calibration, root);
 }
 
 export async function describeProject(projectDirectory: string, layerId?: string, revision?: number): Promise<ProjectDescription> {
@@ -991,6 +1010,146 @@ export async function listCalibrationSessions(projectDirectory: string): Promise
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw new PuppetLoomError("IO_ERROR", `无法读取校准历史：${projectDirectory}`, { cause: error });
   }
+}
+
+function sessionStringField(source: string, field: string): string | undefined {
+  const match = new RegExp(`^\\s*"${field}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")\\s*,?\\s*$`, "m").exec(source);
+  if (!match?.[1]) return undefined;
+  try { return JSON.parse(match[1]) as string; } catch { return undefined; }
+}
+
+function sessionNumberField(source: string, field: string): number | undefined {
+  const match = new RegExp(`^\\s*"${field}"\\s*:\\s*(\\d+)\\s*,?\\s*$`, "m").exec(source);
+  if (!match?.[1]) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+function summaryFromSessionText(source: string): CalibrationSessionSummary | undefined {
+  const id = sessionStringField(source, "id");
+  const createdAt = sessionStringField(source, "createdAt");
+  const label = sessionStringField(source, "label");
+  const fromRevision = sessionNumberField(source, "fromRevision");
+  const toRevision = sessionNumberField(source, "toRevision");
+  const evidenceStatus = sessionStringField(source, "evidenceStatus");
+  const parentSessionId = sessionStringField(source, "parentSessionId");
+  const operationId = sessionStringField(source, "operationId");
+  if (!id || !createdAt || !label || fromRevision === undefined || toRevision === undefined
+    || !["unreviewed", "accepted", "rejected"].includes(evidenceStatus ?? "")) return undefined;
+  return {
+    id,
+    createdAt,
+    label,
+    fromRevision,
+    toRevision,
+    evidenceStatus: evidenceStatus as CalibrationSessionSummary["evidenceStatus"],
+    ...(parentSessionId ? { parentSessionId } : {}),
+    ...(operationId ? { operationId } : {})
+  };
+}
+
+function summarizeSession(session: CalibrationSessionDocument): CalibrationSessionSummary {
+  return {
+    id: session.id,
+    createdAt: session.createdAt,
+    label: session.label,
+    fromRevision: session.fromRevision,
+    toRevision: session.toRevision,
+    evidenceStatus: session.evidenceStatus,
+    ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
+    ...(session.operationId ? { operationId: session.operationId } : {})
+  };
+}
+
+async function readCalibrationSessionSummary(path: string): Promise<CalibrationSessionSummary> {
+  const handle = await open(path, "r");
+  try {
+    const { size } = await handle.stat();
+    const windowSize = 16 * 1024;
+    if (size <= windowSize * 2) {
+      const source = await readFile(path, "utf8");
+      const summary = summaryFromSessionText(source);
+      if (summary) return summary;
+      return summarizeSession(calibrationSessionSchema.parse(JSON.parse(source)) as CalibrationSessionDocument);
+    }
+    const prefixBuffer = Buffer.alloc(windowSize);
+    const suffixBuffer = Buffer.alloc(windowSize);
+    const [{ bytesRead: prefixBytes }, { bytesRead: suffixBytes }] = await Promise.all([
+      handle.read(prefixBuffer, 0, windowSize, 0),
+      handle.read(suffixBuffer, 0, windowSize, size - windowSize)
+    ]);
+    const summary = summaryFromSessionText(`${prefixBuffer.toString("utf8", 0, prefixBytes)}\n${suffixBuffer.toString("utf8", 0, suffixBytes)}`);
+    if (summary) return summary;
+  } finally {
+    await handle.close();
+  }
+  return summarizeSession(calibrationSessionSchema.parse(JSON.parse(await readFile(path, "utf8"))) as CalibrationSessionDocument);
+}
+
+function activeCalibrationSessionSummaries(
+  all: CalibrationSessionSummary[],
+  current: CalibrationDocument
+): CalibrationSessionSummary[] {
+  if (!current.headSessionId) return all.filter((session) => session.toRevision <= current.revision).sort((a, b) => a.toRevision - b.toRevision);
+  const byId = new Map(all.map((session) => [session.id, session]));
+  const chain: CalibrationSessionSummary[] = [];
+  const seen = new Set<string>();
+  let id: string | undefined = current.headSessionId;
+  while (id) {
+    if (seen.has(id)) throw new Error(`校准历史形成循环：${id}`);
+    seen.add(id);
+    const session = byId.get(id);
+    if (!session) throw new Error(`当前校准引用了不存在的会话：${id}`);
+    chain.push(session);
+    id = session.parentSessionId;
+  }
+  const oldestRevision = chain.at(-1)?.fromRevision ?? current.revision;
+  const legacy = all
+    .filter((session) => !session.operationId && session.toRevision <= oldestRevision)
+    .sort((a, b) => a.toRevision - b.toRevision);
+  return [...legacy, ...chain.reverse()];
+}
+
+async function readCalibrationSessionSummaries(root: string, current: CalibrationDocument): Promise<CalibrationSessionSummary[]> {
+  const directory = join(root, "calibration", "sessions");
+  try {
+    const files = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+    const all = await Promise.all(files.map((name) => readCalibrationSessionSummary(join(directory, name))));
+    return activeCalibrationSessionSummaries(all, current);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new PuppetLoomError("IO_ERROR", `无法读取校准历史摘要：${root}`, { cause: error });
+  }
+}
+
+export async function listCalibrationSessionSummaries(projectDirectory: string): Promise<CalibrationSessionSummary[]> {
+  const root = resolve(projectDirectory);
+  const { hash } = await readBaseProject(root);
+  const current = await readCalibrationDocument(root, hash);
+  return readCalibrationSessionSummaries(root, current);
+}
+
+export async function loadCalibrationWorkspace(projectDirectory: string): Promise<{
+  baseProject: PuppetLoomProject;
+  project: PuppetLoomProject;
+  calibration: CalibrationDocument;
+  sessions: CalibrationSessionSummary[];
+  draft?: CalibrationDraftDocument;
+}> {
+  const root = resolve(projectDirectory);
+  const { project: baseProject, hash } = await readBaseProject(root);
+  const calibration = await readCalibrationDocument(root, hash);
+  const sessionsPromise = readCalibrationSessionSummaries(root, calibration);
+  const draftPromise = readCalibrationDraftDocument(root, hash, calibration);
+  const project = applyStoredCalibration(baseProject, calibration, root);
+  const [sessions, draft] = await Promise.all([sessionsPromise, draftPromise]);
+  return {
+    baseProject,
+    project,
+    calibration,
+    sessions,
+    ...(draft ? { draft } : {})
+  };
 }
 
 export async function loadProjectRevision(projectDirectory: string, revision: number): Promise<PuppetLoomProject> {

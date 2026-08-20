@@ -26,7 +26,11 @@ const semanticFields: Record<MotionParameterSemantic, keyof MotionState> = {
   "gaze-y": "gazeY",
   breath: "breath",
   blink: "blink",
-  "mouth-open": "mouthOpen"
+  "mouth-open": "mouthOpen",
+  "ear-x": "earX",
+  "ear-y": "earY",
+  "tail-x": "tailX",
+  "tail-y": "tailY"
 };
 
 const builtInParameters: Array<Pick<ModelParameter, "id" | "name" | "group" | "min" | "default" | "max" | "semantic">> = [

@@ -15,6 +15,11 @@ async function visibleVariation(image) {
 await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "测试结论仍然独立；来源素材和纹理通过只读硬链接复用，校准与项目清单保持可写副本。" } }, async (artifactRun) => {
 const project = artifactRun.path(`project-${basename(source)}`);
 const screenshot = artifactRun.path("editor.png");
+const neutralActionScreenshot = artifactRun.path("viewer-action-neutral.png");
+const leftYawScreenshot = artifactRun.path("viewer-yaw-left.png");
+const rightYawScreenshot = artifactRun.path("viewer-yaw-right.png");
+const earActionScreenshot = artifactRun.path("viewer-action-ear-flick.png");
+const tailActionScreenshot = artifactRun.path("viewer-action-tail-wag.png");
 const applicationProfile = artifactRun.path("user-data");
 const cloneReport = await cloneCurrentProjectForTest(source, project, { objectRoot: artifactRun.objectDirectory });
 
@@ -84,7 +89,7 @@ try {
   await editor.getByRole("button", { name: "动作", exact: true }).click();
   await editor.getByText(/已恢复 .*自动保存的草稿/).waitFor();
   await editor.getByRole("button", { name: "保存校准" }).click();
-  await editor.getByText(`已保存 revision ${expectedRevision}，安全系数 1.00。`, { exact: true }).waitFor({ timeout: 30_000 });
+  await editor.getByText(`已保存版本 ${expectedRevision}，安全系数 1.00。`, { exact: true }).waitFor({ timeout: 30_000 });
   await editor.getByTestId("comparison-view").waitFor();
   await editor.getByRole("button", { name: "叠加", exact: true }).click();
   await editor.waitForFunction(() => {
@@ -118,7 +123,28 @@ try {
   const pointer = await viewer.evaluate(() => window.puppetloom.pointerTarget());
   if (pointer.strength !== 1) throw new Error(`正式模型角色窗口首次启动没有默认开启鼠标跟随：${JSON.stringify(pointer)}`);
 
-  process.stdout.write(`${JSON.stringify({ ok: true, source, projectCopy: project, screenshot, cloneReport, revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale }, null, 2)}\n`);
+  await viewer.getByRole("button", { name: "打开表情动作面板" }).click();
+  await viewer.getByRole("button", { name: "动作 · 耳朵轻弹" }).waitFor();
+  await viewer.getByRole("button", { name: "动作 · 尾巴摇摆" }).waitFor();
+  await viewer.getByRole("button", { name: "关闭表情动作面板" }).click();
+  const renderPose = async (state, path, label) => {
+    const rendered = await viewer.evaluate((next) => window.puppetloomRenderTestPose?.(next) ?? false, state);
+    if (!rendered) throw new Error(`正式模型角色窗口不能渲染确定性${label}。`);
+    await viewer.waitForTimeout(80);
+    const frame = await viewer.locator("canvas").screenshot({ path });
+    if (await visibleVariation(frame) < 4) throw new Error(`正式模型的${label}没有可见角色。`);
+    return frame;
+  };
+  const neutralActionFrame = await renderPose({}, neutralActionScreenshot, "中立帧");
+  const leftYawFrame = await renderPose({ headYaw: -1, gazeX: -0.29, bodySway: -0.62, bodyRoll: -0.16 }, leftYawScreenshot, "向左极限转头帧");
+  const rightYawFrame = await renderPose({ headYaw: 1, gazeX: 0.29, bodySway: 0.62, bodyRoll: 0.16 }, rightYawScreenshot, "向右极限转头帧");
+  const earActionFrame = await renderPose({ behavior: { id: "action-ear-flick", timeSeconds: 0.12 } }, earActionScreenshot, "耳朵轻弹帧");
+  const tailActionFrame = await renderPose({ behavior: { id: "action-tail-wag", timeSeconds: 0.55 } }, tailActionScreenshot, "尾巴摇摆帧");
+  if (neutralActionFrame.equals(leftYawFrame) || neutralActionFrame.equals(rightYawFrame)) throw new Error("正式模型的极限转头帧与中立帧完全相同。" );
+  if (neutralActionFrame.equals(earActionFrame)) throw new Error("正式模型的耳朵轻弹动作与中立帧完全相同。" );
+  if (neutralActionFrame.equals(tailActionFrame)) throw new Error("正式模型的尾巴摇摆动作与中立帧完全相同。" );
+
+  process.stdout.write(`${JSON.stringify({ ok: true, source, projectCopy: project, screenshot, poseEvidence: { left: leftYawScreenshot, neutral: neutralActionScreenshot, right: rightYawScreenshot }, actionEvidence: { neutral: neutralActionScreenshot, earFlick: earActionScreenshot, tailWag: tailActionScreenshot }, cloneReport, revision: saved.calibration.revision, safetyScale: saved.project.quality.safetyScale }, null, 2)}\n`);
 } finally {
   await electronApp.close();
 }

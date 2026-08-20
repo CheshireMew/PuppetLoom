@@ -3,7 +3,7 @@ import type React from "react";
 import type {
   AnchorGraph,
   CalibrationOverrides,
-  CalibrationSessionDocument,
+  CalibrationSessionSummary,
   FaceDepthLandmark,
   LayerBinding,
   Point,
@@ -584,7 +584,7 @@ export function EditorInspectorPanel({
   label: string;
   hasPending: boolean;
   busy: boolean;
-  sessions: CalibrationSessionDocument[];
+  sessions: CalibrationSessionSummary[];
   comparison: ComparisonImages | undefined;
   meshUpgrading: boolean;
   onLayerProperty: (patch: LayerPatch) => void;

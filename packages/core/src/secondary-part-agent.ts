@@ -6,7 +6,13 @@ import { applyCalibrationOverrides } from "./calibration.js";
 import { deformedPoints, neutralMotionState } from "./deform.js";
 import { PuppetLoomError } from "./errors.js";
 import { ahogeHingeWeight, rotationDelta } from "./front-hair-geometry.js";
-import { clothingPhysicsMask, clothingSecondaryRelease } from "./clothing-geometry.js";
+import {
+  clothingPhysicsMask,
+  clothingSecondaryRelease,
+  skirtElasticRelease,
+  skirtStructuralRelease,
+  skirtSupportPivot
+} from "./clothing-geometry.js";
 import { ModelPhysicsController } from "./model.js";
 import { clearCalibrationDraft, loadCalibration, loadCalibrationDraft, loadProject, saveCalibrationPatch } from "./project.js";
 import { validatePose, validateProjectPoses } from "./safety.js";
@@ -41,6 +47,8 @@ export interface SecondaryPartIntent {
   lagResponse: number;
   lagDamping: number;
   deformationScale: number;
+  garmentStructure?: "soft" | "supported";
+  garmentFlexibility?: number;
   explanation: string[];
 }
 
@@ -191,6 +199,13 @@ function layerBinding(part: SecondaryModelAgentPart, layer: LayerBinding, parame
         const delta = rotationDelta(point, pivot, angle);
         return [[String(index), { x: rounded(delta.x * release, 8), y: rounded(delta.y * release, 8) }]];
       }
+      if (part === "skirt" && layer.garmentStructure === "supported") {
+        const angle = value * direction * scale * policy.baseScale;
+        const flexibility = clamp(layer.garmentFlexibility ?? 0, 0, 0.5);
+        const elasticAngle = angle * (1 + flexibility * 1.6 * skirtElasticRelease(layer, point));
+        const delta = rotationDelta(point, skirtSupportPivot(layer), elasticAngle);
+        return [[String(index), { x: rounded(delta.x * release, 8), y: rounded(delta.y * release, 8) }]];
+      }
       const side = (point.x - layer.pivot.x) / Math.max(1e-6, layer.bounds.width);
       const amount = value * direction * release * scale;
       const delta = {
@@ -274,7 +289,13 @@ function layerOverrides(part: SecondaryModelAgentPart, project: PuppetLoomProjec
       ? { ...layer.weights, head: 1, physics: 1 }
       : { ...layer.weights, body: 1, physics: 1 };
     const order = part === "skirt" ? skirtOrderBehindArms(project, layer) : undefined;
-    return [layer.id, { weights, vertexInfluences: { physics }, ...(order !== undefined ? { order } : {}) }];
+    return [layer.id, {
+      weights,
+      vertexInfluences: { physics },
+      ...(part === "skirt" && intent.garmentStructure ? { garmentStructure: intent.garmentStructure } : {}),
+      ...(part === "skirt" && intent.garmentFlexibility !== undefined ? { garmentFlexibility: intent.garmentFlexibility } : {}),
+      ...(order !== undefined ? { order } : {})
+    }];
   }));
   const tuning: MotionTuning = { amplitude: intent.amplitude, response: intent.response, stability: intent.stability };
   return {
@@ -316,6 +337,44 @@ function ahogeRigidityMetrics(layers: LayerBinding[], operations: AuthoringOpera
           maximumRadialError = Math.max(maximumRadialError, Math.abs(afterRadius - beforeRadius));
           if (beforeRadius > Math.max(layer.bounds.width, layer.bounds.height) * 0.015) {
             let angle = Math.atan2(moved.y - root.y, moved.x - root.x) - Math.atan2(base.y - root.y, base.x - root.x);
+            while (angle > Math.PI) angle -= Math.PI * 2;
+            while (angle < -Math.PI) angle += Math.PI * 2;
+            angles.push(angle);
+          }
+        }
+        if (angles.length > 1) maximumAngularSpread = Math.max(maximumAngularSpread, Math.max(...angles) - Math.min(...angles));
+      }
+    }
+  }
+  return { memberVertices, maximumRadialError, maximumAngularSpread };
+}
+
+function supportedSkirtRigidityMetrics(layers: LayerBinding[], operations: AuthoringOperation[]): {
+  memberVertices: number;
+  maximumRadialError: number;
+  maximumAngularSpread: number;
+} {
+  let memberVertices = 0;
+  let maximumRadialError = 0;
+  let maximumAngularSpread = 0;
+  for (const layer of layers.filter((candidate) => candidate.role === "bottomWear" && candidate.garmentStructure === "supported")) {
+    const pivot = skirtSupportPivot(layer);
+    const indices = layer.mesh.points.flatMap((point, index) => skirtStructuralRelease(layer, point) >= 0.999 ? [index] : []);
+    memberVertices += indices.length;
+    for (const operation of operations) {
+      if (operation.op !== "upsert-binding" || operation.binding.target.kind !== "layer" || operation.binding.target.id !== layer.id) continue;
+      for (const keyform of operation.binding.keyforms) {
+        if ((keyform.values[0] ?? 0) === 0) continue;
+        const angles: number[] = [];
+        for (const index of indices) {
+          const base = layer.mesh.points[index]!;
+          const delta = keyform.meshPointDeltas?.[String(index)] ?? { x: 0, y: 0 };
+          const moved = { x: base.x + delta.x, y: base.y + delta.y };
+          const beforeRadius = Math.hypot(base.x - pivot.x, base.y - pivot.y);
+          const afterRadius = Math.hypot(moved.x - pivot.x, moved.y - pivot.y);
+          maximumRadialError = Math.max(maximumRadialError, Math.abs(afterRadius - beforeRadius));
+          if (beforeRadius > Math.max(layer.bounds.width, layer.bounds.height) * 0.015) {
+            let angle = Math.atan2(moved.y - pivot.y, moved.x - pivot.x) - Math.atan2(base.y - pivot.y, base.x - pivot.x);
             while (angle > Math.PI) angle -= Math.PI * 2;
             while (angle < -Math.PI) angle += Math.PI * 2;
             angles.push(angle);
@@ -450,6 +509,27 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
         violations: comparisons.filter((comparison) => !comparison.passed).length
       }
     });
+    const supportedLayers = layers.filter((layer) => layer.role === "bottomWear" && layer.garmentStructure === "supported");
+    if (supportedLayers.length > 0) {
+      const rigidity = supportedSkirtRigidityMetrics(supportedLayers, operations);
+      const scale = Math.max(...supportedLayers.map((layer) => Math.max(layer.bounds.width, layer.bounds.height)), 1e-6);
+      const maximumFlexibility = Math.max(...supportedLayers.map((layer) => clamp(layer.garmentFlexibility ?? 0, 0, 0.5)), 0);
+      const maximumAllowedAngularSpread = 1e-5 + maximumFlexibility * 0.03;
+      checks.splice(-1, 0, {
+        id: "supported-skirt-volume",
+        label: "裙撑区域保持体积，并只在下半段产生受控弹性",
+        passed: rigidity.memberVertices >= 2
+          && rigidity.maximumRadialError <= scale * 1e-6
+          && rigidity.maximumAngularSpread <= maximumAllowedAngularSpread,
+        details: {
+          memberVertices: rigidity.memberVertices,
+          maximumRadialError: rounded(rigidity.maximumRadialError, 10),
+          maximumAngularSpread: rounded(rigidity.maximumAngularSpread, 10),
+          maximumFlexibility: rounded(maximumFlexibility, 4),
+          maximumAllowedAngularSpread: rounded(maximumAllowedAngularSpread, 10)
+        }
+      });
+    }
   }
   if (part === "ahoge") {
     const rigidity = ahogeRigidityMetrics(layers, operations);
@@ -504,6 +584,13 @@ export function createSecondaryPartAgentProposal(project: PuppetLoomProject, opt
   const resolved = intentFor(options.part, options.instruction);
   const instruction = resolved.instruction;
   const intent = options.intent ? clone(options.intent) : resolved.intent;
+  const configuredLayers = preparedLayers.map((layer) => options.part === "skirt"
+    ? {
+        ...layer,
+        ...(intent.garmentStructure ? { garmentStructure: intent.garmentStructure } : {}),
+        ...(intent.garmentFlexibility !== undefined ? { garmentFlexibility: intent.garmentFlexibility } : {})
+      }
+    : layer);
   let last: PreparedSecondaryProposal | undefined;
   const repairs: ModelAgentRepair[] = [];
   for (const multiplier of [1, 0.82, 0.66, 0.5, 0.38, 0.28]) {
@@ -513,12 +600,12 @@ export function createSecondaryPartAgentProposal(project: PuppetLoomProject, opt
       reason: "上一轮联合姿态或连续运动检查未通过。",
       targetLayerIds: preparedLayers.map((layer) => layer.id)
     });
-    const operations = proposalOperations(options.part, preparedLayers, intent, intent.deformationScale * multiplier);
-    const overrides = layerOverrides(options.part, project, preparedLayers, intent);
+    const operations = proposalOperations(options.part, configuredLayers, intent, intent.deformationScale * multiplier);
+    const overrides = layerOverrides(options.part, project, configuredLayers, intent);
     const authored = applyAuthoringOperations(project, operations);
     const proposed = applyCalibrationOverrides(authored, overrides);
-    const checks = checksFor(options.part, project, proposed, preparedLayers, operations);
-    last = { project: proposed, layers: preparedLayers, instruction, intent, operations, previews: operationsPreviews(options.part), overrides, checks, repairs: clone(repairs) };
+    const checks = checksFor(options.part, project, proposed, configuredLayers, operations);
+    last = { project: proposed, layers: configuredLayers, instruction, intent, operations, previews: operationsPreviews(options.part), overrides, checks, repairs: clone(repairs) };
     if (checks.every((check) => check.passed)) return last;
   }
   return last!;

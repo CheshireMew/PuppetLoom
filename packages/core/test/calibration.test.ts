@@ -8,9 +8,11 @@ import {
   compareProjectRevisions,
   clearCalibrationDraft,
   describeProject,
+  listCalibrationSessionSummaries,
   listCalibrationSessions,
   loadCalibration,
   loadCalibrationDraft,
+  loadCalibrationWorkspace,
   loadProject,
   restoreCalibrationRevision,
   renderProjectSuite,
@@ -69,6 +71,22 @@ describe("project calibration", () => {
     expect(await listCalibrationSessions(output)).toHaveLength(1);
     const accepted = await setCalibrationEvidenceStatus(output, result.session.id, "accepted");
     expect(accepted.evidenceStatus).toBe("accepted");
+    const summaries = await listCalibrationSessionSummaries(output);
+    expect(summaries).toEqual([expect.objectContaining({
+      id: result.session.id,
+      label: "校准鼻点与脸部网格",
+      fromRevision: 0,
+      toRevision: 1,
+      evidenceStatus: "accepted"
+    })]);
+    expect(summaries[0]).not.toHaveProperty("patch");
+    expect(summaries[0]).not.toHaveProperty("afterOverrides");
+    const workspace = await loadCalibrationWorkspace(output);
+    expect(workspace).toMatchObject({
+      calibration: { revision: 1 },
+      sessions: [{ id: result.session.id, evidenceStatus: "accepted" }]
+    });
+    expect(workspace.project.anchors.nose).toEqual(result.project.anchors.nose);
   });
 
   it("restores a previous revision as a new auditable revision", async () => {

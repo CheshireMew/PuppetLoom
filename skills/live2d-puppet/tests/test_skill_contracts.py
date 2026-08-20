@@ -21,23 +21,29 @@ class SkillContractTests(unittest.TestCase):
         cls.visual = (ROOT / "references" / "visual-rigging-rules.md").read_text(encoding="utf-8")
         cls.learning = (ROOT / "references" / "calibration-and-learning.md").read_text(encoding="utf-8")
         cls.cubism = (ROOT / "references" / "cubism-bridge-workflow.md").read_text(encoding="utf-8")
+        cls.demonstration = (ROOT / "references" / "runtime-demonstration.md").read_text(encoding="utf-8")
         cls.wrapper = (ROOT / "scripts" / "invoke_puppetloom.ps1").read_text(encoding="utf-8")
+        cls.demo_wrapper = (ROOT / "scripts" / "demo_puppetloom.ps1").read_text(encoding="utf-8")
+        cls.demo_script = (ROOT / "scripts" / "demo_puppetloom.mjs").read_text(encoding="utf-8")
 
     def test_routes_every_active_reference_and_script(self) -> None:
         for relative in (
             "references/from-zero-workflow.md",
             "references/agent-review-and-repair.md",
             "references/visual-rigging-rules.md",
+            "references/runtime-demonstration.md",
             "references/calibration-and-learning.md",
             "references/cubism-bridge-workflow.md",
             "scripts/invoke_puppetloom.ps1",
+            "scripts/demo_puppetloom.ps1",
+            "scripts/demo_puppetloom.mjs",
             "scripts/file_budget.py",
         ):
             self.assertIn(relative, self.skill)
 
     def test_public_cli_loop_is_complete(self) -> None:
         combined = self.skill + self.workflow
-        for command in ("inspect", "create", "verify", "describe", "migrate", "render", "agent", "author", "calibrate", "compare", "history", "restore", "evidence", "enhance", "record", "edit", "play", "cubism"):
+        for command in ("inspect", "create", "verify", "describe", "migrate", "render", "agent", "author", "actions", "extensions", "calibrate", "compare", "history", "restore", "evidence", "enhance", "record", "edit", "play", "runtime", "cubism"):
             self.assertIn(command, combined)
             self.assertIn(f'"{command}"', self.wrapper)
 
@@ -96,6 +102,75 @@ class SkillContractTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             for flag in flags:
                 self.assertIn(flag, result.stdout)
+
+    def test_wrapper_matches_actions_and_existing_project_extensions(self) -> None:
+        expectations = {
+            ("actions", "--help"): ("plan", "apply"),
+            ("actions", "plan", "--help"): ("--project", "--json"),
+            ("actions", "apply", "--help"): ("--project", "--json"),
+            ("extensions", "--help"): ("plan", "apply"),
+            ("extensions", "plan", "--help"): ("--project", "--torso-volume", "--json"),
+            ("extensions", "apply", "--help"): ("--project", "--torso-volume", "--json"),
+        }
+        wrapper = ROOT / "scripts" / "invoke_puppetloom.ps1"
+        for arguments, flags in expectations.items():
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrapper), *arguments],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for flag in flags:
+                self.assertIn(flag, result.stdout)
+
+    def test_wrapper_matches_runtime_control_cli(self) -> None:
+        expectations = {
+            ("runtime", "--help"): ("inspect", "set", "trigger", "release", "record-start", "record-stop", "replay", "replay-stop"),
+            ("runtime", "set", "--help"): ("--viewer", "--source", "--head-yaw", "--expression", "--ttl"),
+            ("runtime", "trigger", "--help"): ("--viewer", "--source", "--behavior", "--expression", "--duration"),
+            ("runtime", "release", "--help"): ("--viewer", "--source"),
+        }
+        wrapper = ROOT / "scripts" / "invoke_puppetloom.ps1"
+        for arguments, flags in expectations.items():
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrapper), *arguments],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for flag in flags:
+                self.assertIn(flag, result.stdout)
+
+    def test_cli_demo_is_editor_first_read_only_and_process_backed(self) -> None:
+        combined = self.skill + self.demonstration
+        for phrase in (
+            "先编辑器、后角色窗口",
+            "不能从会话记忆",
+            "runtime inspect",
+            "runtime set/trigger/release",
+            "不增加 revision",
+            "等待 Electron 的关闭事件",
+            "不能使用没有活动进程句柄的悬空顶层 Promise",
+        ):
+            self.assertIn(phrase, combined)
+        for value in ("--project", "--revision", "--pace", "--keep-open", "history", "runtime", "editor-ready", "viewer-ready", 'demo: "ready"'):
+            self.assertIn(value, self.demo_script)
+        for value in ("PUPPETLOOM_E2E_USER_DATA", "PUPPETLOOM_CONTROL_MANIFEST", "viewer.revision !== undefined", 'waitForEvent("close", { timeout: 0 })'):
+            self.assertIn(value, self.demo_script)
+        for forbidden in ("save()", "calibrate", "actions apply", "extensions apply"):
+            self.assertNotIn(forbidden, self.demo_script)
+        for value in ("PaceMs", "KeepOpen", "demo_puppetloom.mjs"):
+            self.assertIn(value, self.demo_wrapper)
 
     def test_agent_first_route_is_scoped_and_visually_verified(self) -> None:
         combined = self.skill + self.workflow + self.review + self.learning
@@ -165,8 +240,20 @@ class SkillContractTests(unittest.TestCase):
         self.assertLess(restored, stopped)
 
     def test_visual_rules_preserve_exposed_project_lessons(self) -> None:
-        for phrase in ("近大远小", "上下看是俯视/仰视", "脖子不是滞后的头发", "前发根部随头骨", "耳朵以头侧根部为铰链", "尾巴以身体连接处为锚点", "脚不能随呼吸位移", "十五种嘴形", "同一 ArtMesh", "源图像像素"):
+        for phrase in ("近大远小", "上下看是俯视/仰视", "脖子不是滞后的头发", "前发根部随头骨", "眼白、虹膜、睫毛和眉毛在转头时保持不透明", "耳朵以头侧根部为铰链", "支撑轮廓、整体响应和局部柔性分别检查", "尾巴以身体连接处为锚点", "脚不能随呼吸位移", "十五种嘴形", "同一 ArtMesh", "源图像像素"):
             self.assertIn(phrase, self.skill + self.visual)
+
+    def test_supported_garments_separate_structure_response_and_flexibility(self) -> None:
+        combined = self.review + self.visual
+        for phrase in (
+            "garmentStructure",
+            "garmentFlexibility",
+            "塌陷",
+            "太慢",
+            "太硬",
+            "不能靠锁死整件裙子维持体积",
+        ):
+            self.assertIn(phrase, combined)
 
     def test_learning_requires_generic_causal_evidence_not_a_project_count_ritual(self) -> None:
         self.assertIn("一个角色的接受记录本身不足以修改通用自动绑定算法", self.learning)
@@ -187,8 +274,50 @@ class SkillContractTests(unittest.TestCase):
             "后续部位 `blocked`",
             "当前只有前发 Agent",
             "不能替代对全部历史 accepted 结果的视觉保护清单",
+            "重建需求清单",
+            "规范项目当前 revision 的真实数据",
+            "测试副本",
+            "extensions plan",
+            "软件升级、CLI 新增能力或项目格式增加字段不等于源 PSD 变化",
         ):
             self.assertIn(phrase, combined)
+
+    def test_completion_claim_requires_the_real_user_path_and_canonical_project(self) -> None:
+        combined = self.skill + self.workflow
+        for phrase in (
+            "普通默认路径或用户指定入口",
+            "规范项目的准确 revision 已保存对应数据",
+            "完成链中任何一环没有成立",
+            "不能宣称整项完成",
+            "公开入口的实际默认值或本次调用参数",
+            "不能从代码存在、帮助文本、测试夹具或隔离副本反推",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_alpha_import_defaults_remove_only_confirmed_noise(self) -> None:
+        for phrase in (
+            "`preflight`",
+            "普通创建保持自动 Alpha 清理",
+            "高置信度噪点",
+            "疑似有效细节继续保留",
+            "源 PSD 始终不改",
+            "--preserve-alpha-noise",
+            "--clean-alpha",
+            "普通用户创建角色前必须勾选或决定",
+        ):
+            self.assertIn(phrase, self.workflow)
+
+    def test_extensions_preserve_neutral_and_strands_prove_independent_motion(self) -> None:
+        for phrase in (
+            "脸部纵深曲线和可选的躯干体积曲线都是相对形变",
+            "ArtMesh 必须严格回到加入曲线前的中立网格",
+            "相邻 revision 的中立姿态",
+            "不能只靠 `hairStrands` 字段数量或静态左右极限证明",
+            "各发束根部应稳定附着头骨",
+            "锁步同相同幅",
+            "不能用逐帧随机抖动",
+        ):
+            self.assertIn(phrase, self.visual)
 
     def test_user_constraints_and_candidate_acceptance_are_binding(self) -> None:
         combined = self.skill + self.workflow + self.review + self.visual + self.learning

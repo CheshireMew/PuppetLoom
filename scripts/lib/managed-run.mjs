@@ -24,7 +24,11 @@ async function filesUnder(root) {
   if (!(await exists(root))) return [];
   const result = [];
   const visit = async (directory) => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entries = await readdir(directory, { withFileTypes: true }).catch((cause) => {
+      if (cause?.code === "ENOENT") return [];
+      throw cause;
+    });
+    for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile()) result.push(path);
@@ -36,7 +40,13 @@ async function filesUnder(root) {
 
 async function bytesUnder(root) {
   let total = 0;
-  for (const path of await filesUnder(root)) total += (await stat(path)).size;
+  for (const path of await filesUnder(root)) {
+    const fileStat = await stat(path).catch((cause) => {
+      if (cause?.code === "ENOENT") return undefined;
+      throw cause;
+    });
+    if (fileStat) total += fileStat.size;
+  }
   return total;
 }
 
@@ -52,7 +62,11 @@ async function physicalBytesUnderPaths(paths) {
     if (!rootStat) continue;
     const files = rootStat.isDirectory() ? await filesUnder(root) : [root];
     for (const path of files) {
-      const fileStat = await stat(path, { bigint: true });
+      const fileStat = await stat(path, { bigint: true }).catch((cause) => {
+        if (cause?.code === "ENOENT") return undefined;
+        throw cause;
+      });
+      if (!fileStat) continue;
       const key = physicalFileKey(path, fileStat);
       if (seen.has(key)) continue;
       seen.add(key);

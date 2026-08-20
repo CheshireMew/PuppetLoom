@@ -82,4 +82,24 @@ describe("external Agent rig specification", () => {
     head.parts[0]!.intent.contourStrength = 3;
     expect(() => parseModelAgentSpecification(head)).toThrow("contourStrength");
   });
+
+  it("accepts an explicit supported-skirt decision and rejects unknown structures", () => {
+    const skirt = {
+      version: 1, kind: "puppetloom-rig-spec", scope: "selected", baseRevision: 35, goal: "保持裙撑体积",
+      parts: [{
+        part: "skirt", rationale: ["连续运动中裙摆被分段拉斜，钟形轮廓没有保持。"],
+        intent: {
+          amplitude: 0.34, response: 0.62, stability: 0.84,
+          lagResponse: 10.2, lagDamping: 0.92, deformationScale: 0.7,
+          garmentStructure: "supported", garmentFlexibility: 0.2
+        }
+      }]
+    };
+    expect(parseModelAgentSpecification(skirt)).toEqual(skirt);
+    skirt.parts[0]!.intent.garmentFlexibility = 0.8;
+    expect(() => parseModelAgentSpecification(skirt)).toThrow("garmentFlexibility");
+    skirt.parts[0]!.intent.garmentFlexibility = 0.2;
+    skirt.parts[0]!.intent.garmentStructure = "rubber";
+    expect(() => parseModelAgentSpecification(skirt)).toThrow("garmentStructure");
+  });
 });

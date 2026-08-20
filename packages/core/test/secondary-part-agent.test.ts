@@ -128,6 +128,34 @@ describe("secondary part Agent", () => {
     ]));
   });
 
+  it("authors a supported skirt with bounded lower-shell flexibility instead of a soft sheet", () => {
+    const proposal = createSecondaryPartAgentProposal(project(), {
+      part: "skirt",
+      instruction: "保持钟形裙撑体积，腰线固定，只有底边轻微回弹",
+      intent: {
+        amplitude: 0.34,
+        response: 0.62,
+        stability: 0.84,
+        lagResponse: 7.8,
+        lagDamping: 0.82,
+        deformationScale: 0.7,
+        garmentStructure: "supported",
+        garmentFlexibility: 0.2,
+        explanation: ["连续运动证据显示钟形裙身被当成柔软布片分段弯折。"]
+      }
+    });
+    const proposedSkirt = proposal.project.layers.find((candidate) => candidate.id === "skirt")!;
+    const volumeCheck = proposal.checks.find((check) => check.id === "supported-skirt-volume");
+
+    expect(proposedSkirt.garmentStructure).toBe("supported");
+    expect(proposedSkirt.garmentFlexibility).toBe(0.2);
+    expect(proposal.checks.every((check) => check.passed)).toBe(true);
+    expect(volumeCheck).toEqual(expect.objectContaining({ passed: true }));
+    expect(Number(volumeCheck?.details.maximumRadialError)).toBeLessThanOrEqual(1e-7);
+    expect(Number(volumeCheck?.details.maximumAngularSpread)).toBeGreaterThan(1e-5);
+    expect(Number(volumeCheck?.details.maximumAngularSpread)).toBeLessThanOrEqual(Number(volumeCheck?.details.maximumAllowedAngularSpread));
+  });
+
   it("keeps both the upper and lower bodice edges out of secondary cloth bindings", () => {
     const proposal = createSecondaryPartAgentProposal(project(), { part: "topCloth", instruction: "上衣保持贴合，袖子轻微跟随" });
     const top = proposal.project.layers.find((candidate) => candidate.id === "top")!;

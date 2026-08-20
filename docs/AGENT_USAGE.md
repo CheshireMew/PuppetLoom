@@ -41,7 +41,7 @@ node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\front
 
 模板只是安全起点，不能原样执行。`plan` 不写项目。正式规格计划返回 `inputMode: structured-specification`、当前 `baseRevision`、请求范围、草稿接管情况、各部位目标图层、检查、自动返修、素材请求、`canApply` 和 `blockers`。规格过期或数值越界时应重新看当前画面并生成新规格，不能只改 revision 绕过。确认范围和基线后才运行 `apply`。执行时，每个存在且通过计划的部位单独形成可恢复 revision；最终 JSON 返回总 `status`、from/to revision、各部位结果、最终 `verification`、跨部位 `coherenceChecks`、总 `blockers` 和 `reportPath`。整模任务会声明并检查与实际范围有关的结构约束：头脸、眼睛和头饰必须保持同一转头关系；已有前发制作不得被头脸任务静默清除；上衣与裙子连接处、身体与尾根不得出现相对滑动。任一必需检查失败时，结果会阻断而不是伪装成完成。
 
-`headFace.intent` 除 yaw、pitch 和 perspective 外，还可以填写 `contourStrength`、`depthStrength`、`occlusionFadeStart`、远侧眼/眉/耳/侧发的保留透明度，以及 `sideHairDepthSwap`。Agent 应根据左右大角度证据判断这些值：轮廓强度解决脸缘体积，深度强度解决五官和头骨的相对位移，遮挡字段解决远侧部件仍完整贴在脸上的问题。不要用降低整头转角来掩盖单一遮挡穿帮。
+`headFace.intent` 除 yaw、pitch 和 perspective 外，还可以填写 `contourStrength`、`depthStrength`、`occlusionFadeStart`、远侧耳朵/侧发的保留透明度，以及 `sideHairDepthSwap`。眼睛与眉毛只通过收窄、位移和轮廓遮挡表达透视，运行时始终保持完全不透明；`farEyeOpacity` 和 `farBrowOpacity` 仅为旧项目格式兼容而保留，制作规格会固定为 1。Agent 应根据左右大角度证据判断其它值：轮廓强度解决脸缘体积，深度强度解决五官和头骨的相对位移，外围遮挡字段解决耳朵或侧发仍完整贴在脸缘外的问题。不要用降低整头转角来掩盖单一遮挡穿帮。
 
 部位状态必须按原义报告：`completed` 是已经写入并产生证据，`not-present` 是项目没有相应语义图层，`needs-assets` 是闭眼或嘴形等可选素材尚缺，`blocked` 是自检、草稿、修订或最终验证阻止继续。不能新建不存在的假图层，也不能把缺素材或不存在说成制作完成。
 
@@ -51,7 +51,7 @@ node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\front
 
 ## 标准表演动作与运行中控制
 
-角色缺少可触发动作时先运行 `actions plan`。计划只会使用项目实际存在的眉毛、左右手臂/手、腿和脚；`actions apply` 以幂等 authoring revision 增加四个表情和点头、摇头、鞠躬、左右观察、双眨眼、短说话、身体弹动、左右挥手、原地踏步。缺少肢体的项目仍得到适用动作，不会生成不存在的假图层。
+角色缺少可触发动作时先运行 `actions plan`。计划只会使用项目实际存在的眉毛、开眼/闭眼素材、三态嘴形、左右手臂/手、腿/脚、独立耳朵或头饰上的耳部铰点，以及尾巴图层；每个部位都会返回 `completed`、`not-present` 或 `needs-assets`。`actions apply` 以幂等 authoring revision 增加适用的四个表情和点头、摇头、鞠躬、左右观察、双眨眼、短说话、身体弹动、左右挥手、原地踏步、耳朵轻弹和尾巴摇摆。缺少素材的项目不会用透明消失或假图层冒充动作。
 
 ```powershell
 node $cli actions plan --project E:\Puppets\CharacterName --json

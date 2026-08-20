@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld("puppetloom", {
     const result = (await ipcRenderer.invoke("project:asset", projectDirectory, relative)) as { mime: string; bytes: Uint8Array };
     return new Blob([result.bytes], { type: result.mime });
   },
+  projectMediaUrl: (projectDirectory: string, relative: string) => ipcRenderer.invoke("project:media-url", projectDirectory, relative),
+  releaseProjectMedia: (mediaUrl: string) => ipcRenderer.invoke("project:media-release", mediaUrl),
   launchViewer: (projectDirectory: string, options?: unknown) => ipcRenderer.invoke("viewer:launch", projectDirectory, options),
   viewerProject: () => ipcRenderer.invoke("viewer:project"),
   viewerCapabilities: () => ipcRenderer.invoke("viewer:capabilities"),
@@ -79,7 +81,7 @@ contextBridge.exposeInMainWorld("puppetloom", {
   },
   startPerformanceRecording: (metadata: unknown) => ipcRenderer.invoke("viewer:performance-recording-start", metadata),
   appendPerformanceRecording: (id: string, bytes: Uint8Array) => ipcRenderer.invoke("viewer:performance-recording-append", id, bytes),
-  stopPerformanceRecording: (id: string, durationMs: number) => ipcRenderer.invoke("viewer:performance-recording-stop", id, durationMs),
+  stopPerformanceRecording: (id: string, durationMs: number, inputSession?: unknown) => ipcRenderer.invoke("viewer:performance-recording-stop", id, durationMs, inputSession),
   failPerformanceRecording: (id: string, error: string) => ipcRenderer.invoke("viewer:performance-recording-fail", id, error),
   onViewerState: (listener: (state: unknown) => void) => {
     const handler = (_event: unknown, state: unknown) => listener(state);
