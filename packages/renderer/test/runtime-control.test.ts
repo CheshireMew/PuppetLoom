@@ -48,6 +48,18 @@ describe("runtime control blending", () => {
     expect(states.some((state) => Math.abs(state.hairX) > 0.001)).toBe(true);
   });
 
+  it("replays a recorded pointer target through the runtime control timeline", () => {
+    const controller = new CalmMotionController(project());
+    const runtimeControl = snapshot([{ id: "replay:pointer", priority: 20, blend: 1, updatedAtMs: 1000, motion: { lookTargetX: 0.85, lookTargetY: -0.6, lookTargetStrength: 1 } }]);
+    const states = Array.from({ length: 120 }, (_, index) => controller.sample(index / 60, {
+      lookTarget: { x: -1, y: 1, strength: 1 },
+      runtimeControl,
+      nowMs: 1000 + index * 16
+    }));
+    expect(states.at(-1)!.headYaw).toBeGreaterThan(0.5);
+    expect(states.at(-1)!.headPitch).toBeLessThan(-0.35);
+  });
+
   it("returns smoothly to autonomous head and body motion when a TTL source expires", () => {
     const controller = new CalmMotionController(project());
     const runtimeControl = snapshot([{

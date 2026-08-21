@@ -408,6 +408,20 @@ export class PuppetRenderer {
     this.runtimeControl = snapshot;
   }
 
+  restartMotion(): void {
+    const now = performance.now();
+    this.controller.reset();
+    this.startedAt = now;
+    this.pausedDuration = 0;
+    this.pausedAt = this.paused ? now : undefined;
+    const state = this.controller.sample(0, {
+      lookTarget: this.lookTarget,
+      ...(this.runtimeControl ? { runtimeControl: this.runtimeControl } : {}),
+      nowMs: Date.now()
+    });
+    this.render(state);
+  }
+
   updateProject(project: PuppetLoomProject): void {
     const currentIds = new Set(this.currentProject.layers.map((layer) => layer.id));
     if (project.layers.length !== currentIds.size || project.layers.some((layer) => !currentIds.has(layer.id))) {

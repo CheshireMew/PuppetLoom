@@ -17,6 +17,7 @@ describe("runtime control protocol", () => {
   it("rejects invalid semantic ranges at the transport boundary", () => {
     expect(() => parseRuntimeControlRequest({ version: 1, requestId: "bad", op: "set", viewerId: 7, source: { id: "camera", motion: { headYaw: 1.01 } } })).toThrow(/-1 到 1/);
     expect(() => parseRuntimeControlRequest({ version: 1, requestId: "bad", op: "set", viewerId: 7, source: { id: "camera", motion: { blink: -0.01 } } })).toThrow(/0 到 1/);
+    expect(() => parseRuntimeControlRequest({ version: 1, requestId: "bad", op: "set", viewerId: 7, source: { id: "pointer", motion: { lookTargetStrength: -0.01 } } })).toThrow(/0 到 1/);
     expect(() => parseRuntimeControlRequest({ version: 1, requestId: "bad", op: "trigger", viewerId: 7, sourceId: "hotkey", behaviorId: "wave", expressionId: "happy" })).toThrow(/必须且只能/);
   });
 

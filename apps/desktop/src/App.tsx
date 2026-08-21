@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuildReport, InspectionReport, PuppetLoomProject, RuntimeViewerDescriptor } from "@puppetloom/core";
 import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
-import { Camera, CameraOff, ExternalLink, FileJson2, FileUp, FolderOpen, FolderOutput, Mic, MicOff, Minus, MousePointer2, MousePointerClick, Pause, Pin, Play, Plus, PointerOff, Repeat2, Sparkles, Square, Video, WandSparkles, X } from "lucide-react";
+import { Activity, Camera, CameraOff, ChevronRight, ClipboardCopy, ExternalLink, FileImage, FileJson2, FileUp, FolderKanban, FolderOpen, FolderOutput, Image as ImageIcon, Mic, MicOff, Minus, MousePointer2, MousePointerClick, Pause, Pin, Play, Plus, PointerOff, Repeat2, ScanSearch, Smile, Sparkles, Square, Video, WandSparkles, X } from "lucide-react";
 import type { DesktopCreatePhase, DesktopCreateRequest, RecentProject, ViewerCapabilities, ViewerState } from "../electron/global.js";
 import { EditorWorkspace } from "./EditorWorkspace.js";
 import { WindowTitleBar } from "./WindowTitleBar.js";
@@ -21,6 +21,7 @@ interface ViewerRecordingSettings {
   fps: 24 | 30 | 60;
   durationSeconds: number;
   includeAudio: boolean;
+  includeMotionData: boolean;
 }
 
 function messageOf(error: unknown): string {
@@ -64,7 +65,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
   const [runtimeDescriptor, setRuntimeDescriptor] = useState<RuntimeViewerDescriptor>();
   const [showActions, setShowActions] = useState(false);
   const [showRecordingSettings, setShowRecordingSettings] = useState(false);
-  const [recordingSettings, setRecordingSettings] = useState<ViewerRecordingSettings>({ background: "transparent", backgroundColor: "#00ff00", width: 1080, height: 1080, fps: 30, durationSeconds: 0, includeAudio: true });
+  const [recordingSettings, setRecordingSettings] = useState<ViewerRecordingSettings>({ background: "transparent", backgroundColor: "#00ff00", width: 1080, height: 1080, fps: 30, durationSeconds: 0, includeAudio: true, includeMotionData: false });
   const [recordingPreview, setRecordingPreview] = useState<{ url: string; output: string }>();
   const cameraInput = useRef<RuntimeInputAdapter | undefined>(undefined);
   const microphoneInput = useRef<RuntimeInputAdapter | undefined>(undefined);
@@ -93,8 +94,9 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
 
   useEffect(() => window.puppetloom.onInputReplayState((next) => {
     setReplayingInput(next.replaying);
-    if (next.reason === "finished") setSessionMessage({ text: "输入回放已完成" });
-    if (next.reason === "stopped") setSessionMessage({ text: "输入回放已停止" });
+    if (next.reason === "started") renderer.current?.restartMotion();
+    if (next.reason === "finished") setSessionMessage({ text: "动作数据回放已完成" });
+    if (next.reason === "stopped") setSessionMessage({ text: "动作数据回放已停止" });
   }), []);
 
   useEffect(() => () => {
@@ -113,6 +115,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     void microphoneInput.current?.stop();
     void window.puppetloom.releaseRuntimeSource("camera");
     void window.puppetloom.releaseRuntimeSource("microphone");
+    void window.puppetloom.releaseRuntimeSource("pointer");
   }, []);
 
   useEffect(() => () => {
@@ -123,6 +126,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     let disposed = false;
     let pointerTimer = 0;
     let pointerRequestActive = false;
+    let pointerSourceActive = false;
     void (async () => {
       try {
         if (!project || disposed || !canvas.current) return;
@@ -134,9 +138,23 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
           if (disposed || pointerRequestActive || !renderer.current) return;
           pointerRequestActive = true;
           try {
-            renderer.current.setLookTarget(await window.puppetloom.pointerTarget());
+            const target = await window.puppetloom.pointerTarget();
+            if (target.strength > 0) {
+              await window.puppetloom.setRuntimeSource({
+                id: "pointer",
+                priority: 20,
+                blend: 1,
+                ttlMs: 250,
+                motion: { lookTargetX: target.x, lookTargetY: target.y, lookTargetStrength: target.strength }
+              });
+              pointerSourceActive = true;
+            } else if (pointerSourceActive) {
+              await window.puppetloom.releaseRuntimeSource("pointer");
+              pointerSourceActive = false;
+            }
           } catch {
-            renderer.current?.setLookTarget({ x: 0, y: 0, strength: 0 });
+            if (pointerSourceActive) await window.puppetloom.releaseRuntimeSource("pointer").catch(() => undefined);
+            pointerSourceActive = false;
           } finally {
             pointerRequestActive = false;
           }
@@ -166,6 +184,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     return () => {
       disposed = true;
       if (pointerTimer) window.clearInterval(pointerTimer);
+      if (pointerSourceActive) void window.puppetloom.releaseRuntimeSource("pointer");
       delete window.puppetloomRenderTestPose;
       delete window.puppetloomRenderCurrentFrame;
       renderer.current?.dispose();
@@ -223,17 +242,19 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
   async function toggleInputRecording(): Promise<void> {
     try {
       if (!recordingInput) {
-        if (recordingPerformance || performanceRecorder.current) throw new Error("WebM 表演正在同步录制输入，请先结束表演录制。" );
+        if (recordingPerformance || performanceRecorder.current) throw new Error("视频正在录制，请先结束视频录制。" );
+        if (replayingInput) throw new Error("请先停止动作数据回放。" );
+        renderer.current?.restartMotion();
         await window.puppetloom.inputRecording("start");
         setRecordingInput(true);
-        setSessionMessage({ text: "正在录制驱动输入" });
+        setSessionMessage({ text: "正在录制动作数据" });
       } else {
         const result = await window.puppetloom.inputRecording("stop");
         setRecordingInput(false);
-        setSessionMessage({ text: "输入会话已保存", ...(result.output ? { path: result.output } : {}) });
+        setSessionMessage({ text: "动作数据已保存", ...(result.output ? { path: result.output } : {}) });
       }
     } catch (cause) {
-      setSessionMessage({ text: `输入录制失败：${messageOf(cause)}` });
+      setSessionMessage({ text: `动作数据录制失败：${messageOf(cause)}` });
     }
   }
 
@@ -242,16 +263,17 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       if (replayingInput) {
         await window.puppetloom.inputReplay("stop");
         setReplayingInput(false);
-        setSessionMessage({ text: "输入回放已停止" });
+        setSessionMessage({ text: "动作数据回放已停止" });
       } else {
+        if (recordingInput) throw new Error("请先停止动作数据录制。" );
         const result = await window.puppetloom.inputReplay("start");
         if (result.canceled) return;
         setReplayingInput(true);
-        setSessionMessage({ text: "正在回放输入会话", ...(result.input ? { path: result.input } : {}) });
+        setSessionMessage({ text: "正在回放动作数据；实时输入已暂时隔离", ...(result.input ? { path: result.input } : {}) });
       }
     } catch (cause) {
       setReplayingInput(false);
-      setSessionMessage({ text: `输入回放失败：${messageOf(cause)}` });
+      setSessionMessage({ text: `动作数据回放失败：${messageOf(cause)}` });
     }
   }
 
@@ -277,11 +299,15 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     try {
       if (performanceRecorder.current || finishingPerformance.current) throw new Error("当前表演录制尚未结束。" );
       if (!canvas.current) throw new Error("角色画布尚未准备好。" );
-      if (recordingInput) throw new Error("请先结束单独的驱动输入录制；WebM 录制会自动创建自己的同步输入会话。" );
+      if (recordingInput) throw new Error("请先结束单独的动作数据录制。" );
+      if (replayingInput) throw new Error("请先停止动作数据回放。" );
       const options = recordingOptions();
-      await window.puppetloom.inputRecording("start");
-      performanceOwnsInput.current = true;
-      setRecordingInput(true);
+      if (recordingSettings.includeMotionData) {
+        renderer.current?.restartMotion();
+        await window.puppetloom.inputRecording("start");
+        performanceOwnsInput.current = true;
+        setRecordingInput(true);
+      } else performanceOwnsInput.current = false;
       try {
         performanceRecorder.current = await startPerformanceRecording(
           canvas.current,
@@ -289,20 +315,23 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
           recordingSettings.includeAudio ? microphoneInput.current?.mediaStream : undefined
         );
       } catch (cause) {
-        const input = await window.puppetloom.inputRecording("stop").catch(() => undefined);
+        const input = performanceOwnsInput.current ? await window.puppetloom.inputRecording("stop").catch(() => undefined) : undefined;
         performanceOwnsInput.current = false;
         setRecordingInput(false);
-        if (input?.output) setSessionMessage({ text: `WebM 未能开始；同步输入已单独保存：${messageOf(cause)}`, path: input.output });
+        if (input?.output) setSessionMessage({ text: `视频未能开始；动作数据已单独保存：${messageOf(cause)}`, path: input.output });
         throw cause;
       }
       setRecordingPerformance(true);
       setShowRecordingSettings(false);
-      setSessionMessage({ text: microphoneInput.current?.mediaStream && recordingSettings.includeAudio ? "正在录制 WebM 表演、同步输入与麦克风音轨" : "正在录制 WebM 表演与同步输入" });
+      const statusParts = ["正在录制视频"];
+      if (recordingSettings.includeMotionData) statusParts.push("同步保存动作数据");
+      if (microphoneInput.current?.mediaStream && recordingSettings.includeAudio) statusParts.push("包含麦克风音轨");
+      setSessionMessage({ text: statusParts.join("；") });
       if (options.targetDurationMs !== undefined) performanceStopTimer.current = window.setTimeout(() => void finishPerformanceRecording(), options.targetDurationMs);
     } catch (cause) {
       if (!performanceRecorder.current) {
         setRecordingPerformance(false);
-        setSessionMessage((current) => current?.path ? current : { text: `WebM 表演录制失败：${messageOf(cause)}` });
+        setSessionMessage((current) => current?.path ? current : { text: `视频录制失败：${messageOf(cause)}` });
       }
     }
   }
@@ -337,10 +366,10 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       } catch (cause) {
         inputError = [inputError, `预览读取失败：${messageOf(cause)}`].filter(Boolean).join("；");
       }
-      setSessionMessage({ text: inputError ? `WebM 表演已保存，但${inputError}` : "WebM 表演与同步输入已保存", path: result.output });
+      setSessionMessage({ text: inputError ? `视频已保存，但动作数据保存失败：${inputError}` : inputSession ? "视频和动作数据已保存" : "视频已保存", path: result.output });
     } catch (cause) {
       setRecordingPerformance(false);
-      setSessionMessage({ text: `WebM 表演录制失败：${messageOf(cause)}` });
+      setSessionMessage({ text: `视频录制失败：${messageOf(cause)}` });
     } finally {
       finishingPerformance.current = false;
     }
@@ -368,12 +397,12 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       <canvas ref={canvas} className="puppet-canvas" />
       <div className="drag-strip" title={`拖动角色窗口 · ${sourceLabel}`}><span>{project?.name ?? "加载中"}</span><small>{sourceLabel}</small></div>
       {showActions && runtimeDescriptor && <aside className="action-panel" aria-label="表情与动作">
-        <div className="action-group"><strong>表情</strong>{runtimeDescriptor.expressions.map((expression, index) => { const key = `CommandOrControl+Shift+${index + 1}`; return <button key={expression.id} onClick={() => void triggerTarget({ expressionId: expression.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 1}` : "系统快捷键不可用，请点击触发" : expression.id}>{expression.name}</button>; })}</div>
-        <div className="action-group"><strong>动作</strong>{runtimeDescriptor.behaviors.map((behavior, index) => { const key = `CommandOrControl+Shift+${index + 5}`; return <button key={behavior.id} onClick={() => void triggerTarget({ behaviorId: behavior.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 5}` : "系统快捷键不可用，请点击触发" : behavior.id}>{behavior.name}</button>; })}</div>
+        <div className="action-group"><strong>表情</strong>{runtimeDescriptor.expressions.map((expression, index) => { const key = `CommandOrControl+Shift+${index + 1}`; return <button className="with-icon" key={expression.id} onClick={() => void triggerTarget({ expressionId: expression.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 1}` : "系统快捷键不可用，请点击触发" : expression.id}><Smile aria-hidden="true" />{expression.name}</button>; })}</div>
+        <div className="action-group"><strong>动作</strong>{runtimeDescriptor.behaviors.map((behavior, index) => { const key = `CommandOrControl+Shift+${index + 5}`; return <button className="with-icon" key={behavior.id} onClick={() => void triggerTarget({ behaviorId: behavior.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 5}` : "系统快捷键不可用，请点击触发" : behavior.id}><Activity aria-hidden="true" />{behavior.name}</button>; })}</div>
         {Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) && <p className="hotkey-warning">部分系统快捷键已被其它软件占用；面板按钮仍可正常使用。</p>}
       </aside>}
-      {showRecordingSettings && !recordingPerformance && <aside className="recording-panel" aria-label="WebM 录制设置">
-        <div className="recording-panel-heading"><strong>WebM 录制</strong><button aria-label="关闭 WebM 录制设置" onClick={() => setShowRecordingSettings(false)}><X aria-hidden="true" /></button></div>
+      {showRecordingSettings && !recordingPerformance && <aside className="recording-panel" aria-label="视频录制设置">
+        <div className="recording-panel-heading"><strong>录制视频</strong><button aria-label="关闭视频录制设置" onClick={() => setShowRecordingSettings(false)}><X aria-hidden="true" /></button></div>
         <label><span>背景</span><select aria-label="录制背景" value={recordingSettings.background} onChange={(event) => setRecordingSettings((current) => ({ ...current, background: event.target.value as RecordingBackgroundChoice }))}><option value="transparent">透明</option><option value="black">黑色</option><option value="white">白色</option><option value="green">绿幕</option><option value="custom">自定义纯色</option></select></label>
         {recordingSettings.background === "custom" && <label><span>背景颜色</span><input aria-label="自定义录制背景颜色" type="color" value={recordingSettings.backgroundColor} onChange={(event) => setRecordingSettings((current) => ({ ...current, backgroundColor: event.target.value }))} /></label>}
         <div className="recording-grid">
@@ -383,10 +412,19 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
           <label><span>自动停止</span><input aria-label="录制时长秒数" type="number" min="0" max="3600" step="1" value={recordingSettings.durationSeconds} onChange={(event) => setRecordingSettings((current) => ({ ...current, durationSeconds: Number(event.target.value) }))} /><small>秒，0 为手动</small></label>
         </div>
         <label className="recording-checkbox"><input type="checkbox" checked={recordingSettings.includeAudio} disabled={!microphoneInput.current?.mediaStream} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeAudio: event.target.checked }))} /><span>{microphoneInput.current?.mediaStream ? "录入已开启的麦克风音轨" : "先开启麦克风，才能录入音轨"}</span></label>
-        <p>每次都会同步保存一份可回放的驱动输入 JSON；视频按所选尺寸等比居中，不拉伸角色。</p>
-        <button className="recording-start" onClick={() => void startConfiguredPerformanceRecording()}>开始录制表演</button>
+        <label className="recording-checkbox recording-data-option"><input type="checkbox" checked={recordingSettings.includeMotionData} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeMotionData: event.target.checked }))} /><span><strong>同时保存动作数据</strong><small>用于在同一项目版本上重放鼠标跟随、面捕、口型、表情、动作和外部控制；不包含摄像头原片或声音。</small></span></label>
+        <p>视频按所选尺寸等比居中保存为 WebM，不拉伸角色。动作数据是可选的独立 JSON，普通录制无需开启。</p>
+        <button className="recording-start with-icon" disabled={recordingInput || replayingInput} onClick={() => void startConfiguredPerformanceRecording()}><Video aria-hidden="true" />开始录制视频</button>
+        <details className="recording-advanced">
+          <summary><ChevronRight aria-hidden="true" />动作数据工具</summary>
+          <p>单独记录或回放动作数据，适合修改角色后做同输入对比和排查问题。回放时实时来源会暂时隔离。</p>
+          <div>
+            <button className={`with-icon ${recordingInput ? "is-recording" : ""}`} disabled={replayingInput} onClick={() => void toggleInputRecording()}>{recordingInput ? <Square aria-hidden="true" /> : <FileJson2 aria-hidden="true" />}{recordingInput ? "停止并保存动作数据" : "单独录制动作数据"}</button>
+            <button className={`with-icon ${replayingInput ? "is-active" : ""}`} disabled={recordingInput} onClick={() => void toggleInputReplay()}><Repeat2 aria-hidden="true" />{replayingInput ? "停止动作数据回放" : "回放动作数据"}</button>
+          </div>
+        </details>
       </aside>}
-      {recordingPreview && <aside className="recording-preview" aria-label="WebM 录制预览"><div><strong>刚刚保存的表演</strong><button aria-label="关闭 WebM 录制预览" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="WebM 录制预览视频" controls src={recordingPreview.url} /><button onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}>在文件夹中显示</button></aside>}
+      {recordingPreview && <aside className="recording-preview" aria-label="视频录制预览"><div><strong>刚刚保存的视频</strong><button aria-label="关闭视频录制预览" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="视频录制预览" controls src={recordingPreview.url} /><button className="with-icon" onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}><FolderOpen aria-hidden="true" />在文件夹中显示</button></aside>}
       <nav className="viewer-controls" aria-label="角色窗口控制">
         <button className="icon-only" aria-label="缩小角色窗口" onClick={() => act("smaller")} title="缩小角色窗口"><Minus aria-hidden="true" /></button>
         <button className="icon-only" aria-label="放大角色窗口" onClick={() => act("larger")} title="放大角色窗口"><Plus aria-hidden="true" /></button>
@@ -395,26 +433,25 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         <button className={`icon-only ${state.mouseTracking ? "is-active" : ""}`} aria-label={state.mouseTracking ? "切换为自主观察" : "切换为鼠标跟随"} aria-pressed={state.mouseTracking} onClick={() => act("pointer-tracking")} title={state.mouseTracking ? "当前跟随鼠标；点击切换为自主观察" : "当前自主观察；点击切换为鼠标跟随"}>{state.mouseTracking ? <MousePointer2 aria-hidden="true" /> : <Sparkles aria-hidden="true" />}</button>
         <button className={`icon-only ${cameraInput.current ? "is-active" : ""}`} aria-label={cameraInput.current ? "关闭摄像头面捕" : "开启摄像头面捕"} aria-pressed={Boolean(cameraInput.current)} onClick={() => void toggleCamera()} title={cameraStatus.message}>{cameraInput.current ? <Camera aria-hidden="true" /> : <CameraOff aria-hidden="true" />}</button>
         <button className={`icon-only ${microphoneInput.current ? "is-active" : ""}`} aria-label={microphoneInput.current ? "关闭麦克风口型" : "开启麦克风口型"} aria-pressed={Boolean(microphoneInput.current)} onClick={() => void toggleMicrophone()} title={microphoneStatus.message}>{microphoneInput.current ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}</button>
-        <button className={`icon-only ${recordingInput ? "is-recording" : ""}`} disabled={recordingPerformance} aria-label={recordingInput ? "停止并保存输入录制" : "录制驱动输入"} aria-pressed={recordingInput} onClick={() => void toggleInputRecording()} title={recordingPerformance ? "WebM 表演正在自动同步录制输入" : recordingInput ? "停止并保存驱动输入" : "把摄像头、麦克风、快捷键和外部控制保存为可回放 JSON"}>{recordingInput ? <Square aria-hidden="true" /> : <FileJson2 aria-hidden="true" />}</button>
-        <button className={`icon-only ${recordingPerformance ? "is-recording" : showRecordingSettings ? "is-active" : ""}`} aria-label={recordingPerformance ? "停止并保存 WebM 表演" : "录制 WebM 表演"} aria-pressed={recordingPerformance} onClick={() => void togglePerformanceRecording()} title={recordingPerformance ? "停止并保存当前角色画面和同步输入" : "设置透明或纯色背景、分辨率、帧率、时长与可选音轨"}>{recordingPerformance ? <Square aria-hidden="true" /> : <Video aria-hidden="true" />}</button>
-        <button className={`icon-only ${replayingInput ? "is-active" : ""}`} aria-label={replayingInput ? "停止输入回放" : "回放输入会话"} aria-pressed={replayingInput} onClick={() => void toggleInputReplay()} title={replayingInput ? "停止输入回放" : "选择并回放输入会话 JSON"}><Repeat2 aria-hidden="true" /></button>
+        <button className={`icon-only ${recordingPerformance || recordingInput ? "is-recording" : showRecordingSettings || replayingInput ? "is-active" : ""}`} aria-label={recordingPerformance ? "停止并保存视频" : "录制视频"} aria-pressed={recordingPerformance} onClick={() => void togglePerformanceRecording()} title={recordingPerformance ? "停止并保存当前角色视频" : recordingInput ? "动作数据正在录制；点击打开录制面板" : replayingInput ? "动作数据正在回放；点击打开录制面板" : "设置背景、分辨率、帧率、时长、音轨与可选动作数据"}>{recordingPerformance ? <Square aria-hidden="true" /> : <Video aria-hidden="true" />}</button>
         <button className={`icon-only ${showActions ? "is-active" : ""}`} aria-label={showActions ? "关闭表情动作面板" : "打开表情动作面板"} aria-pressed={showActions} onClick={() => setShowActions((value) => !value)} title={Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) ? "表情与动作；快捷键被占用时请点击面板按钮" : "表情与动作；Ctrl+Shift+1…8 可快捷触发"}><WandSparkles aria-hidden="true" /></button>
         <button className={`icon-only ${state.clickThrough ? "is-active" : ""}`} disabled={!state.clickThrough && capabilities.hotkeys["CommandOrControl+Shift+P"] === false} aria-label={state.clickThrough ? "关闭鼠标穿透" : "开启鼠标穿透"} aria-pressed={state.clickThrough} onClick={() => act("click-through")} title={state.clickThrough ? "关闭鼠标穿透" : capabilities.hotkeys["CommandOrControl+Shift+P"] ? "开启鼠标穿透；按 Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被其它软件占用，因此已停用鼠标穿透"}>{state.clickThrough ? <PointerOff aria-hidden="true" /> : <MousePointerClick aria-hidden="true" />}</button>
         <button className="icon-only viewer-close" aria-label="关闭角色窗口" onClick={() => act("close")} title="关闭角色窗口"><X aria-hidden="true" /></button>
       </nav>
       {state.clickThrough && <div className="shortcut-hint">{capabilities.hotkeys["CommandOrControl+Shift+P"] ? "Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被占用；请从创建页的远程控制关闭鼠标穿透"}</div>}
       {(cameraStatus.state === "starting" || cameraStatus.state === "calibrating" || cameraStatus.state === "lost" || cameraStatus.state === "error" || microphoneStatus.state === "starting" || microphoneStatus.state === "error") && <div className="input-status">{cameraStatus.state !== "stopped" && cameraStatus.message}{cameraStatus.state !== "stopped" && microphoneStatus.state !== "stopped" ? " · " : ""}{microphoneStatus.state !== "stopped" && microphoneStatus.message}</div>}
-      {sessionMessage && <div className="session-status" role="status"><strong>{sessionMessage.text}</strong>{sessionMessage.path && <code title={sessionMessage.path}>{sessionMessage.path}</code>}<span>{sessionMessage.path && <><button onClick={() => void window.puppetloom.revealPath(sessionMessage.path!)}>在文件夹中显示</button><button onClick={() => void window.puppetloom.copyText(sessionMessage.path!)}>复制路径</button></>}<button aria-label="关闭提示" onClick={() => setSessionMessage(undefined)}>关闭</button></span></div>}
+      {sessionMessage && <div className="session-status" role="status"><strong>{sessionMessage.text}</strong>{sessionMessage.path && <code title={sessionMessage.path}>{sessionMessage.path}</code>}<span>{sessionMessage.path && <><button className="with-icon" onClick={() => void window.puppetloom.revealPath(sessionMessage.path!)}><FolderOpen aria-hidden="true" />在文件夹中显示</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(sessionMessage.path!)}><ClipboardCopy aria-hidden="true" />复制路径</button></>}<button className="icon-only" aria-label="关闭提示" title="关闭提示" onClick={() => setSessionMessage(undefined)}><X aria-hidden="true" /></button></span></div>}
       {error && <div className="viewer-error">{error}</div>}
     </main>
   );
 }
 
-function DropField({ label, value, accept, optional, onPick, onDrop, onReject }: {
+function DropField({ label, value, accept, optional, icon, onPick, onDrop, onReject }: {
   label: string;
   value: string;
   accept: string;
   optional?: boolean;
+  icon: React.ReactNode;
   onPick: () => Promise<void>;
   onDrop: (path: string) => void;
   onReject?: (message: string) => void;
@@ -434,8 +471,7 @@ function DropField({ label, value, accept, optional, onPick, onDrop, onReject }:
         onDrop(window.puppetloom.pathForFile(file));
       }}
     >
-      <div><strong>{label}</strong>{optional && <span className="optional">可选</span>}</div>
-      <p>{value || "拖到这里，或从本机选择"}</p>
+      <div className="drop-field-identity"><span className="field-icon" aria-hidden="true">{icon}</span><span><strong>{label}</strong>{optional && <span className="optional">可选</span>}<small>{value || "拖到这里，或从本机选择"}</small></span></div>
       <button className="with-icon" onClick={() => void onPick()}><FileUp aria-hidden="true" />选择文件</button>
     </section>
   );
@@ -580,31 +616,32 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
 
   return (
     <main className="app-shell" data-testid="creator">
-      <header>
-        <div className="mark">PL</div>
-        <div><h1>PuppetLoom</h1><p>分层 PSD 进去，一个克制、稳定、会自己动的角色出来。</p></div>
-        <button className="secondary open-project with-icon" onClick={() => void openExisting()}><FolderOpen aria-hidden="true" />打开 PuppetLoom 项目目录</button>
+      <header className="creator-header">
+        <div className="creator-header-copy">
+          <div className="mark" aria-hidden="true"><Sparkles /></div>
+          <div><span className="creator-eyebrow">角色工作台</span><h1>创建角色项目</h1><p>准备分层素材，PuppetLoom 会完成预检、绑定和项目初始化。</p></div>
+        </div>
+        <button className="secondary open-project with-icon" onClick={() => void openExisting()}><FolderOpen aria-hidden="true" />打开已有项目</button>
       </header>
       <div className="workflow">
         <section className="inputs">
-          <h2>角色素材</h2>
-          <DropField label="分层 PSD" value={input} accept="\\.psd$" onPick={() => choose("psd")} onDrop={setInput} onReject={() => setError("这里只能放入 .psd 文件。 ")} />
-          <DropField label="原始角色图" value={reference} accept="\\.(png|jpe?g|webp)$" optional onPick={() => choose("reference")} onDrop={setReference} onReject={() => setError("参考图仅支持 PNG、JPG 或 WebP。 ")} />
+          <div className="section-title"><FileImage aria-hidden="true" /><div><h2>角色素材</h2><p>选择源文件并指定项目位置</p></div></div>
+          <DropField label="分层 PSD" value={input} accept="\\.psd$" icon={<FileImage />} onPick={() => choose("psd")} onDrop={setInput} onReject={() => setError("这里只能放入 .psd 文件。 ")} />
+          <DropField label="原始角色图" value={reference} accept="\\.(png|jpe?g|webp)$" icon={<ImageIcon />} optional onPick={() => choose("reference")} onDrop={setReference} onReject={() => setError("参考图仅支持 PNG、JPG 或 WebP。 ")} />
           <label className="text-field"><span>项目名称 <small>可选</small></span><input value={name} maxLength={80} placeholder="留空时使用 PSD 文件名" onChange={(event) => setName(event.target.value)} /></label>
           <section className="output-field">
-            <div><strong>项目输出目录</strong><p>{output || "请选择一个新目录或空目录"}</p></div>
+            <div className="drop-field-identity"><span className="field-icon" aria-hidden="true"><FolderOutput /></span><span><strong>项目输出目录</strong><small>{output || "请选择一个新目录或空目录"}</small></span></div>
             <button className="with-icon" onClick={() => void choose("output")}><FolderOutput aria-hidden="true" />选择目录</button>
           </section>
-          <fieldset className="alpha-policy"><legend>透明像素处理</legend><div className="alpha-default"><strong>自动清理确认噪点</strong><small>始终分析 Alpha；默认只移除极小、淡色、孤立的高置信度噪点，疑似高光、细发丝和装饰继续保留。</small></div><details><summary>高级选项</summary><label><input type="checkbox" name="preserve-alpha-noise" checked={alphaCleanup === "preserve-all"} onChange={(event) => setAlphaCleanup(event.target.checked ? "preserve-all" : "automatic")} /><span><strong>保留所有高置信度噪点</strong><small>仅用于排查误判。源 PSD 无论是否开启都不会被修改。</small></span></label></details></fieldset>
+          <fieldset className="alpha-policy"><legend>透明像素处理</legend><div className="alpha-default"><strong>自动清理确认噪点</strong><small>始终分析 Alpha；默认只移除极小、淡色、孤立的高置信度噪点，疑似高光、细发丝和装饰继续保留。</small></div><details><summary><ChevronRight aria-hidden="true" />高级选项</summary><label><input type="checkbox" name="preserve-alpha-noise" checked={alphaCleanup === "preserve-all"} onChange={(event) => setAlphaCleanup(event.target.checked ? "preserve-all" : "automatic")} /><span><strong>保留所有高置信度噪点</strong><small>仅用于排查误判。源 PSD 无论是否开启都不会被修改。</small></span></label></details></fieldset>
           <button className="primary with-icon" disabled={!ready} onClick={() => void create()}><Sparkles aria-hidden="true" />{busy ? `${createPhase === "importing" ? "正在读取 PSD" : createPhase === "rigging" ? "正在生成绑定" : createPhase === "writing" ? "正在写入纹理与项目" : createPhase === "validating" ? "正在验证全部输出" : "正在发布最终项目"}${busySeconds ? ` · ${busySeconds} 秒` : ""}` : "创建角色项目"}</button>
-          {busy && <button className="cancel-create" onClick={() => void cancelCreate()}>安全停止创建</button>}
+          {busy && <button className="cancel-create with-icon" onClick={() => void cancelCreate()}><Square aria-hidden="true" />安全停止创建</button>}
           <p className="policy">缺少三态嘴形时嘴部保持不动；接入后只偶发一次缓慢开合，不连续无声说话。缺少闭眼素材不会阻塞创建。</p>
         </section>
-        <div className="launch-sidebar">
-          <aside className="status-panel">
-            <h2>自动检查</h2>
+        <aside className="status-panel">
+            <div className="section-title"><ScanSearch aria-hidden="true" /><div><h2>自动检查</h2><p>识别结果与能力预检</p></div></div>
             {inspecting && <div className="empty-state" role="status">正在读取 PSD 图层和透明像素…</div>}
-            {!inspecting && !inspection && !report && <div className="empty-state">放入 PSD 后，这里会显示识别结果、绑定等级和禁用功能。</div>}
+            {!inspecting && !inspection && !report && <div className="empty-state"><strong>等待角色素材</strong><span>选择分层 PSD 后，这里会显示图层识别、建议绑定和能力限制。</span></div>}
             {inspection && !report && <section className="inspection">
               <div><span>画布</span><strong>{inspection.canvas.width} × {inspection.canvas.height}</strong></div>
               <div><span>可见图层</span><strong>{inspection.visibleLayerCount}</strong></div>
@@ -620,7 +657,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
             </section>}
             {report && <Report report={report} />}
             {projectDirectory && <section className="result-actions">
-              <p>项目已写入：<br/><code>{projectDirectory}</code></p><div className="path-actions"><button onClick={() => void window.puppetloom.revealPath(projectDirectory)}>在文件夹中显示</button><button onClick={() => void window.puppetloom.copyText(projectDirectory)}>复制路径</button></div>
+              <p>项目已写入：<br/><code>{projectDirectory}</code></p><div className="path-actions"><button className="with-icon" onClick={() => void window.puppetloom.revealPath(projectDirectory)}><FolderOpen aria-hidden="true" />在文件夹中显示</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(projectDirectory)}><ClipboardCopy aria-hidden="true" />复制路径</button></div>
               <button className="primary with-icon" onClick={() => onEdit(projectDirectory)}><ExternalLink aria-hidden="true" />打开绑定与校准编辑器</button>
               <button className="primary with-icon" onClick={() => void launch()}><Play aria-hidden="true" />打开透明角色窗口</button>
               {viewerId !== undefined && <div className="remote-controls">
@@ -631,15 +668,15 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
               </div>}
             </section>}
             {error && <div className="error" role="alert">{error}</div>}
-          </aside>
-          <section className="recent-projects" data-testid="recent-projects">
+        </aside>
+        <section className="recent-projects" data-testid="recent-projects">
             <div className="recent-projects-heading">
-              <h2>最近项目</h2>
+              <div className="section-title compact"><FolderKanban aria-hidden="true" /><div><h2>最近项目</h2></div></div>
               <span>{recent.length > 0 ? `${recent.length} 个` : "尚无记录"}</span>
             </div>
             {recent.length > 0 ? <div className="recent-project-list">
               {recent.map((entry) => <button key={entry.directory} title={entry.directory} onClick={() => void openRecent(entry.directory)}>
-                <span className="recent-project-icon" aria-hidden="true">PL</span>
+                <span className="recent-project-icon" aria-hidden="true"><FolderKanban /></span>
                 <span className="recent-project-copy">
                   <strong>{entry.name}</strong>
                   <span>{entry.directory}</span>
@@ -650,8 +687,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
               <strong>还没有最近项目</strong>
               <span>创建或打开项目后，会在这里快速进入。</span>
             </div>}
-          </section>
-        </div>
+        </section>
       </div>
     </main>
   );

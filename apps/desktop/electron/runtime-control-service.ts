@@ -133,7 +133,7 @@ export class RuntimeControlService {
   }
 
   snapshot(viewerId: number): RuntimeControlSnapshot {
-    return this.store.snapshot(viewerId);
+    return this.presentationSnapshot(viewerId);
   }
 
   applyLocal(request: RuntimeControlServiceRequest): unknown {
@@ -200,9 +200,37 @@ export class RuntimeControlService {
 
   private startRecording(viewerId: number, nowMs: number): unknown {
     if (this.recordings.has(viewerId)) throw new Error(`角色 ${viewerId} 已经在录制输入会话。`);
+    if (this.replays.has(viewerId)) throw new Error(`角色 ${viewerId} 正在回放动作数据，不能同时开始录制。`);
     const viewer = this.store.inspect().find((candidate) => candidate.id === viewerId);
     if (!viewer) throw new Error(`找不到运行中的角色窗口：${viewerId}`);
-    const recording: ActiveRecording = { startedAtMs: nowMs, recordedAt: new Date(nowMs).toISOString(), viewer, events: [] };
+    const events = this.store.snapshot(viewerId, nowMs).sources.flatMap((source): RuntimeInputSessionEvent[] => {
+      const ttlMs = source.expiresAtMs === undefined ? undefined : Math.max(50, source.expiresAtMs - nowMs);
+      const baseline: RuntimeInputSessionEvent[] = [];
+      if (source.motion || source.parameters || source.expressions) baseline.push({
+        atMs: 0,
+        op: "set",
+        source: {
+          id: source.id,
+          priority: source.priority,
+          blend: source.blend,
+          ...(ttlMs === undefined ? {} : { ttlMs }),
+          ...(source.motion ? { motion: structuredClone(source.motion) } : {}),
+          ...(source.parameters ? { parameters: structuredClone(source.parameters) } : {}),
+          ...(source.expressions ? { expressions: structuredClone(source.expressions) } : {})
+        }
+      });
+      if (source.behavior) baseline.push({
+        atMs: 0,
+        op: "trigger",
+        sourceId: source.id,
+        behaviorId: source.behavior.id,
+        strength: source.blend,
+        ...(ttlMs === undefined ? {} : { durationMs: ttlMs }),
+        priority: source.priority
+      });
+      return baseline;
+    });
+    const recording: ActiveRecording = { startedAtMs: nowMs, recordedAt: new Date(nowMs).toISOString(), viewer, events };
     this.recordings.set(viewerId, recording);
     this.log("runtime-input-recording-started", { viewerId });
     return { viewerId, recording: true, startedAt: recording.recordedAt };
@@ -246,13 +274,18 @@ export class RuntimeControlService {
 
   private startReplay(viewerId: number, input: RuntimeInputSession, speed: number, loop: boolean, nowMs: number): unknown {
     if (this.replays.has(viewerId)) throw new Error(`角色 ${viewerId} 已经在回放输入会话。`);
+    if (this.recordings.has(viewerId)) throw new Error(`角色 ${viewerId} 正在录制动作数据，不能同时开始回放。`);
     const viewer = this.store.inspect().find((candidate) => candidate.id === viewerId);
     if (!viewer) throw new Error(`找不到运行中的角色窗口：${viewerId}`);
     if (viewer.projectName !== input.viewer.projectName) throw new Error(`输入会话属于“${input.viewer.projectName}”，当前角色是“${viewer.projectName}”。`);
+    if (input.viewer.revision !== undefined && viewer.revision !== input.viewer.revision) {
+      throw new Error(`输入会话属于 revision ${input.viewer.revision}，当前角色是 revision ${viewer.revision ?? "未知"}，不能可靠回放。`);
+    }
     this.validateReplay(viewer, input, speed);
     const replay = { session: input, speed, loop, startedAtMs: nowMs, cursor: 0, sourceIds: new Set<string>(), timer: undefined as unknown as ReturnType<typeof setInterval> };
     replay.timer = setInterval(() => this.tickReplay(viewerId), 8);
     this.replays.set(viewerId, replay);
+    this.publish(viewerId, nowMs);
     this.log("runtime-input-replay-started", { viewerId, sessionId: input.id, speed, loop });
     this.onReplayState(viewerId, { replaying: true, reason: "started" });
     this.tickReplay(viewerId, nowMs);
@@ -278,10 +311,10 @@ export class RuntimeControlService {
       }
       const request = this.requestForEvent(viewerId, replay.session.id, event, replay.speed);
       this.store.apply(request, nowMs);
-      this.publish(viewerId, nowMs);
       if (request.op === "set") replay.sourceIds.add(request.source.id);
       if (request.op === "trigger") replay.sourceIds.add(request.sourceId);
       if (request.op === "release" && request.sourceId) replay.sourceIds.delete(request.sourceId);
+      this.publish(viewerId, nowMs);
       replay.cursor += 1;
     }
     if (elapsed < replay.session.durationMs) return;
@@ -289,10 +322,12 @@ export class RuntimeControlService {
     if (replay.loop) {
       replay.cursor = 0;
       replay.startedAtMs = nowMs;
+      this.publish(viewerId, nowMs);
       return;
     }
     clearInterval(replay.timer);
     this.replays.delete(viewerId);
+    this.publish(viewerId, nowMs);
     this.log("runtime-input-replay-finished", { viewerId, sessionId: replay.session.id });
     this.onReplayState(viewerId, { replaying: false, reason: "finished" });
   }
@@ -303,20 +338,27 @@ export class RuntimeControlService {
     clearInterval(replay.timer);
     this.releaseReplaySources(viewerId, replay, Date.now());
     this.replays.delete(viewerId);
+    this.publish(viewerId);
     this.log("runtime-input-replay-stopped", { viewerId, sessionId: replay.session.id });
     this.onReplayState(viewerId, { replaying: false, reason: "stopped" });
     return true;
   }
 
   private releaseReplaySources(viewerId: number, replay: ActiveReplay, nowMs: number): void {
-    const changed = replay.sourceIds.size > 0;
     for (const sourceId of replay.sourceIds) this.store.apply({ version: 1, requestId: randomUUID(), op: "release", viewerId, sourceId }, nowMs);
     replay.sourceIds.clear();
-    if (changed) this.publish(viewerId, nowMs);
   }
 
   private publish(viewerId: number, nowMs = Date.now()): void {
-    this.onChange(viewerId, this.store.snapshot(viewerId, nowMs));
+    this.onChange(viewerId, this.presentationSnapshot(viewerId, nowMs));
+  }
+
+  private presentationSnapshot(viewerId: number, nowMs = Date.now()): RuntimeControlSnapshot {
+    const snapshot = this.store.snapshot(viewerId, nowMs);
+    const replay = this.replays.get(viewerId);
+    if (!replay) return snapshot;
+    const prefix = `replay:${replay.session.id}:`;
+    return { ...snapshot, sources: snapshot.sources.filter((source) => source.id.startsWith(prefix)) };
   }
 
   private requestForEvent(viewerId: number, sessionId: string, event: RuntimeInputSessionEvent, speed: number): Exclude<RuntimeControlRequest, { op: "inspect" }> {

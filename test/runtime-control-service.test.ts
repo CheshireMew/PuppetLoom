@@ -5,7 +5,7 @@ import { RuntimeControlService } from "../apps/desktop/electron/runtime-control-
 afterEach(() => vi.useRealTimers());
 
 describe("desktop input session recording and replay", () => {
-  it("records effective control events and replays them without touching live sources", () => {
+  it("records effective control events and isolates replay from live sources", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T00:00:00.000Z"));
     const service = new RuntimeControlService({ profileDirectory: "D:\\Tools\\PuppetLoom\\e2e\\runtime-session-test", port: 0 });
@@ -29,8 +29,39 @@ describe("desktop input session recording and replay", () => {
     vi.advanceTimersByTime(110);
     const active = service.snapshot(1).sources;
     expect(active.some((source) => source.id.startsWith("replay:") && source.motion?.headYaw === 0.7)).toBe(true);
-    expect(active.some((source) => source.id === "live")).toBe(true);
+    expect(active.some((source) => source.id === "live")).toBe(false);
+    expect(service.store.snapshot(1).sources.some((source) => source.id === "live")).toBe(true);
     vi.advanceTimersByTime(250);
     expect(service.snapshot(1).sources.map((source) => source.id)).toEqual(["live"]);
+  });
+
+  it("rejects replay against a different saved revision", () => {
+    const service = new RuntimeControlService({ profileDirectory: "D:\\Tools\\PuppetLoom\\e2e\\runtime-session-revision-test", port: 0 });
+    service.registerViewer({
+      id: 1, projectDirectory: "E:\\Characters\\A", projectName: "A", revision: 4,
+      parameters: [], expressions: [], behaviors: []
+    });
+    expect(() => service.applyLocal(parseRuntimeControlServiceRequest({
+      version: 1, requestId: "replay", op: "replay-start", viewerId: 1,
+      session: {
+        version: 1, id: "old-session", recordedAt: "2026-08-20T00:00:00.000Z", durationMs: 0,
+        viewer: { projectDirectory: "E:\\Characters\\A", projectName: "A", revision: 3 }, events: []
+      }
+    }))).toThrow(/revision 3/);
+  });
+
+  it("starts a recording with the inputs that are already active", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T00:00:00.000Z"));
+    const service = new RuntimeControlService({ profileDirectory: "D:\\Tools\\PuppetLoom\\e2e\\runtime-session-baseline-test", port: 0 });
+    service.registerViewer({ id: 1, projectDirectory: "E:\\Characters\\A", projectName: "A", revision: 4, parameters: [], expressions: [], behaviors: [] });
+    service.applyLocal(parseRuntimeControlRequest({
+      version: 1, requestId: "pointer", op: "set", viewerId: 1,
+      source: { id: "pointer", priority: 20, ttlMs: 250, motion: { lookTargetX: 0.8, lookTargetY: -0.4, lookTargetStrength: 1 } }
+    }));
+    service.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: "record", op: "record-start", viewerId: 1 }));
+    vi.advanceTimersByTime(100);
+    const stopped = service.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: "stop", op: "record-stop", viewerId: 1 })) as { session: { events: Array<{ atMs: number; source?: { id: string; ttlMs?: number } }> } };
+    expect(stopped.session.events[0]).toMatchObject({ atMs: 0, source: { id: "pointer", ttlMs: 250 } });
   });
 });

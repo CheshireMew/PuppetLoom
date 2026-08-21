@@ -641,10 +641,10 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     if (action === "stop") return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "replay-stop", viewerId: window.id }));
     if (action !== "start") throw new Error(`未知输入回放操作：${String(action)}`);
     const selection = await dialog.showOpenDialog(window, {
-      title: "选择 PuppetLoom 输入会话",
+      title: "选择 PuppetLoom 动作数据",
       defaultPath: join(projectDirectory, "reports", "input-sessions"),
       properties: ["openFile"],
-      filters: [{ name: "PuppetLoom runtime input", extensions: ["json"] }]
+      filters: [{ name: "PuppetLoom 动作数据", extensions: ["json"] }]
     });
     const path = selection.filePaths[0];
     if (selection.canceled || !path) return { replaying: false, canceled: true };

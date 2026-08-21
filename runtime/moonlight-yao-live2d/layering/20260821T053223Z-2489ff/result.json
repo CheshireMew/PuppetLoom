@@ -1,0 +1,32 @@
+{
+  "ok": false,
+  "runDirectory": "E:\\Code\\PuppetLoom\\runtime\\moonlight-yao-live2d\\layering\\20260821T053223Z-2489ff",
+  "source": {
+    "originalPath": "E:\\Code\\PuppetLoom\\runtime\\moonlight-yao-live2d\\source-art.png",
+    "sourceOriginal": "E:\\Code\\PuppetLoom\\runtime\\moonlight-yao-live2d\\layering\\20260821T053223Z-2489ff\\source-original.png",
+    "sourceUpload": "E:\\Code\\PuppetLoom\\runtime\\moonlight-yao-live2d\\layering\\20260821T053223Z-2489ff\\source-upload.png",
+    "sourceNormalized": "E:\\Code\\PuppetLoom\\runtime\\moonlight-yao-live2d\\layering\\20260821T053223Z-2489ff\\source-normalized.png",
+    "sha256": "fb3f5f30a88b1df739d63eae6320480ce6a52c873f218acdc77f83793b475466",
+    "uploadSha256": "3b94962cab0d107ea4fdb174e47a3fa345a661ff1b7a04216f59caa0c1ab50fa",
+    "normalizedSha256": "2986541e6a5280fb0fa1815f8c273e7a4c5c18a2488bf54522f79ce94bb54a6c",
+    "bytes": 1922027,
+    "uploadBytes": 1904866,
+    "normalizedBytes": 1865647,
+    "mode": "RGB",
+    "dimensions": {
+      "width": 941,
+      "height": 1672
+    },
+    "opaque": true,
+    "uploadOpaque": true,
+    "uploadPreparation": "EXIF-corrected image composited on opaque white without resizing; this exact PNG is sent to See-Through",
+    "normalizedCanvas": {
+      "width": 1600,
+      "height": 1600
+    },
+    "normalization": "source-upload.png centered on a square white canvas followed by Lanczos resize"
+  },
+  "errorType": "AcquisitionError",
+  "error": "null",
+  "manualUrl": "https://modelscope.cn/studios/ljsabc/See-Through"
+}

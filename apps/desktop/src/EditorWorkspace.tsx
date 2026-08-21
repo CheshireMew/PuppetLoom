@@ -31,7 +31,7 @@ import {
   validatePose
 } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
-import { ArrowLeft, ExternalLink, Minimize2, Pause, Play, Redo2, RotateCcw, Save, Undo2 } from "lucide-react";
+import { Anchor, ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Bone, CircleDot, ExternalLink, GitCompare, Grid3x3, Minimize2, Pause, Play, Redo2, RotateCcw, Save, ScanFace, Undo2, View, X, type LucideIcon } from "lucide-react";
 import type { DesktopCalibrationResponse, EditorWorkspace as EditorWorkspaceData } from "../electron/global.js";
 import {
   EditorInspectorPanel,
@@ -90,11 +90,11 @@ function pose(overrides: Partial<MotionState>): MotionState {
   };
 }
 
-const editorPoses: Record<string, { label: string; state: MotionState }> = {
-  neutral: { label: "中立", state: pose({}) }, left: { label: "左转", state: pose({ headYaw: -1 }) }, right: { label: "右转", state: pose({ headYaw: 1 }) },
-  up: { label: "向上看", state: pose({ headPitch: -1 }) }, down: { label: "向下看", state: pose({ headPitch: 1 }) },
-  "left-up": { label: "左上", state: pose({ headYaw: -1, headPitch: -1 }) }, "right-up": { label: "右上", state: pose({ headYaw: 1, headPitch: -1 }) },
-  "left-down": { label: "左下", state: pose({ headYaw: -1, headPitch: 1 }) }, "right-down": { label: "右下", state: pose({ headYaw: 1, headPitch: 1 }) }
+const editorPoses: Record<string, { label: string; state: MotionState; icon: LucideIcon }> = {
+  neutral: { label: "中立", state: pose({}), icon: CircleDot }, left: { label: "左转", state: pose({ headYaw: -1 }), icon: ArrowLeft }, right: { label: "右转", state: pose({ headYaw: 1 }), icon: ArrowRight },
+  up: { label: "向上看", state: pose({ headPitch: -1 }), icon: ArrowUp }, down: { label: "向下看", state: pose({ headPitch: 1 }), icon: ArrowDown },
+  "left-up": { label: "左上", state: pose({ headYaw: -1, headPitch: -1 }), icon: ArrowUpLeft }, "right-up": { label: "右上", state: pose({ headYaw: 1, headPitch: -1 }), icon: ArrowUpRight },
+  "left-down": { label: "左下", state: pose({ headYaw: -1, headPitch: 1 }), icon: ArrowDownLeft }, "right-down": { label: "右下", state: pose({ headYaw: 1, headPitch: 1 }), icon: ArrowDownRight }
 };
 
 function layerOverride(overrides: CalibrationOverrides, layerId: string, patch: NonNullable<CalibrationOverrides["layers"]>[string]): CalibrationOverrides {
@@ -936,18 +936,18 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   return (
     <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
       {focusedPreview && <button className="exit-focus-preview icon-only" aria-label="退出沉浸预览" title="退出沉浸预览" onClick={() => setFocusedPreview(false)}><Minimize2 aria-hidden="true" /></button>}
-      {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button aria-label="关闭提示" onClick={() => { setError(""); setNotice(""); }}>关闭</button></div>}
+      {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button className="icon-only" aria-label="关闭提示" title="关闭提示" onClick={() => { setError(""); setNotice(""); }}><X aria-hidden="true" /></button></div>}
       {interactionLocked && <div className="editor-operation-shield" role="status" aria-live="polite"><div className="spinner"/><strong>{meshUpgrading ? "正在生成并验证轮廓网格…" : "正在完成校准事务…"}</strong><span>完成前编辑已暂时锁定，当前草稿不会被覆盖。</span></div>}
       <header className="editor-header">
-        <button className="with-icon" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" />返回主页</button>
+        <button className="icon-only editor-back" aria-label="返回主页" title="返回主页" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
         <div><h1>{project.name}</h1><p>版本 {workspace.calibration.revision} · {project.rigLevel === "semantic" ? "完整语义绑定" : project.rigLevel === "grouped" ? "分组绑定" : "基础绑定"} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
         <div className="editor-history-actions">
           <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
           <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
           <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
-          <button className="with-icon" onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked}><RotateCcw aria-hidden="true" />恢复全部自动绑定</button>
-          <button className="header-save with-icon" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存更改"}</button>
-          <button className="with-icon" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行角色窗口</button>
+          <button className="icon-only" aria-label="恢复全部自动绑定" title="恢复全部自动绑定" onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked}><RotateCcw aria-hidden="true" /></button>
+          <button className="header-save with-icon" aria-label="保存更改" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存"}</button>
+          <button className="with-icon" aria-label="运行角色窗口" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行</button>
         </div>
       </header>
 
@@ -957,22 +957,25 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
         {section === "rig" ? <><div className="mode-tabs">{(["semantic", "anchors", "layer", "mesh"] as EditMode[]).map((item) => {
           const active = editorOverlayVisible && mode === item;
           const label = item === "semantic" ? "脸部控制点" : item === "anchors" ? "身体锚点" : item === "layer" ? "图层轴心" : "网格与权重";
-          return <button aria-pressed={active} className={active ? "active" : ""} key={item} title={active ? `再次点击隐藏${label}` : `显示${label}`} onClick={() => {
+          const Icon = item === "semantic" ? ScanFace : item === "anchors" ? Bone : item === "layer" ? Anchor : Grid3x3;
+          return <button aria-pressed={active} className={`${active ? "active" : ""} with-icon`} key={item} title={active ? `再次点击隐藏${label}` : `显示${label}`} onClick={() => {
             if (active) setEditorOverlayVisible(false);
             else {
               setMode(item); setEditorOverlayVisible(true);
               if (item === "mesh") { setAutonomous(false); setBehaviorPlaying(false); if (!editorPoses[poseId]) selectPose("neutral"); }
             }
-          }}>{label}</button>;
+          }}><Icon aria-hidden="true" />{label}</button>;
         })}{editorOverlayVisible && mode === "mesh" && <>
-          <button aria-pressed={showNeutralMeshReference} className={showNeutralMeshReference ? "active" : ""} title="在实时变形网格下叠加中立网格" onClick={() => setShowNeutralMeshReference((value) => !value)}>中立参考</button>
-          <button disabled={!hasPending} className={showDraftBefore ? "active" : ""} onPointerDown={() => setShowDraftBefore(true)} onPointerUp={() => setShowDraftBefore(false)} onPointerCancel={() => setShowDraftBefore(false)} onPointerLeave={() => setShowDraftBefore(false)}>按住看修改前</button>
+          <button aria-pressed={showNeutralMeshReference} className={`${showNeutralMeshReference ? "active" : ""} with-icon`} title="在实时变形网格下叠加中立网格" onClick={() => setShowNeutralMeshReference((value) => !value)}><View aria-hidden="true" />中立参考</button>
+          <button disabled={!hasPending} className={`${showDraftBefore ? "active" : ""} with-icon`} onPointerDown={() => setShowDraftBefore(true)} onPointerUp={() => setShowDraftBefore(false)} onPointerCancel={() => setShowDraftBefore(false)} onPointerLeave={() => setShowDraftBefore(false)}><GitCompare aria-hidden="true" />按住看修改前</button>
           <span className={`pose-edit-status ${currentPoseCheck?.passed === false ? "warning" : ""}`}>正在校正：{currentPoseLabel}{poseId === "neutral" ? "（基础网格）" : "（姿态关键形）"}</span>
         </>}</div><div className="pose-tabs">{Object.entries(editorPoses).map(([id, item]) => {
           const key = `${item.state.headYaw},${item.state.headPitch}`;
           const corrected = id === "neutral" ? neutralCorrectionCount > 0 : (correctedSamples.get(key) ?? 0) > 0;
           const check = poseChecks[id];
-          return <button className={`${!autonomous && poseId === id ? "active" : ""} ${check?.passed === false ? "pose-warning" : ""}`} title={`${item.label}${corrected ? "已有人工微调" : "尚未微调"}${check?.passed === false ? `；${check.issues[0]?.message ?? "安全检查未通过"}` : ""}`} key={id} onClick={() => selectPose(id)}>{item.label}{corrected ? " ·" : ""}{check?.passed === false ? " !" : ""}</button>;
+          const Icon = item.icon;
+          const status = `${corrected ? "，已有人工微调" : "，尚未微调"}${check?.passed === false ? `，${check.issues[0]?.message ?? "安全检查未通过"}` : ""}`;
+          return <button className={`pose-shortcut icon-only ${!autonomous && poseId === id ? "active" : ""} ${corrected ? "is-corrected" : ""} ${check?.passed === false ? "pose-warning" : ""}`} aria-label={`${item.label}${status}`} title={`${item.label}${status}`} key={id} onClick={() => selectPose(id)}><Icon aria-hidden="true" /></button>;
         })}<button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => setAutonomous((value) => !value)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停动作" : "自主预览"}</button></div></>
           : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查中立、左右、上下、闭眼和张嘴。"}</small></div><div className="pose-tabs"><button className="with-icon" onClick={() => selectPose("neutral")}><RotateCcw aria-hidden="true" />恢复中立</button><button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
       </section>

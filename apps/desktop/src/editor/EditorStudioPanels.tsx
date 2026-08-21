@@ -1,17 +1,17 @@
 import { useState } from "react";
 import type React from "react";
 import type { ModelPhysics, MotionState, PuppetLoomProject, SecondaryMotionPart } from "@puppetloom/core";
-import { ExternalLink, Maximize2, Minimize2, Pause, Play, RotateCcw } from "lucide-react";
+import { Activity, ArrowDown, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpDown, Boxes, CheckCircle2, CircleAlert, CircleMinus, Drama, ExternalLink, Eye, EyeOff, Focus, Grid2X2, Heart, LayoutDashboard, Maximize2, Minimize2, Moon, Move3d, Pause, Play, Repeat2, RotateCcw, RotateCw, ScanEye, SlidersHorizontal, Smile, Sparkles, Sun, TriangleAlert, Waves, Workflow, type LucideIcon } from "lucide-react";
 
 export type StudioSection = "overview" | "rig" | "parameters" | "dynamics" | "preview";
 export type PreviewBackground = "checker" | "dark" | "light";
 
-const studioSections: Array<{ id: StudioSection; index: string; label: string; detail: string }> = [
-  { id: "overview", index: "01", label: "项目总览", detail: "完成度与下一步" },
-  { id: "rig", index: "02", label: "结构与网格", detail: "层级、轴心和权重" },
-  { id: "parameters", index: "03", label: "参数与姿态", detail: "直接检查可动范围" },
-  { id: "dynamics", index: "04", label: "表情与物理", detail: "表情、行为和次级运动" },
-  { id: "preview", index: "05", label: "预览与验收", detail: "干净画面与版本证据" }
+const studioSections: Array<{ id: StudioSection; index: string; label: string; detail: string; icon: LucideIcon }> = [
+  { id: "overview", index: "01", label: "项目总览", detail: "完成度与下一步", icon: LayoutDashboard },
+  { id: "rig", index: "02", label: "结构与网格", detail: "层级、轴心和权重", icon: Boxes },
+  { id: "parameters", index: "03", label: "参数与姿态", detail: "直接检查可动范围", icon: SlidersHorizontal },
+  { id: "dynamics", index: "04", label: "表情与物理", detail: "表情、行为和次级运动", icon: Activity },
+  { id: "preview", index: "05", label: "预览与验收", detail: "干净画面与版本证据", icon: ScanEye }
 ];
 
 const semanticLabels: Record<string, string> = {
@@ -27,6 +27,32 @@ const semanticLabels: Record<string, string> = {
   blink: "眨眼",
   "mouth-open": "张嘴"
 };
+
+const semanticParameterIcons: Record<string, LucideIcon> = {
+  "head-yaw": ArrowLeftRight,
+  "head-pitch": ArrowUpDown,
+  "head-roll": RotateCw,
+  "body-sway": ArrowLeftRight,
+  "body-pitch": Move3d,
+  "body-roll": RotateCw,
+  "gaze-x": ScanEye,
+  "gaze-y": ScanEye,
+  breath: Waves,
+  blink: EyeOff,
+  "mouth-open": Smile
+};
+
+function expressionIcon(name: string, id: string): LucideIcon {
+  const value = `${name} ${id}`.toLocaleLowerCase();
+  if (/闭眼|眨眼|blink|closed.?eye/.test(value)) return EyeOff;
+  if (/闭合|closed.?mouth|mouth.?closed/.test(value)) return CircleMinus;
+  if (/张开|开口|open.?mouth|mouth.?open/.test(value)) return Smile;
+  if (/柔和|微笑|soft|smile/.test(value)) return Heart;
+  if (/惊讶|surpris/.test(value)) return CircleAlert;
+  if (/认真|serious|focus/.test(value)) return Focus;
+  if (/困倦|疲倦|sleep|tired/.test(value)) return Moon;
+  return Drama;
+}
 
 const stateLabels: Array<{ key: keyof MotionState; label: string; min: number; max: number; step: number }> = [
   { key: "headRoll", label: "头部倾斜", min: -1, max: 1, step: 0.01 },
@@ -53,9 +79,9 @@ function systemStatus(count: number, readyLabel = "已生成"): { tone: string; 
 
 export function StudioNavigation({ section, onSection }: { section: StudioSection; onSection: (section: StudioSection) => void }): React.JSX.Element {
   return <nav className="studio-navigation" aria-label="编辑工作区">
-    {studioSections.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => onSection(item.id)}>
-      <span className="studio-index">{item.index}</span><span><strong>{item.label}</strong><small>{item.detail}</small></span>
-    </button>)}
+    {studioSections.map((item) => { const Icon = item.icon; return <button key={item.id} aria-label={`${item.index} ${item.label}：${item.detail}`} className={section === item.id ? "active" : ""} onClick={() => onSection(item.id)}>
+      <Icon aria-hidden="true" /><span><strong>{item.label}</strong><small>{item.detail}</small></span>
+    </button>; })}
   </nav>;
 }
 
@@ -68,10 +94,10 @@ export function OverviewLeftPanel({ project, onSection }: { project: PuppetLoomP
     <p className="panel-intro">每个工作区解决一个明确问题。先处理标为“待完善”的项目，再进入干净预览验收。</p>
     <button className="starter-system-action artmesh-upgrade-action" onClick={() => onSection("rig")}><strong>{gridMeshes > 0 ? "检查规则网格是否需要轮廓网格" : "检查轮廓网格密度"}</strong><small>{gridMeshes > 0 ? `${gridMeshes} 个规则网格可能是完全不透明矩形，属于有效结果；只有轮廓需要变形时才升级。` : "逐层对比中立与九向姿态后再保存。"}</small></button>
     <div className="studio-task-list">
-      <button onClick={() => onSection("rig")}><span>结构与网格</span><strong>{artMeshes} 个轮廓网格 · {gridMeshes} 个规则网格</strong><small>{parented} 个图层已有层级归属</small></button>
-      <button onClick={() => onSection("parameters")}><span>参数与姿态</span><strong>{project.model.parameters.length} 个参数</strong><small>检查九向姿态、视线、眨眼与口型</small></button>
-      <button onClick={() => onSection("dynamics")}><span>表情与物理</span><strong>{project.model.expressions.length + project.model.physics.length + project.model.behaviors.length} 个已编排系统</strong><small>分部次级运动始终可单独校准</small></button>
-      <button onClick={() => onSection("preview")}><span>预览与验收</span><strong>最终画面</strong><small>隐藏编辑标记，逐项检查并查看版本证据</small></button>
+      <button onClick={() => onSection("rig")}><Boxes aria-hidden="true" /><span><em>结构与网格</em><strong>{artMeshes} 个轮廓网格 · {gridMeshes} 个规则网格</strong><small>{parented} 个图层已有层级归属</small></span></button>
+      <button onClick={() => onSection("parameters")}><SlidersHorizontal aria-hidden="true" /><span><em>参数与姿态</em><strong>{project.model.parameters.length} 个参数</strong><small>检查九向姿态、视线、眨眼与口型</small></span></button>
+      <button onClick={() => onSection("dynamics")}><Activity aria-hidden="true" /><span><em>表情与物理</em><strong>{project.model.expressions.length + project.model.physics.length + project.model.behaviors.length} 个已编排系统</strong><small>分部次级运动始终可单独校准</small></span></button>
+      <button onClick={() => onSection("preview")}><ScanEye aria-hidden="true" /><span><em>预览与验收</em><strong>最终画面</strong><small>隐藏编辑标记，逐项检查并查看版本证据</small></span></button>
     </div>
   </aside>;
 }
@@ -81,10 +107,10 @@ export function OverviewInspector({ project, revision, sessionCount }: { project
   const validMeshes = project.layers.filter((layer) => layer.mesh.points.length >= 4 && layer.mesh.triangles.length >= 3 && layer.mesh.triangles.every((index) => Number.isInteger(index) && index >= 0 && index < layer.mesh.points.length)).length;
   const semanticCoverage = project.layers.filter((layer) => layer.role !== "unknown").length;
   const systems = [
-    { label: "有效网格", value: ratio(validMeshes, project.layers.length), note: `${artMeshes} 个轮廓网格，其余为规则网格` },
-    { label: "语义识别", value: ratio(semanticCoverage, project.layers.length), note: `${semanticCoverage}/${project.layers.length} 个图层` },
-    { label: "参数系统", value: Math.min(100, Math.round(project.model.parameters.length / 11 * 100)), note: `${project.model.parameters.length} 个参数` },
-    { label: "验收证据", value: Math.min(100, sessionCount * 25), note: `${sessionCount} 个历史版本` }
+    { label: "有效网格", value: ratio(validMeshes, project.layers.length), note: `${artMeshes} 个轮廓网格，其余为规则网格`, icon: Boxes },
+    { label: "语义识别", value: ratio(semanticCoverage, project.layers.length), note: `${semanticCoverage}/${project.layers.length} 个图层`, icon: ScanEye },
+    { label: "参数系统", value: Math.min(100, Math.round(project.model.parameters.length / 11 * 100)), note: `${project.model.parameters.length} 个参数`, icon: SlidersHorizontal },
+    { label: "验收证据", value: Math.min(100, sessionCount * 25), note: `${sessionCount} 个历史版本`, icon: CheckCircle2 }
   ];
   const expressionStatus = systemStatus(project.model.expressions.length);
   const physicsStatus = systemStatus(project.model.physics.length, "已编排");
@@ -92,12 +118,12 @@ export function OverviewInspector({ project, revision, sessionCount }: { project
   return <aside className="studio-side-panel studio-inspector overview-inspector">
     <div className="panel-eyebrow">就绪程度</div><h2>项目完成度</h2>
     <div className="quality-hero"><span>安全系数</span><strong>{project.quality.safetyScale.toFixed(2)}</strong><small>版本 {revision} · {project.rigLevel === "semantic" ? "完整语义绑定" : project.rigLevel === "grouped" ? "分组绑定" : "基础绑定"}</small></div>
-    <div className="readiness-list">{systems.map((item) => <div key={item.label} className="readiness-row"><div><strong>{item.label}</strong><small>{item.note}</small></div><output>{item.value}%</output><span><i style={{ width: `${item.value}%` }} /></span></div>)}</div>
+    <div className="readiness-list">{systems.map((item) => { const Icon = item.icon; return <div key={item.label} className="readiness-row"><Icon aria-hidden="true" /><div><strong>{item.label}</strong><small>{item.note}</small></div><output>{item.value}%</output><span><i style={{ width: `${item.value}%` }} /></span></div>; })}</div>
     <h3>高级系统</h3>
     <div className="system-status-grid">
-      <div><span className={expressionStatus.tone}>{expressionStatus.label}</span><strong>表情</strong><small>{project.model.expressions.length} 个</small></div>
-      <div><span className={physicsStatus.tone}>{physicsStatus.label}</span><strong>参数物理</strong><small>{project.model.physics.length} 组</small></div>
-      <div><span className={behaviorStatus.tone}>{behaviorStatus.label}</span><strong>行为</strong><small>{project.model.behaviors.length} 段</small></div>
+      <div><Drama aria-hidden="true" /><span className={expressionStatus.tone}>{expressionStatus.label}</span><strong>表情</strong><small>{project.model.expressions.length} 个</small></div>
+      <div><Activity aria-hidden="true" /><span className={physicsStatus.tone}>{physicsStatus.label}</span><strong>参数物理</strong><small>{project.model.physics.length} 组</small></div>
+      <div><Workflow aria-hidden="true" /><span className={behaviorStatus.tone}>{behaviorStatus.label}</span><strong>行为</strong><small>{project.model.behaviors.length} 段</small></div>
     </div>
     <p className="benchmark-note">PuppetLoom 不需要复制 Cubism 的全部手工流程，但必须让自动生成的结构、参数和动态系统可见、可调、可验收。</p>
   </aside>;
@@ -108,7 +134,12 @@ export function ParameterLeftPanel({ project, selectedId, onSelect }: { project:
   return <aside className="studio-side-panel parameter-list-panel">
     <div className="panel-eyebrow">参数</div><h2>参数控制器</h2>
     <p className="panel-intro">参数按用途分组。选择后可查看范围、语义归属并实时驱动画面。</p>
-    {groups.map((group) => <section className="parameter-group" key={group}><h3>{group}</h3>{project.model.parameters.filter((parameter) => parameter.group === group).map((parameter) => <button className={selectedId === parameter.id ? "active" : ""} key={parameter.id} onClick={() => onSelect(parameter.id)}><span>{parameter.name}</span><small>{parameter.semantic ? semanticLabels[parameter.semantic] : parameter.id}</small></button>)}</section>)}
+    {groups.map((group) => <section className="parameter-group" key={group}><h3>{group}</h3><div className="parameter-card-grid">{project.model.parameters.filter((parameter) => parameter.group === group).map((parameter) => {
+      const semantic = parameter.semantic ?? "";
+      const Icon = semanticParameterIcons[semantic] ?? SlidersHorizontal;
+      const description = semantic ? semanticLabels[semantic] ?? semantic : parameter.id;
+      return <button className={`parameter-card ${selectedId === parameter.id ? "active" : ""}`} aria-pressed={selectedId === parameter.id} aria-label={`${parameter.name}，${description}`} title={`${parameter.name} · ${description}`} key={parameter.id} onClick={() => onSelect(parameter.id)}><span className="parameter-card-icon" aria-hidden="true"><Icon /></span><span className="parameter-card-copy"><strong>{parameter.name}</strong><small>{description}</small></span></button>;
+    })}</div></section>)}
   </aside>;
 }
 
@@ -145,11 +176,11 @@ export function ParameterInspector({
 export function DynamicsLeftPanel({ project, selectedBehaviorId, onBehavior, onCreateStarter }: { project: PuppetLoomProject; selectedBehaviorId: string; onBehavior: (id: string) => void; onCreateStarter: () => void }): React.JSX.Element {
   return <aside className="studio-side-panel dynamics-list-panel">
     <div className="panel-eyebrow">动态</div><h2>动态系统</h2>
-    {(project.model.expressions.length === 0 || project.model.behaviors.length === 0) && <button className="starter-system-action" onClick={onCreateStarter}><strong>生成基础动态系统</strong><small>创建闭眼、开口、惊讶，以及自然待机和点头行为</small></button>}
+    {(project.model.expressions.length === 0 || project.model.behaviors.length === 0) && <button className="starter-system-action starter-dynamics-action" onClick={onCreateStarter}><span className="starter-system-icon" aria-hidden="true"><Sparkles /></span><span><strong>生成基础动态系统</strong><small>创建闭眼、开口、惊讶，以及自然待机和点头行为</small></span></button>}
     <div className="system-catalog">
-      <section><h3>表情 <span>{project.model.expressions.length}</span></h3>{project.model.expressions.length === 0 ? <p>当前项目还没有独立表情预设。</p> : project.model.expressions.map((expression) => <div className="catalog-row" key={expression.id}><strong>{expression.name}</strong><small>{Object.keys(expression.parameters).length} 个参数</small></div>)}</section>
-      <section><h3>参数物理 <span>{project.model.physics.length}</span></h3>{project.model.physics.length === 0 ? <p>当前项目使用自动分部次级运动；尚未编排参数弹簧。</p> : project.model.physics.map((physics) => <div className="catalog-row" key={physics.id}><strong>{physics.name}</strong><small>{physics.inputParameterId} → {physics.outputParameterId}</small></div>)}</section>
-      <section><h3>行为片段 <span>{project.model.behaviors.length}</span></h3>{project.model.behaviors.length === 0 ? <p>自主预览仍可运行；尚未制作具名行为片段。</p> : project.model.behaviors.map((behavior) => <button className={selectedBehaviorId === behavior.id ? "active" : ""} key={behavior.id} onClick={() => onBehavior(behavior.id)}><strong>{behavior.name}</strong><small>{behavior.duration.toFixed(2)}s · {behavior.loop ? "循环" : "单次"} · {behavior.tracks.length} 轨</small></button>)}</section>
+      <section><h3><span><Drama aria-hidden="true" />表情</span><output>{project.model.expressions.length}</output></h3>{project.model.expressions.length === 0 ? <p>当前项目还没有独立表情预设。</p> : <div className="catalog-grid">{project.model.expressions.map((expression) => { const Icon = expressionIcon(expression.name, expression.id); return <div className="catalog-card" title={expression.name} key={expression.id}><span className="catalog-card-icon" aria-hidden="true"><Icon /></span><span className="catalog-card-copy"><strong>{expression.name}</strong><small>{Object.keys(expression.parameters).length} 个参数</small></span></div>; })}</div>}</section>
+      <section><h3><span><Activity aria-hidden="true" />参数物理</span><output>{project.model.physics.length}</output></h3>{project.model.physics.length === 0 ? <p>当前项目使用自动分部次级运动；尚未编排参数弹簧。</p> : <div className="catalog-grid">{project.model.physics.map((physics) => <div className="catalog-card" title={`${physics.name} · ${physics.inputParameterId} → ${physics.outputParameterId}`} key={physics.id}><span className="catalog-card-icon" aria-hidden="true"><Activity /></span><span className="catalog-card-copy"><strong>{physics.name}</strong><small>{physics.inputParameterId} → {physics.outputParameterId}</small></span></div>)}</div>}</section>
+      <section><h3><span><Workflow aria-hidden="true" />行为片段</span><output>{project.model.behaviors.length}</output></h3>{project.model.behaviors.length === 0 ? <p>自主预览仍可运行；尚未制作具名行为片段。</p> : <div className="catalog-grid">{project.model.behaviors.map((behavior) => { const Icon = behavior.loop ? Repeat2 : Play; return <button className={`catalog-card ${selectedBehaviorId === behavior.id ? "active" : ""}`} aria-pressed={selectedBehaviorId === behavior.id} title={`${behavior.name} · ${behavior.duration.toFixed(2)}s · ${behavior.loop ? "循环" : "单次"} · ${behavior.tracks.length} 轨`} key={behavior.id} onClick={() => onBehavior(behavior.id)}><span className="catalog-card-icon" aria-hidden="true"><Icon /></span><span className="catalog-card-copy"><strong>{behavior.name}</strong><small>{behavior.duration.toFixed(2)}s · {behavior.loop ? "循环" : "单次"} · {behavior.tracks.length} 轨</small></span></button>; })}</div>}</section>
     </div>
   </aside>;
 }
@@ -186,25 +217,25 @@ export function DynamicsInspector({
   const behavior = project.model.behaviors.find((candidate) => candidate.id === selectedBehaviorId);
   return <aside className="studio-side-panel studio-inspector dynamics-inspector">
     <div className="panel-eyebrow">实时动态</div><h2>表情与物理检查</h2>
-    <section><div className="section-heading"><div><h3>表情混合</h3><small>多表情可叠加，画面会立即更新</small></div></div>{project.model.expressions.length === 0 ? <div className="empty-system"><strong>尚无独立表情</strong><span>眨眼和口型仍可在“参数与姿态”中直接检查。</span></div> : project.model.expressions.map((expression) => { const value = state.expressions?.[expression.id] ?? 0; return <label className="range-row" key={expression.id}><span>{expression.name}<output>{value.toFixed(2)}</output></span><input type="range" min="0" max="1" step="0.01" value={value} onChange={(event) => onExpression(expression.id, Number(event.target.value))} /></label>; })}</section>
-    <section><div className="section-heading"><div><h3>行为播放</h3><small>像动画时间线一样检查具名动作</small></div></div>{behavior ? <><div className="transport-row"><button className={`${behaviorPlaying ? "active" : ""} with-icon`} onClick={() => onBehaviorPlaying(!behaviorPlaying)}>{behaviorPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{behaviorPlaying ? "暂停" : "播放"}</button><strong>{behavior.name}</strong><output>{behaviorTime.toFixed(2)} / {behavior.duration.toFixed(2)}s</output></div><input className="timeline-range" type="range" min="0" max={behavior.duration} step="0.01" value={Math.min(behaviorTime, behavior.duration)} onChange={(event) => onBehaviorTime(Number(event.target.value))} /><div className="track-summary">{behavior.tracks.map((track) => <span key={`${track.target.kind}-${track.target.id}`}>{track.target.kind === "parameter" ? "参数" : "表情"} · {track.target.id} · {track.keyframes.length} 帧</span>)}</div></> : <div className="empty-system"><strong>尚无行为片段</strong><span>使用顶部“自主预览”仍可检查自动呼吸、眨眼和次级运动。</span></div>}</section>
-    <section><div className="section-heading"><div><h3>分部次级运动</h3><small>调节后立即进入校准草稿</small></div></div><label>部件<select value={secondaryPart} onChange={(event) => onSecondaryPart(event.target.value as SecondaryMotionPart)}>{secondaryParts.map((part) => <option key={part.id} value={part.id}>{part.label}</option>)}</select></label>{(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{key === "amplitude" ? "摆幅" : key === "response" ? "响应" : "稳定"}<output>{secondaryTuning[key].toFixed(2)}</output></span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={secondaryTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}</section>
-    {project.model.physics.length > 0 && <section><h3>参数弹簧</h3>{project.model.physics.map((physics) => <article className="physics-card" key={physics.id}><strong>{physics.name}</strong><small>{physics.inputParameterId} → {physics.outputParameterId}</small>{(["inputScale", "outputScale", "response", "damping"] as const).map((key) => <label className="range-row" key={key}><span>{key === "inputScale" ? "输入强度" : key === "outputScale" ? "输出强度" : key === "response" ? "响应速度" : "阻尼"}<output>{physics[key].toFixed(2)}</output></span><input type="range" min={key === "damping" ? "0" : key === "response" ? "0.1" : "-4"} max={key === "damping" ? "4" : key === "response" ? "30" : "4"} step="0.05" value={physics[key]} onChange={(event) => onPhysics(physics.id, { [key]: Number(event.target.value) })} /></label>)}</article>)}</section>}
+    <section><div className="section-heading"><div><h3 className="with-icon"><Drama aria-hidden="true" />表情混合</h3><small>多表情可叠加，画面会立即更新</small></div></div>{project.model.expressions.length === 0 ? <div className="empty-system"><strong>尚无独立表情</strong><span>眨眼和口型仍可在“参数与姿态”中直接检查。</span></div> : project.model.expressions.map((expression) => { const value = state.expressions?.[expression.id] ?? 0; return <label className="range-row" key={expression.id}><span>{expression.name}<output>{value.toFixed(2)}</output></span><input type="range" min="0" max="1" step="0.01" value={value} onChange={(event) => onExpression(expression.id, Number(event.target.value))} /></label>; })}</section>
+    <section><div className="section-heading"><div><h3 className="with-icon"><Play aria-hidden="true" />行为播放</h3><small>像动画时间线一样检查具名动作</small></div></div>{behavior ? <><div className="transport-row"><button className={`${behaviorPlaying ? "active" : ""} with-icon`} onClick={() => onBehaviorPlaying(!behaviorPlaying)}>{behaviorPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{behaviorPlaying ? "暂停" : "播放"}</button><strong>{behavior.name}</strong><output>{behaviorTime.toFixed(2)} / {behavior.duration.toFixed(2)}s</output></div><input className="timeline-range" type="range" min="0" max={behavior.duration} step="0.01" value={Math.min(behaviorTime, behavior.duration)} onChange={(event) => onBehaviorTime(Number(event.target.value))} /><div className="track-summary">{behavior.tracks.map((track) => <span key={`${track.target.kind}-${track.target.id}`}>{track.target.kind === "parameter" ? "参数" : "表情"} · {track.target.id} · {track.keyframes.length} 帧</span>)}</div></> : <div className="empty-system"><strong>尚无行为片段</strong><span>使用顶部“自主预览”仍可检查自动呼吸、眨眼和次级运动。</span></div>}</section>
+    <section><div className="section-heading"><div><h3 className="with-icon"><Waves aria-hidden="true" />分部次级运动</h3><small>调节后立即进入校准草稿</small></div></div><label>部件<select value={secondaryPart} onChange={(event) => onSecondaryPart(event.target.value as SecondaryMotionPart)}>{secondaryParts.map((part) => <option key={part.id} value={part.id}>{part.label}</option>)}</select></label>{(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{key === "amplitude" ? "摆幅" : key === "response" ? "响应" : "稳定"}<output>{secondaryTuning[key].toFixed(2)}</output></span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={secondaryTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}</section>
+    {project.model.physics.length > 0 && <section><h3 className="with-icon"><Activity aria-hidden="true" />参数弹簧</h3>{project.model.physics.map((physics) => <article className="physics-card" key={physics.id}><strong>{physics.name}</strong><small>{physics.inputParameterId} → {physics.outputParameterId}</small>{(["inputScale", "outputScale", "response", "damping"] as const).map((key) => <label className="range-row" key={key}><span>{key === "inputScale" ? "输入强度" : key === "outputScale" ? "输出强度" : key === "response" ? "响应速度" : "阻尼"}<output>{physics[key].toFixed(2)}</output></span><input type="range" min={key === "damping" ? "0" : key === "response" ? "0.1" : "-4"} max={key === "damping" ? "4" : key === "response" ? "30" : "4"} step="0.05" value={physics[key]} onChange={(event) => onPhysics(physics.id, { [key]: Number(event.target.value) })} /></label>)}</article>)}</section>}
   </aside>;
 }
 
-const previewSamples: Array<{ id: string; label: string; detail: string; state: Partial<MotionState> }> = [
-  { id: "neutral", label: "中立基准", detail: "检查拼层、透明边和默认姿态", state: {} },
-  { id: "left", label: "头部左转", detail: "检查脸型、头发遮挡和五官跟随", state: { headYaw: -.9, gazeX: -.35, bodySway: -.25 } },
-  { id: "right", label: "头部右转", detail: "检查左右是否对称、层级是否穿帮", state: { headYaw: .9, gazeX: .35, bodySway: .25 } },
-  { id: "up", label: "抬头", detail: "检查下巴、脖子和后发衔接", state: { headPitch: -.78, gazeY: -.25, bodyPitch: -.2 } },
-  { id: "down", label: "低头", detail: "检查刘海、眼睛与脸部压缩", state: { headPitch: .78, gazeY: .25, bodyPitch: .2 } },
-  { id: "blink", label: "闭眼", detail: "检查眼皮替换和睫毛遮挡", state: { blink: 1 } },
-  { id: "mouth", label: "张嘴", detail: "检查口型图层和裁剪关系", state: { mouthOpen: 1 } }
+const previewSamples: Array<{ id: string; label: string; detail: string; state: Partial<MotionState>; icon: LucideIcon }> = [
+  { id: "neutral", label: "中立基准", detail: "检查拼层、透明边和默认姿态", state: {}, icon: RotateCcw },
+  { id: "left", label: "头部左转", detail: "检查脸型、头发遮挡和五官跟随", state: { headYaw: -.9, gazeX: -.35, bodySway: -.25 }, icon: ArrowLeft },
+  { id: "right", label: "头部右转", detail: "检查左右是否对称、层级是否穿帮", state: { headYaw: .9, gazeX: .35, bodySway: .25 }, icon: ArrowRight },
+  { id: "up", label: "抬头", detail: "检查下巴、脖子和后发衔接", state: { headPitch: -.78, gazeY: -.25, bodyPitch: -.2 }, icon: ArrowUp },
+  { id: "down", label: "低头", detail: "检查刘海、眼睛与脸部压缩", state: { headPitch: .78, gazeY: .25, bodyPitch: .2 }, icon: ArrowDown },
+  { id: "blink", label: "闭眼", detail: "检查眼皮替换和睫毛遮挡", state: { blink: 1 }, icon: EyeOff },
+  { id: "mouth", label: "张嘴", detail: "检查口型图层和裁剪关系", state: { mouthOpen: 1 }, icon: Smile }
 ];
 
 export function PreviewLeftPanel({ activeSample, onSample }: { activeSample: string; onSample: (id: string, state: Partial<MotionState>) => void }): React.JSX.Element {
-  return <aside className="studio-side-panel preview-samples-panel"><div className="panel-eyebrow">验收样本</div><h2>验收姿态</h2><p className="panel-intro">固定样本比随意拖动更容易发现穿帮。每次改动后按同一顺序复查。</p><div className="preview-sample-list">{previewSamples.map((sample, index) => <button className={activeSample === sample.id ? "active" : ""} key={sample.id} onClick={() => onSample(sample.id, sample.state)}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{sample.label}</strong><small>{sample.detail}</small></div></button>)}</div></aside>;
+  return <aside className="studio-side-panel preview-samples-panel"><div className="panel-eyebrow">验收样本</div><h2>验收姿态</h2><p className="panel-intro">固定样本比随意拖动更容易发现穿帮。每次改动后按同一顺序复查。</p><div className="preview-sample-list">{previewSamples.map((sample) => { const Icon = sample.icon; return <button className={activeSample === sample.id ? "active" : ""} aria-pressed={activeSample === sample.id} key={sample.id} onClick={() => onSample(sample.id, sample.state)}><span aria-hidden="true"><Icon /></span><div><strong>{sample.label}</strong><small>{sample.detail}</small></div></button>; })}</div></aside>;
 }
 
 export function PreviewInspector({
@@ -229,13 +260,14 @@ export function PreviewInspector({
   const [manualChecks, setManualChecks] = useState<Record<string, boolean>>({});
   const validMeshes = project.layers.every((layer) => layer.mesh.points.length >= 4 && layer.mesh.triangles.length >= 3 && layer.mesh.triangles.every((index) => index >= 0 && index < layer.mesh.points.length));
   const checks = [
-    { label: "脸部九向姿态", ready: Boolean(project.runtime.semanticCage) },
-    { label: "眼神与眨眼", ready: project.runtime.features.blink },
-    { label: "口型", ready: project.runtime.features.mouthMotion },
-    { label: "分部次级运动", ready: project.layers.some((layer) => layer.weights.physics > 0) },
-    { label: "全部图层网格有效", ready: validMeshes }
+    { label: "脸部九向姿态", ready: Boolean(project.runtime.semanticCage), icon: ScanEye },
+    { label: "眼神与眨眼", ready: project.runtime.features.blink, icon: Eye },
+    { label: "口型", ready: project.runtime.features.mouthMotion, icon: Smile },
+    { label: "分部次级运动", ready: project.layers.some((layer) => layer.weights.physics > 0), icon: Waves },
+    { label: "全部图层网格有效", ready: validMeshes, icon: Boxes }
   ];
   const visualChecks = ["中立与七个固定姿态无穿帮", "透明背景边缘正常", "深色背景边缘正常", "浅色背景边缘正常"];
   const visualComplete = visualChecks.every((item) => manualChecks[item]);
-  return <aside className="studio-side-panel studio-inspector preview-inspector"><div className="panel-eyebrow">最终呈现</div><h2>干净预览</h2><section><h3>画面模式</h3><div className="segmented-control">{(["checker", "dark", "light"] as PreviewBackground[]).map((item) => <button className={background === item ? "active" : ""} key={item} onClick={() => onBackground(item)}>{item === "checker" ? "透明" : item === "dark" ? "深色" : "浅色"}</button>)}</div><button className="wide-action with-icon" onClick={() => onFocused(!focused)}>{focused ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}{focused ? "退出沉浸预览" : "沉浸预览（Esc 退出）"}</button><button className={`wide-action ${autonomous ? "active" : ""} with-icon`} onClick={() => onAutonomous(!autonomous)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button><button className="wide-action primary-action with-icon" onClick={onLaunch}><ExternalLink aria-hidden="true" />在独立角色窗口运行</button></section><section><h3>系统能力</h3><div className="qa-checks">{checks.map((check) => <div key={check.label}><span className={check.ready ? "ready" : "review"}>{check.ready ? "可用" : "素材未提供"}</span><strong>{check.label}</strong></div>)}</div></section><section><h3>本轮目视验收</h3><div className="manual-qa-checks">{visualChecks.map((item) => <label key={item}><input type="checkbox" checked={Boolean(manualChecks[item])} onChange={(event) => setManualChecks((current) => ({ ...current, [item]: event.target.checked }))} />{item}</label>)}</div><strong className={visualComplete ? "qa-complete" : "qa-incomplete"}>{visualComplete ? "本轮验收已完成" : "尚有项目未确认"}</strong></section><p className="benchmark-note">系统能力表示项目具备相应数据；上面的目视验收由你确认真实画面是否通过。</p></aside>;
+  const backgroundModes: Array<{ id: PreviewBackground; label: string; icon: LucideIcon }> = [{ id: "checker", label: "透明", icon: Grid2X2 }, { id: "dark", label: "深色", icon: Moon }, { id: "light", label: "浅色", icon: Sun }];
+  return <aside className="studio-side-panel studio-inspector preview-inspector"><div className="panel-eyebrow">最终呈现</div><h2>干净预览</h2><section><h3>画面模式</h3><div className="segmented-control">{backgroundModes.map((item) => { const Icon = item.icon; return <button className={`${background === item.id ? "active" : ""} with-icon`} aria-pressed={background === item.id} key={item.id} onClick={() => onBackground(item.id)}><Icon aria-hidden="true" />{item.label}</button>; })}</div><button className="wide-action with-icon" onClick={() => onFocused(!focused)}>{focused ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}{focused ? "退出沉浸预览" : "沉浸预览（Esc 退出）"}</button><button className={`wide-action ${autonomous ? "active" : ""} with-icon`} onClick={() => onAutonomous(!autonomous)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button><button className="wide-action primary-action with-icon" onClick={onLaunch}><ExternalLink aria-hidden="true" />在独立角色窗口运行</button></section><section><h3>系统能力</h3><div className="qa-checks">{checks.map((check) => { const Icon = check.icon; const StatusIcon = check.ready ? CheckCircle2 : TriangleAlert; return <div key={check.label}><Icon className="qa-check-icon" aria-hidden="true" /><strong>{check.label}</strong><span className={check.ready ? "ready" : "review"}><StatusIcon aria-hidden="true" />{check.ready ? "可用" : "素材未提供"}</span></div>; })}</div></section><section><h3>本轮目视验收</h3><div className="manual-qa-checks">{visualChecks.map((item) => <label key={item}><input type="checkbox" checked={Boolean(manualChecks[item])} onChange={(event) => setManualChecks((current) => ({ ...current, [item]: event.target.checked }))} />{item}</label>)}</div><strong className={visualComplete ? "qa-complete" : "qa-incomplete"}>{visualComplete ? "本轮验收已完成" : "尚有项目未确认"}</strong></section><p className="benchmark-note">系统能力表示项目具备相应数据；上面的目视验收由你确认真实画面是否通过。</p></aside>;
 }

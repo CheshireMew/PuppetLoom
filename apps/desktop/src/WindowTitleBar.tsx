@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Square, X } from "lucide-react";
+import { Copy, Layers3, Minus, Square, X } from "lucide-react";
 import type { WindowShellAction, WindowShellState } from "../electron/global.js";
 
 const initialState: WindowShellState = {
@@ -47,7 +47,7 @@ export function WindowTitleBar({ title }: { title: string }): React.JSX.Element 
       data-window-frame={String(state.frame)}
     >
       <div className="window-titlebar-drag" title="拖动窗口">
-        <span className="window-titlebar-mark" aria-hidden="true">PL</span>
+        <span className="window-titlebar-mark" aria-hidden="true"><Layers3 /></span>
         <span className="window-titlebar-title">{title}</span>
       </div>
       <div className="window-titlebar-controls" aria-label="窗口控制">

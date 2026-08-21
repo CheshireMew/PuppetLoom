@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import json
 import sys
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from file_budget import MAX_OUTER_TOOL_TOKENS, collect_file_budgets, validate_file_budgets
+from file_budget import IGNORED, MAX_OUTER_TOOL_TOKENS, collect_file_budgets, validate_file_budgets
+from acquire_layered_psd import _prepare_source, _sha256
+from finalize_psd_review import ReviewFinalizationError, finalize_review
 
 
 class SkillContractTests(unittest.TestCase):
@@ -17,6 +23,7 @@ class SkillContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         cls.workflow = (ROOT / "references" / "from-zero-workflow.md").read_text(encoding="utf-8")
+        cls.source_art = (ROOT / "references" / "source-art-and-layering.md").read_text(encoding="utf-8")
         cls.review = (ROOT / "references" / "agent-review-and-repair.md").read_text(encoding="utf-8")
         cls.visual = (ROOT / "references" / "visual-rigging-rules.md").read_text(encoding="utf-8")
         cls.learning = (ROOT / "references" / "calibration-and-learning.md").read_text(encoding="utf-8")
@@ -29,12 +36,17 @@ class SkillContractTests(unittest.TestCase):
     def test_routes_every_active_reference_and_script(self) -> None:
         for relative in (
             "references/from-zero-workflow.md",
+            "references/source-art-and-layering.md",
             "references/agent-review-and-repair.md",
             "references/visual-rigging-rules.md",
             "references/runtime-demonstration.md",
             "references/calibration-and-learning.md",
             "references/cubism-bridge-workflow.md",
             "scripts/invoke_puppetloom.ps1",
+            "scripts/acquire_layered_psd.ps1",
+            "scripts/acquire_layered_psd.py",
+            "scripts/finalize_psd_review.py",
+            "requirements-layering.txt",
             "scripts/demo_puppetloom.ps1",
             "scripts/demo_puppetloom.mjs",
             "scripts/file_budget.py",
@@ -46,6 +58,221 @@ class SkillContractTests(unittest.TestCase):
         for command in ("inspect", "create", "verify", "describe", "migrate", "render", "agent", "author", "actions", "extensions", "calibrate", "compare", "history", "restore", "evidence", "enhance", "record", "edit", "play", "runtime", "cubism"):
             self.assertIn(command, combined)
             self.assertIn(f'"{command}"', self.wrapper)
+
+    def test_source_art_and_see_through_route_is_complete(self) -> None:
+        combined = self.skill + self.workflow + self.source_art
+        for phrase in (
+            "完全没有原图",
+            "可绑定角色原图",
+            "https://modelscope.cn/studios/ljsabc/See-Through",
+            "https://ljsabc-see-through.ms.show",
+            "/inference",
+            "acquire_layered_psd.ps1",
+            "第三方 ModelScope",
+            "单条生图提示词",
+            "重新合成",
+            "create --reference",
+            "只使用现有素材",
+            "用户只要求生成或测试 PSD",
+            "正常二次元角色立绘",
+            "source-original.*",
+            "source-normalized.png",
+            "previews/contact-sheet.png",
+            "Alpha 为零区域里的无效 RGB",
+            "recomposition.png",
+            "comparison.png",
+            "visual-review.json",
+            "accepted-with-repairs",
+            "blockingIssues",
+            "repairPlan",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_see_through_client_preserves_self_contained_visual_evidence(self) -> None:
+        client = (SCRIPTS / "acquire_layered_psd.py").read_text(encoding="utf-8")
+        wrapper = (SCRIPTS / "acquire_layered_psd.ps1").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements-layering.txt").read_text(encoding="utf-8")
+        compile(client, "acquire_layered_psd.py", "exec")
+        for phrase in (
+            "/gradio_api/info",
+            "/gradio_api/upload",
+            "/gradio_api/call/inference",
+            "request.json",
+            "submission.json",
+            "response.json",
+            "inspect.json",
+            "result.json",
+            '"readyForCreate": False',
+            'b"8BPS"',
+            'destination.open("xb")',
+            "source-original",
+            "source-upload.png",
+            "source-normalized.png",
+            '"previews" / "index.json"',
+            '"contact-sheet.png"',
+            "recomposition.png",
+            "difference.png",
+            "comparison.png",
+            "comparison-metrics.json",
+            "visual-review.json",
+            "ignore_preview=True",
+            "MAX_INFERENCE_ATTEMPTS = 2",
+            "--review-psd",
+            "--finalize-review",
+            '"blockingIssues": []',
+            '"repairPlan": []',
+        ):
+            self.assertIn(phrase, client)
+        self.assertNotIn("import requests", client)
+        self.assertNotIn("gradio_client", client)
+        for phrase in ("D:\\Tools\\Python310\\python.exe", "SplitLimbs", "ReviewPsd", "FinalizeReview", "-Check"):
+            self.assertIn(phrase, wrapper)
+        self.assertIn("Pillow==12.2.0", requirements)
+        self.assertIn("psd-tools==1.17.4", requirements)
+
+    def test_source_preparation_preserves_original_and_creates_an_explicit_opaque_upload(self) -> None:
+        runtime_root = ROOT / "runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime_root) as temporary_directory:
+            temporary = Path(temporary_directory)
+            source_path = temporary / "transparent-source.png"
+            source = Image.new("RGBA", (5, 3), (20, 40, 80, 0))
+            source.putpixel((2, 1), (10, 30, 220, 255))
+            source.save(source_path)
+            original_hash = _sha256(source_path)
+
+            run_directory = temporary / "run"
+            run_directory.mkdir()
+            record = _prepare_source(source_path, run_directory, (8, 8))
+
+            self.assertEqual(_sha256(Path(record["sourceOriginal"])), original_hash)
+            self.assertFalse(record["opaque"])
+            self.assertTrue(record["uploadOpaque"])
+            self.assertEqual(Path(record["sourceUpload"]).name, "source-upload.png")
+            self.assertEqual(record["uploadSha256"], _sha256(Path(record["sourceUpload"])))
+            self.assertEqual(record["normalizedSha256"], _sha256(Path(record["sourceNormalized"])))
+            with Image.open(record["sourceUpload"]) as uploaded:
+                self.assertEqual(uploaded.mode, "RGB")
+                self.assertEqual(uploaded.size, (5, 3))
+                self.assertEqual(uploaded.getpixel((0, 0)), (255, 255, 255))
+                self.assertEqual(uploaded.getpixel((2, 1)), (10, 30, 220))
+
+    def test_finalize_review_synchronizes_the_three_level_decision(self) -> None:
+        runtime_root = ROOT / "runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime_root) as temporary_directory:
+            run_directory = Path(temporary_directory)
+            source_original = run_directory / "source-original.png"
+            psd_path = run_directory / "layered.psd"
+            source_original.write_bytes(b"source")
+            psd_path.write_bytes(b"8BPS-test")
+            required_views = {}
+            for key, filename in (
+                ("sourceNormalized", "source-normalized.png"),
+                ("recomposition", "recomposition.png"),
+                ("comparison", "comparison.png"),
+                ("previewIndex", "index.json"),
+            ):
+                path = run_directory / filename
+                path.write_bytes(b"evidence")
+                required_views[key] = str(path)
+            required_views["previewContactSheet"] = None
+
+            review_path = run_directory / "visual-review.json"
+            review = {
+                "status": "accepted-with-repairs",
+                "acceptedForNextStage": None,
+                "reviewedAt": None,
+                "reviewer": "Codex external Agent",
+                "blockingIssues": [],
+                "repairPlan": [{"part": "ahoge", "repair": "restore the missing strand"}],
+                "requiredViews": required_views,
+                "checks": [],
+                "notes": ["The missing strand is repairable."],
+            }
+            review_path.write_text(json.dumps(review), encoding="utf-8")
+            result_path = run_directory / "result.json"
+            result = {
+                "ok": True,
+                "stage": "psd-review-evidence-generated",
+                "readyForCreate": False,
+                "psd": str(psd_path),
+                "psdSha256": _sha256(psd_path),
+                "source": {"sourceOriginal": str(source_original), "sha256": _sha256(source_original)},
+                "reviewEvidence": {"visualReview": str(review_path)},
+            }
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+
+            summary = finalize_review(review_path)
+            finalized_review = json.loads(review_path.read_text(encoding="utf-8"))
+            finalized_result = json.loads(result_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(summary["status"], "accepted-with-repairs")
+            self.assertTrue(summary["readyForCreate"])
+            self.assertTrue(finalized_review["acceptedForNextStage"])
+            self.assertEqual(finalized_result["visualReviewStatus"], "accepted-with-repairs")
+            self.assertEqual(finalized_result["repairPlan"], review["repairPlan"])
+            self.assertTrue(finalized_result["readyForCreate"])
+
+    def test_finalize_review_rejects_an_internally_inconsistent_decision(self) -> None:
+        runtime_root = ROOT / "runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime_root) as temporary_directory:
+            run_directory = Path(temporary_directory)
+            source_original = run_directory / "source-original.png"
+            psd_path = run_directory / "layered.psd"
+            source_original.write_bytes(b"source")
+            psd_path.write_bytes(b"8BPS-test")
+            required_views = {}
+            for key, filename in (
+                ("sourceNormalized", "source-normalized.png"),
+                ("recomposition", "recomposition.png"),
+                ("comparison", "comparison.png"),
+                ("previewIndex", "index.json"),
+            ):
+                path = run_directory / filename
+                path.write_bytes(b"evidence")
+                required_views[key] = str(path)
+            required_views["previewContactSheet"] = None
+            review_path = run_directory / "visual-review.json"
+            review_path.write_text(
+                json.dumps(
+                    {
+                        "status": "accepted-with-repairs",
+                        "blockingIssues": [],
+                        "repairPlan": [],
+                        "requiredViews": required_views,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result_path = run_directory / "result.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "psd": str(psd_path),
+                        "psdSha256": _sha256(psd_path),
+                        "source": {"sourceOriginal": str(source_original), "sha256": _sha256(source_original)},
+                        "reviewEvidence": {"visualReview": str(review_path)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ReviewFinalizationError, "requires a non-empty repairPlan"):
+                finalize_review(review_path)
+
+    def test_psd_only_scope_stops_before_project_or_rigging(self) -> None:
+        combined = self.skill + self.workflow + self.source_art
+        for phrase in (
+            "PSD-only",
+            "不得创建 PuppetLoom 项目",
+            "不要生成 `rig-spec`",
+            "不要调用 `create`、`agent plan` 或 `agent apply`",
+            "完成 PSD-only 范围后立即停止",
+        ):
+            self.assertIn(phrase, combined)
 
     def test_wrapper_matches_the_real_editing_and_evidence_cli(self) -> None:
         expectations = {
@@ -357,6 +584,7 @@ class SkillContractTests(unittest.TestCase):
 
     def test_local_file_budget_covers_all_active_text(self) -> None:
         self.assertEqual(validate_file_budgets(ROOT), [])
+        self.assertIn("runtime", IGNORED)
         records = collect_file_budgets(ROOT)
         self.assertGreaterEqual(len(records), 8)
         self.assertTrue(all(item.estimated_tokens <= MAX_OUTER_TOOL_TOKENS for item in records))

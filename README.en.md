@@ -83,7 +83,7 @@ The root `启动PuppetLoom.cmd` launcher provides the same desktop entry and bui
 
 The puppet window can stay on top, pass mouse input through, follow the system pointer, use local face tracking and microphone-driven mouth motion, trigger the expressions/actions the project actually contains, and record a performance.
 
-Recording supports transparent or solid-color backgrounds, output resolution, 24/30/60 FPS, manual or timed stop, and optional microphone audio. Every finished WebM includes replayable input JSON; interrupted recordings keep a partial file and report.
+Video recording supports transparent or solid-color backgrounds, output resolution, 24/30/60 FPS, manual or timed stop, and optional microphone audio. A normal recording produces only a WebM. Replayable motion JSON is an explicit option for reproducing or debugging pointer, face, mouth, expression, behavior, and external-control input. Replay checks the saved project revision and temporarily isolates live sources. Interrupted recordings keep a partial file and report.
 
 ## Let an external Agent do the rigging
 

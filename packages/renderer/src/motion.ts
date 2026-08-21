@@ -285,7 +285,14 @@ export class CalmMotionController {
     const runtimeControl = resolveRuntimeControl(options.runtimeControl, options.nowMs ?? Date.now());
     const controlled = (key: Parameters<typeof controlledMotionValue>[1], base: number): number => controlledMotionValue(base, key, runtimeControl);
 
-    const lookTarget = primaryMotion ? options.lookTarget : undefined;
+    const recordedLookTarget = runtimeControl.motion.lookTargetStrength === undefined
+      ? undefined
+      : {
+          x: runtimeControl.motion.lookTargetX ?? 0,
+          y: runtimeControl.motion.lookTargetY ?? 0,
+          strength: runtimeControl.motion.lookTargetStrength
+        };
+    const lookTarget = primaryMotion ? recordedLookTarget ?? options.lookTarget : undefined;
     advanceTracking(this.trackedLookX, Math.max(-1, Math.min(1, lookTarget?.x ?? 0)), delta, 1, 0.72);
     advanceTracking(this.trackedLookY, Math.max(-1, Math.min(1, lookTarget?.y ?? 0)), delta, 1, 0.72);
     advanceTracking(this.trackedLookStrength, Math.max(0, Math.min(1, lookTarget?.strength ?? 0)), delta, 1, 0.82);

@@ -13,7 +13,7 @@ BYTES_PER_OUTER_TOOL_TOKEN = 4
 IGNORED = {
     ".git", ".pytest_cache", ".ruff_cache", ".venv", "__pycache__",
     "archive", "artifacts", "build", "dist", "node_modules", "output",
-    "outputs", "venv",
+    "outputs", "runtime", "venv",
 }
 TEXT_ASSET_SUFFIXES = {".csv", ".json", ".md", ".toml", ".tsv", ".txt", ".xml", ".yaml", ".yml"}
 

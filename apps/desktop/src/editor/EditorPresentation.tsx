@@ -15,7 +15,7 @@ import type {
   Side,
   TorsoVolumeLandmark
 } from "@puppetloom/core";
-import { ArrowDown, ArrowUp, Ban, Check, Eye, EyeOff, Lock, LockOpen, RotateCcw, Save, Scan, ScanEye, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, Ban, Blend, Check, Diff, Eye, EyeOff, History, Image, ImagePlus, Layers3, Lock, LockOpen, Network, RefreshCw, RotateCcw, Save, Scan, ScanEye, Search, Sparkles, SplitSquareVertical, Trash2, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { useViewportNavigation } from "./useViewportNavigation.js";
 
 export type EditMode = "semantic" | "anchors" | "layer" | "mesh";
@@ -30,6 +30,14 @@ export type DragTarget =
   | { kind: "mesh-move" }
   | { kind: "mesh-scale" }
   | { kind: "mesh-rotate" };
+
+const comparisonModeIcons: Record<ComparisonMode, LucideIcon> = {
+  before: Image,
+  after: ImagePlus,
+  split: SplitSquareVertical,
+  overlay: Blend,
+  difference: Diff
+};
 
 export interface ComparisonImages {
   result: RevisionComparisonResult;
@@ -181,8 +189,8 @@ export function EditorLayerPanel({
   return (
     <aside className="layer-panel">
       <div className="layer-panel-heading"><div><div className="panel-eyebrow">绑定结构</div><h2>图层结构</h2></div><output>{ordered.length}/{project.layers.length}</output></div>
-      <input className="layer-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、语义或变形器" />
-      <div className="layer-order-tabs"><button className={orderMode === "hierarchy" ? "active" : ""} onClick={() => setOrderMode("hierarchy")}>结构层级</button><button className={orderMode === "draw" ? "active" : ""} onClick={() => setOrderMode("draw")}>绘制顺序</button></div>
+      <label className="layer-search-field"><Search aria-hidden="true" /><input className="layer-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、语义或变形器" /></label>
+      <div className="layer-order-tabs"><button className={`${orderMode === "hierarchy" ? "active" : ""} with-icon`} onClick={() => setOrderMode("hierarchy")}><Network aria-hidden="true" />结构层级</button><button className={`${orderMode === "draw" ? "active" : ""} with-icon`} onClick={() => setOrderMode("draw")}><Layers3 aria-hidden="true" />绘制顺序</button></div>
       <div className="layer-list">
         {ordered.map((layer) => (
           <div key={layer.id} className={`layer-row ${selectedLayerId === layer.id ? "selected" : ""} ${layer.visible === false ? "hidden" : ""} ${soloSelectedLayer && selectedLayerId === layer.id ? "solo" : ""}`} style={{ paddingLeft: `${8 + layerDepth(layer, byId) * 16}px` }}>
@@ -527,7 +535,7 @@ export function EditorViewportPanel({
       <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? selectedVertices.length > 1 ? `已选择 ${selectedVertices.length} 个点；拖动任意一个黄色节点即可整体移动。单击空白取消选择，Shift+拖动框选更多节点，Shift+单击可增减单点。` : "鼠标靠近节点会自动高亮，按下即可直接拖动。单击空白取消选择；按住 Shift 拖动可框选，Shift+单击可增减单点。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
 
       {comparison && <section className="evidence-preview" data-testid="comparison-view">
-        <div className="comparison-header"><h3>版本 {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => <button key={item} className={comparisonMode === item ? "active" : ""} onClick={() => onComparisonMode(item)}>{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>)}</div><button className="icon-only comparison-close" aria-label="关闭版本对比" title="关闭版本对比" onClick={onCloseComparison}><X aria-hidden="true" /></button></div>
+        <div className="comparison-header"><h3>版本 {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => { const Icon = comparisonModeIcons[item]; return <button key={item} className={`${comparisonMode === item ? "active" : ""} with-icon`} onClick={() => onComparisonMode(item)}><Icon aria-hidden="true" />{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>; })}</div><button className="icon-only comparison-close" aria-label="关闭版本对比" title="关闭版本对比" onClick={onCloseComparison}><X aria-hidden="true" /></button></div>
         {comparisonMode === "split" && <label className="split-control">分割位置 <input type="range" min="0" max="100" value={splitPercent} onChange={(event) => onSplitPercent(Number(event.target.value))} /></label>}
         <div className={`comparison-canvas ${comparisonMode}`}>
           {comparisonMode === "before" && <img src={comparison.before} alt="校准修改前" />}
@@ -614,7 +622,7 @@ export function EditorInspectorPanel({
   return (
     <aside className="inspector-panel">
       <div className="layer-panel-heading"><div><div className="panel-eyebrow">属性检查</div><h2>属性</h2></div></div>
-      <div className="inspector-tabs"><button className={inspectorTab === "layer" ? "active" : ""} onClick={() => setInspectorTab("layer")}>图层</button><button className={inspectorTab === "motion" ? "active" : ""} onClick={() => setInspectorTab("motion")}>动作</button><button className={inspectorTab === "history" ? "active" : ""} onClick={() => setInspectorTab("history")}>版本</button></div>
+      <div className="inspector-tabs"><button className={`${inspectorTab === "layer" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("layer")}><Layers3 aria-hidden="true" />图层</button><button className={`${inspectorTab === "motion" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("motion")}><Activity aria-hidden="true" />动作</button><button className={`${inspectorTab === "history" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("history")}><History aria-hidden="true" />版本</button></div>
       <div hidden={inspectorTab !== "layer"}>
       {selectedLayer ? <>
         <dl>
@@ -638,11 +646,11 @@ export function EditorInspectorPanel({
           {selectedLayer.mesh.topology === "art" && selectedLayer.mesh.art ? <>
             <label>细节尺度（纹理像素）<input disabled={locked} type="number" min="4" max="256" value={selectedLayer.mesh.art.detail} onChange={(event) => onLayerProperty({ meshDetail: Math.max(4, Math.min(256, Math.round(Number(event.target.value) || 4))) })} /></label>
             <small>{selectedLayer.mesh.art.regions.length} 个独立区域，{selectedLayer.mesh.art.regions.reduce((count, region) => count + region.holes.length, 0)} 个孔洞。数值越小，轮廓和内部网格越密。</small>
-            <button disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}>{meshUpgrading ? "正在重新计算轮廓与三角形…" : "按当前细节重新生成网格"}</button>
+            <button className="with-icon" disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}><RefreshCw aria-hidden="true" />{meshUpgrading ? "正在重新计算轮廓与三角形…" : "按当前细节重新生成网格"}</button>
           </> : selectedLayer.mesh.rows !== undefined && selectedLayer.mesh.cols !== undefined ? <>
             <div><label>行<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.rows} onChange={(event) => onLayerProperty({ meshDensity: { rows: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))), cols: selectedLayer.mesh.cols! } })} /></label><label>列<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.cols} onChange={(event) => onLayerProperty({ meshDensity: { rows: selectedLayer.mesh.rows!, cols: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))) } })} /></label></div>
             <small>规则网格仅用于完全不透明的矩形图层和旧项目兼容。</small>
-            <button disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}>{meshUpgrading ? "正在读取当前纹理轮廓…" : "将当前图层升级为轮廓 ArtMesh"}</button>
+            <button className="with-icon" disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}><Sparkles aria-hidden="true" />{meshUpgrading ? "正在读取当前纹理轮廓…" : "将当前图层升级为轮廓 ArtMesh"}</button>
           </> : <small>当前网格缺少可重建信息。</small>}
           <small>每次只重建当前图层并重新投影权重；保存前请检查中立、左右、上下和对角姿态。</small>
         </section>

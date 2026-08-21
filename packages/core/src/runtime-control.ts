@@ -3,7 +3,8 @@ import { PuppetLoomError } from "./errors.js";
 export const runtimeMotionInputKeys = [
   "headYaw", "headPitch", "headRoll",
   "bodySway", "bodyPitch", "bodyRoll",
-  "gazeX", "gazeY", "breath", "blink", "mouthOpen"
+  "gazeX", "gazeY", "breath", "blink", "mouthOpen",
+  "lookTargetX", "lookTargetY", "lookTargetStrength"
 ] as const;
 
 export type RuntimeMotionInputKey = typeof runtimeMotionInputKeys[number];
@@ -211,7 +212,8 @@ export function parseRuntimeControlRequest(value: unknown): RuntimeControlReques
     const motion = rawMotion && {
       ...rawMotion,
       ...(rawMotion.blink === undefined ? {} : { blink: finite(rawMotion.blink, "source.motion.blink", 0, 1) }),
-      ...(rawMotion.mouthOpen === undefined ? {} : { mouthOpen: finite(rawMotion.mouthOpen, "source.motion.mouthOpen", 0, 1) })
+      ...(rawMotion.mouthOpen === undefined ? {} : { mouthOpen: finite(rawMotion.mouthOpen, "source.motion.mouthOpen", 0, 1) }),
+      ...(rawMotion.lookTargetStrength === undefined ? {} : { lookTargetStrength: finite(rawMotion.lookTargetStrength, "source.motion.lookTargetStrength", 0, 1) })
     };
     const parameters = optionalNumbers(source.parameters, "source.parameters");
     const expressions = optionalNumbers(source.expressions, "source.expressions");

@@ -62,6 +62,10 @@ const launcherContentScreenshot = artifactRun.path("launcher-content.png");
 const launcherNativeScreenshot = artifactRun.path("launcher-native.png");
 const editorContentScreenshot = artifactRun.path("editor-content.png");
 const editorNativeScreenshot = artifactRun.path("editor-native.png");
+const parameterPanelScreenshot = artifactRun.path("editor-parameters.png");
+const dynamicsPanelScreenshot = artifactRun.path("editor-dynamics.png");
+const previewPanelScreenshot = artifactRun.path("editor-preview.png");
+const rigIconsScreenshot = artifactRun.path("editor-rig-icons.png");
 const artMeshScreenshot = artifactRun.path("editor-art-mesh.png");
 const viewerNativeScreenshot = artifactRun.path("viewer-native.png");
 const windowShellEvidencePath = artifactRun.path("window-shell-evidence.json");
@@ -124,6 +128,19 @@ try {
   await control.evaluate(() => new Promise((resolvePaint) => {
     requestAnimationFrame(() => requestAnimationFrame(resolvePaint));
   }));
+  const launcherColumns = await Promise.all([
+    control.locator(".inputs").boundingBox(),
+    control.locator(".status-panel").boundingBox(),
+    control.getByTestId("recent-projects").boundingBox()
+  ]);
+  if (launcherColumns.some((column) => !column)) throw new Error("启动页三列卡片没有完整显示。" );
+  const [materialColumn, inspectionColumn, recentColumn] = launcherColumns;
+  if (!materialColumn || !inspectionColumn || !recentColumn
+    || !(materialColumn.x < inspectionColumn.x && inspectionColumn.x < recentColumn.x)
+    || Math.max(materialColumn.y, inspectionColumn.y, recentColumn.y) - Math.min(materialColumn.y, inspectionColumn.y, recentColumn.y) > 2
+    || Math.max(materialColumn.width, inspectionColumn.width, recentColumn.width) - Math.min(materialColumn.width, inspectionColumn.width, recentColumn.width) > 2) {
+    throw new Error(`角色素材、自动检查和最近项目没有并排等宽对齐：${JSON.stringify(launcherColumns)}`);
+  }
   const launcherNativeEvidence = await captureNativeWindow(electronApp, launcherBrowserWindow, launcherNativeScreenshot);
   await control.screenshot({ path: launcherContentScreenshot });
   const emptyRecentCard = await control.getByTestId("recent-projects").boundingBox();
@@ -178,8 +195,42 @@ try {
   const viewportButtons = control.locator(".viewport-navigation button");
   if (await viewportButtons.count() !== 3 || await viewportButtons.locator("svg").count() !== 3) throw new Error("视图缩放控制没有统一使用图标。" );
   if ((await viewportButtons.allInnerTexts()).some((text) => text.trim().length > 0)) throw new Error("视图缩放控制仍显示字符按钮。" );
-  const undoRedoButtons = control.locator(".editor-history-actions .icon-only");
+  const undoRedoButtons = control.getByRole("button", { name: /^(撤销|重做)$/ });
   if (await undoRedoButtons.count() !== 2 || await undoRedoButtons.locator("svg").count() !== 2) throw new Error("撤销和重做没有使用图标按钮。" );
+  await control.getByRole("button", { name: /03 参数与姿态/ }).click();
+  const parameterCards = control.locator(".parameter-card");
+  await parameterCards.first().waitFor();
+  if (await parameterCards.count() !== workspace.project.model.parameters.length || await parameterCards.locator("svg").count() !== workspace.project.model.parameters.length) throw new Error("参数控制器没有为每个参数显示图标卡片。" );
+  const parameterGridLayout = await control.locator(".parameter-card-grid").first().evaluate((grid) => ({
+    columns: getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length,
+    cards: [...grid.querySelectorAll(".parameter-card")].slice(0, 3).map((card) => {
+      const rect = card.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    })
+  }));
+  if (parameterGridLayout.columns !== 2 || parameterGridLayout.cards.length < 3 || Math.abs(parameterGridLayout.cards[0].y - parameterGridLayout.cards[1].y) > 1 || parameterGridLayout.cards[2].y <= parameterGridLayout.cards[0].y) throw new Error(`参数卡片没有按每行两个排列：${JSON.stringify(parameterGridLayout)}`);
+  await control.screenshot({ path: parameterPanelScreenshot });
+  await control.getByRole("button", { name: /04 表情与物理/ }).click();
+  const expectedDynamicCards = workspace.project.model.expressions.length + workspace.project.model.physics.length + workspace.project.model.behaviors.length;
+  const dynamicCards = control.locator(".catalog-card");
+  if (expectedDynamicCards === 0) await control.getByRole("button", { name: "生成基础动态系统" }).click();
+  await dynamicCards.first().waitFor();
+  const actualDynamicCards = await dynamicCards.count();
+  if ((expectedDynamicCards > 0 && actualDynamicCards !== expectedDynamicCards) || actualDynamicCards < 2 || await dynamicCards.locator("svg").count() !== actualDynamicCards) throw new Error("动态系统没有为每个表情、物理或行为显示图标卡片。");
+  const dynamicColumns = await control.locator(".catalog-grid").first().evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length);
+  if (dynamicColumns !== 2) throw new Error(`动态系统没有按每行两张卡片排列：${dynamicColumns}`);
+  const dynamicSectionHeadings = control.locator(".system-catalog h3");
+  if (await dynamicSectionHeadings.count() !== 3 || await dynamicSectionHeadings.locator("svg").count() !== 3) throw new Error("动态系统分组标题没有完整使用图标。");
+  await control.screenshot({ path: dynamicsPanelScreenshot });
+  await control.getByRole("button", { name: /05 预览与验收/ }).click();
+  const previewSamples = control.locator(".preview-sample-list button");
+  if (await previewSamples.count() !== 7 || await previewSamples.locator("svg").count() !== 7) throw new Error("验收姿态没有为每个固定样本显示图标。");
+  const backgroundButtons = control.locator(".segmented-control button");
+  if (await backgroundButtons.count() !== 3 || await backgroundButtons.locator("svg").count() !== 3) throw new Error("画面模式没有统一使用图标。");
+  const capabilityChecks = control.locator(".qa-checks > div");
+  if (await capabilityChecks.count() !== 5 || await capabilityChecks.locator("svg").count() !== 10) throw new Error("系统能力列表没有同时显示能力与状态图标。");
+  await control.screenshot({ path: previewPanelScreenshot });
+  await control.getByRole("button", { name: /01 项目总览/ }).click();
   const stageBeforeNavigation = await editorStage.boundingBox();
   if (!stageBeforeNavigation) throw new Error("编辑视图没有可用的画布范围。");
   const expectedAspectRatio = workspace.project.canvas.width / workspace.project.canvas.height;
@@ -248,6 +299,14 @@ try {
   const structureWorkspaceButton = control.getByRole("button", { name: /02 结构与网格/ });
   await structureWorkspaceButton.click();
   await control.locator(".layer-list").waitFor();
+  const layerOrderTabs = control.locator(".layer-order-tabs button");
+  const inspectorTabs = control.locator(".inspector-tabs button");
+  const poseShortcuts = control.locator(".pose-shortcut");
+  if (await layerOrderTabs.count() !== 2 || await layerOrderTabs.locator("svg").count() !== 2) throw new Error("图层排序页签没有使用图标。");
+  if (await inspectorTabs.count() !== 3 || await inspectorTabs.locator("svg").count() !== 3) throw new Error("属性检查页签没有使用图标。");
+  if (await poseShortcuts.count() !== 9 || await poseShortcuts.locator("svg").count() !== 9 || (await poseShortcuts.allInnerTexts()).some((text) => text.trim())) throw new Error("九向姿态快捷键没有改为可访问的纯图标按钮。");
+  if (await control.locator(".layer-search-field > svg").count() !== 1) throw new Error("图层搜索框缺少搜索图标。");
+  await control.screenshot({ path: rigIconsScreenshot });
   if (await control.locator(".editor-overlay").count()) throw new Error("结构与网格工作区首次打开时仍默认遮挡编辑标记。");
   const faceControlButton = control.getByRole("button", { name: "脸部控制点" });
   await faceControlButton.click();
@@ -598,7 +657,7 @@ try {
   await viewer.getByTestId("viewer").waitFor();
   await viewer.locator("canvas").waitFor({ state: "visible" });
   const viewerControlButtons = viewer.locator(".viewer-controls button");
-  if (await viewerControlButtons.count() !== 13 || await viewerControlButtons.locator("svg").count() !== 13) throw new Error("角色窗口控制栏没有完整使用图标。" );
+  if (await viewerControlButtons.count() !== 11 || await viewerControlButtons.locator("svg").count() !== 11) throw new Error("角色窗口控制栏没有完整使用图标。" );
   if ((await viewerControlButtons.allInnerTexts()).some((text) => text.trim().length > 0)) throw new Error("角色窗口控制栏仍包含拥挤的文字按钮。" );
   await viewer.waitForFunction(() => typeof window.puppetloomRenderCurrentFrame === "function", undefined, { timeout: 30_000 });
   const viewerReady = await viewer.evaluate(() => {
@@ -625,32 +684,33 @@ try {
   if (Object.entries(viewerCapabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available)) await viewer.getByText(/部分系统快捷键已被其它软件占用/).waitFor();
   await viewer.getByRole("button", { name: "关闭表情动作面板" }).click();
 
-  await viewer.getByRole("button", { name: "录制驱动输入" }).click();
-  await viewer.getByText("正在录制驱动输入", { exact: true }).waitFor();
+  await viewer.getByRole("button", { name: "录制视频" }).click();
+  await viewer.getByRole("complementary", { name: "视频录制设置" }).waitFor();
+  await viewer.getByText("动作数据工具", { exact: true }).click();
+  await viewer.getByRole("button", { name: "单独录制动作数据" }).click();
+  await viewer.getByText("正在录制动作数据", { exact: true }).waitFor();
   await viewer.evaluate(() => window.puppetloom.setRuntimeSource({ id: "e2e-control", priority: 90, ttlMs: 500, motion: { headYaw: 0.65, gazeX: 0.8 } }));
   await viewer.waitForTimeout(250);
-  await viewer.getByRole("button", { name: "停止并保存输入录制" }).click();
-  await viewer.getByText(/输入会话已保存/).waitFor();
+  await viewer.getByRole("button", { name: "停止并保存动作数据" }).click();
+  await viewer.getByText(/动作数据已保存/).waitFor();
   const inputSessionDirectory = resolve(output, "reports", "input-sessions");
   const inputSessions = (await readdir(inputSessionDirectory)).filter((name) => name.endsWith(".runtime-input.json"));
   if (inputSessions.length !== 1) throw new Error(`驱动输入没有保存为唯一会话：${JSON.stringify(inputSessions)}`);
   const inputSession = JSON.parse(await readFile(resolve(inputSessionDirectory, inputSessions[0]), "utf8"));
   if (inputSession.events.length < 1 || !inputSession.events.some((event) => event.source?.id === "e2e-control")) throw new Error(`驱动输入会话缺少外部控制事件：${JSON.stringify(inputSession)}`);
 
-  await viewer.getByRole("button", { name: "录制 WebM 表演" }).click();
-  await viewer.getByRole("complementary", { name: "WebM 录制设置" }).waitFor();
   await viewer.getByLabel("录制背景").selectOption("green");
   await viewer.getByLabel("录制宽度").fill("960");
   await viewer.getByLabel("录制高度").fill("540");
   await viewer.getByLabel("录制帧率").selectOption("24");
   await viewer.getByLabel("录制时长秒数").fill("0");
-  await viewer.getByRole("button", { name: "开始录制表演" }).click();
-  await viewer.getByText("正在录制 WebM 表演与同步输入", { exact: true }).waitFor();
+  await viewer.getByRole("button", { name: "开始录制视频" }).click();
+  await viewer.getByText("正在录制视频", { exact: true }).waitFor();
   await viewer.evaluate(() => window.puppetloom.setRuntimeSource({ id: "e2e-performance-control", priority: 91, ttlMs: 800, motion: { headPitch: 0.5, bodySway: -0.35 } }));
   await viewer.waitForTimeout(2_200);
-  await viewer.getByRole("button", { name: "停止并保存 WebM 表演" }).click();
-  await viewer.getByText(/WebM 表演与同步输入已保存/).waitFor({ timeout: 15_000 });
-  await viewer.getByLabel("WebM 录制预览视频").waitFor();
+  await viewer.getByRole("button", { name: "停止并保存视频" }).click();
+  await viewer.getByText("视频已保存", { exact: true }).waitFor({ timeout: 15_000 });
+  await viewer.locator('video[aria-label="视频录制预览"]').waitFor();
   const performanceDirectory = resolve(output, "reports", "performances");
   const performanceFiles = await readdir(performanceDirectory);
   const webmName = performanceFiles.find((name) => name.endsWith(".webm") && !name.endsWith(".partial.webm"));
@@ -660,19 +720,18 @@ try {
   const webmHeader = await readFile(resolve(performanceDirectory, webmName));
   if (performanceReport.status !== "completed" || performanceReport.media?.bytes < 1 || (await stat(resolve(performanceDirectory, webmName))).size !== performanceReport.media.bytes) throw new Error(`WebM 报告与视频不一致：${JSON.stringify(performanceReport)}`);
   if (performanceReport.media?.fps !== 24 || performanceReport.media?.width !== 960 || performanceReport.media?.height !== 540 || performanceReport.media?.background?.mode !== "solid" || performanceReport.media?.background?.color !== "#00ff00") throw new Error(`WebM 没有采用界面选择的录制参数：${JSON.stringify(performanceReport.media)}`);
-  if (!performanceReport.inputSession?.output || performanceReport.inputSession.events < 1) throw new Error(`WebM 报告缺少同步输入会话：${JSON.stringify(performanceReport)}`);
-  const performanceInput = JSON.parse(await readFile(performanceReport.inputSession.output, "utf8"));
-  if (!performanceInput.events.some((event) => event.source?.id === "e2e-performance-control")) throw new Error(`同步输入会话缺少录制期间的控制事件：${JSON.stringify(performanceInput)}`);
+  if (performanceReport.inputSession) throw new Error(`默认视频录制不应额外生成动作数据：${JSON.stringify(performanceReport)}`);
   if (!webmHeader.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) throw new Error("录制结果没有 WebM EBML 文件头。" );
 
   const filesBeforeTimedRecording = new Set(await readdir(performanceDirectory));
-  await viewer.getByRole("button", { name: "录制 WebM 表演" }).click();
-  await viewer.getByRole("complementary", { name: "WebM 录制设置" }).waitFor();
+  await viewer.getByRole("button", { name: "录制视频" }).click();
+  await viewer.getByRole("complementary", { name: "视频录制设置" }).waitFor();
   await viewer.getByLabel("录制时长秒数").fill("1");
-  await viewer.getByRole("button", { name: "开始录制表演" }).click();
-  await viewer.getByText("正在录制 WebM 表演与同步输入", { exact: true }).waitFor();
+  await viewer.getByRole("checkbox", { name: /同时保存动作数据/ }).check();
+  await viewer.getByRole("button", { name: "开始录制视频" }).click();
+  await viewer.getByText("正在录制视频；同步保存动作数据", { exact: true }).waitFor();
   await viewer.evaluate(() => window.puppetloom.setRuntimeSource({ id: "e2e-timed-performance-control", priority: 92, ttlMs: 800, motion: { bodyPitch: 0.4 } }));
-  await viewer.getByText(/WebM 表演与同步输入已保存/).waitFor({ timeout: 15_000 });
+  await viewer.getByText("视频和动作数据已保存", { exact: true }).waitFor({ timeout: 15_000 });
   const timedFiles = (await readdir(performanceDirectory)).filter((name) => !filesBeforeTimedRecording.has(name));
   const timedWebmName = timedFiles.find((name) => name.endsWith(".webm") && !name.endsWith(".partial.webm"));
   const timedReportName = timedFiles.find((name) => name.endsWith(".performance.json"));
@@ -682,6 +741,7 @@ try {
   if (!timedReport.inputSession?.output || timedReport.inputSession.events < 1) throw new Error(`定时录制没有关联自己的输入会话：${JSON.stringify(timedReport)}`);
   const timedInput = JSON.parse(await readFile(timedReport.inputSession.output, "utf8"));
   if (!timedInput.events.some((event) => event.source?.id === "e2e-timed-performance-control")) throw new Error(`定时录制的同步输入缺少录制期间事件：${JSON.stringify(timedInput)}`);
+  if (!timedInput.events.some((event) => event.source?.id === "pointer" && event.source.motion?.lookTargetStrength === 1)) throw new Error(`定时录制的动作数据缺少鼠标跟随：${JSON.stringify(timedInput)}`);
   const timedWebmHeader = await readFile(resolve(performanceDirectory, timedWebmName));
   if (!timedWebmHeader.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) throw new Error("定时录制结果没有 WebM EBML 文件头。" );
 
@@ -834,7 +894,7 @@ try {
     project: output,
     evidence: {
       launcher: { contentOnly: launcherContentScreenshot, nativeWindow: launcherNativeScreenshot, shell: restoredShell, capture: launcherNativeEvidence },
-      editor: { contentOnly: editorContentScreenshot, artMesh: artMeshScreenshot, nativeWindow: editorNativeScreenshot, shell: editorShell, capture: editorNativeEvidence },
+      editor: { contentOnly: editorContentScreenshot, parameters: parameterPanelScreenshot, dynamics: dynamicsPanelScreenshot, preview: previewPanelScreenshot, rigIcons: rigIconsScreenshot, artMesh: artMeshScreenshot, nativeWindow: editorNativeScreenshot, shell: editorShell, capture: editorNativeEvidence },
       viewer: { nativeWindow: viewerNativeScreenshot, state: nativeState, capture: viewerNativeEvidence }
     },
     viewerId
