@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { join, resolve } from "node:path";
 import { deformedPoints } from "./deform.js";
-import { authoredLayersInRenderOrder, authoredOpacityFor, normalizedBlendMode, type SupportedBlendMode } from "./render-contract.js";
+import { authoredLayersInRenderOrder, authoredOpacityFor, featureGatedMotionState, normalizedBlendMode, type SupportedBlendMode } from "./render-contract.js";
 import type { ImportedPsd, PixelBuffer } from "./psd.js";
 import type { MotionState, Point, PuppetLoomProject } from "./types.js";
 
@@ -93,6 +93,7 @@ function rasterTriangle(
 }
 
 export function renderProjectPoseWithSources(project: PuppetLoomProject, sources: Map<string, PixelBuffer>, state: MotionState, width: number, height: number): PixelBuffer {
+  const renderState = featureGatedMotionState(project, state);
   const output: PixelBuffer = { width, height, data: new Uint8ClampedArray(width * height * 4) };
   const scale = Math.min(width / project.canvas.width, height / project.canvas.height);
   const drawnWidth = project.canvas.width * scale;
@@ -108,7 +109,7 @@ export function renderProjectPoseWithSources(project: PuppetLoomProject, sources
     const source = sources.get(layerId);
     if (!layer || !source) return undefined;
     const mask = new Uint8Array(width * height);
-    const points = deformedPoints(project, layer, state);
+    const points = deformedPoints(project, layer, renderState);
     for (let index = 0; index < layer.mesh.triangles.length; index += 3) {
       const indices = layer.mesh.triangles.slice(index, index + 3);
       if (indices.length !== 3) continue;
@@ -118,11 +119,11 @@ export function renderProjectPoseWithSources(project: PuppetLoomProject, sources
     clipMasks.set(layerId, mask);
     return mask;
   };
-  for (const layer of authoredLayersInRenderOrder(project, state)) {
+  for (const layer of authoredLayersInRenderOrder(project, renderState)) {
     const source = sources.get(layer.id);
-    const opacity = authoredOpacityFor(project, layer, state);
+    const opacity = authoredOpacityFor(project, layer, renderState);
     if (!source || opacity <= 0) continue;
-    const points = deformedPoints(project, layer, state);
+    const points = deformedPoints(project, layer, renderState);
     const clip = layer.clipLayerId ? maskFor(layer.clipLayerId) : undefined;
     const coverage = new Uint8Array(width * height);
     for (let index = 0; index < layer.mesh.triangles.length; index += 3) {

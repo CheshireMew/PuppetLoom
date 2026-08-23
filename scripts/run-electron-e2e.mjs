@@ -56,7 +56,7 @@ async function captureNativeWindow(electronApp, browserWindow, path) {
   return evidence;
 }
 
-await executeManagedRun({ category: "electron-e2e", producer: "scripts/run-electron-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "截图、草稿和窗口状态共同组成一次独立桌面用户链证据。" } }, async (artifactRun) => {
+await executeManagedRun({ category: "electron-e2e", producer: "scripts/run-electron-e2e.mjs", evidence: { command: "node scripts/run-electron-e2e.mjs", scope: "Windows Electron 端到端用户链" }, estimatedBytes: 512 * 1024 ** 2, maximumRelativePathLength: 168, reuse: { applicable: false, reason: "截图、草稿和窗口状态共同组成一次独立桌面用户链证据。" } }, async (artifactRun) => {
 const output = artifactRun.path("project");
 const launcherContentScreenshot = artifactRun.path("launcher-content.png");
 const launcherNativeScreenshot = artifactRun.path("launcher-native.png");

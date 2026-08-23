@@ -16,7 +16,7 @@ function runCli(arguments_) {
   });
 }
 
-await executeManagedRun({ category: "motion-evidence", producer: "scripts/run-motion-evidence-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "视频、接触表与时间戳报告是一次独立动态验收结果；固定 PSD 输入复用仓库真源。" } }, async (artifactRun) => {
+await executeManagedRun({ category: "motion-evidence", producer: "scripts/run-motion-evidence-e2e.mjs", evidence: { command: "node scripts/run-motion-evidence-e2e.mjs", scope: "自动运动与次级运动证据链" }, estimatedBytes: 512 * 1024 ** 2, maximumRelativePathLength: 160, reuse: { applicable: false, reason: "视频、接触表与时间戳报告是一次独立动态验收结果；固定 PSD 输入复用仓库真源。" } }, async (artifactRun) => {
 const root = artifactRun.directory;
 const project = resolve(root, "project");
 await createProject({ input: resolve("test/fixtures/semantic.psd"), output: project, seed: 42 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyCoherentPoseField } from "../src/pose-field.js";
-import { authoredLayersInRenderOrder, authoredOpacityFor } from "../src/render-contract.js";
+import { authoredLayersInRenderOrder, authoredOpacityFor, authoredRenderFrame } from "../src/render-contract.js";
 import { createDefaultAuthoringModel } from "../src/model.js";
 import { neutralMotionState } from "../src/deform.js";
 import { makeGridMesh } from "../src/mesh.js";
@@ -35,6 +35,17 @@ function project(): PuppetLoomProject {
 }
 
 describe("pose-dependent depth and occlusion", () => {
+  it("ignores blink and mouth inputs until replacement assets enable those features", () => {
+    const value = project();
+    value.runtime.features.blink = false;
+    value.runtime.features.mouthMotion = false;
+    const eye = value.layers.find((candidate) => candidate.id === "eye-left")!;
+    const state = { ...neutralMotionState, blink: 1, mouthOpen: 1 };
+
+    expect(authoredOpacityFor(value, eye, state)).toBe(1);
+    expect(authoredRenderFrame(value, state).state).toMatchObject({ blink: 0, mouthOpen: 0 });
+  });
+
   it("keeps painted eyes and brows opaque while peripheral far-side parts can fade", () => {
     const value = project();
     value.runtime.poseOcclusion = {

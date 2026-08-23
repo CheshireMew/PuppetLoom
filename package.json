@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.12.1",
   "description": "Turn a layered character PSD into a safe, autonomous 2D puppet.",
   "license": "Apache-2.0",
   "workspaces": [
@@ -30,6 +31,7 @@
     "test:ear-hinges": "node scripts/render-ear-hinge-sheet.mjs",
     "artifacts:report": "node scripts/report-artifacts.mjs",
     "artifacts:cleanup": "node scripts/cleanup-artifacts.mjs",
+    "governance:check": "node scripts/check-repository-contract.mjs",
     "preview": "node scripts/render-project-preview.mjs",
     "fixtures": "node scripts/generate-fixtures.mjs",
     "desktop": "npm run build && electron apps/desktop/dist/electron/main.js",

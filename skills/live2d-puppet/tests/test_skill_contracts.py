@@ -8,14 +8,35 @@ import unittest
 from pathlib import Path
 
 from PIL import Image
+from psd_tools import PSDImage
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from file_budget import IGNORED, MAX_OUTER_TOOL_TOKENS, collect_file_budgets, validate_file_budgets
-from acquire_layered_psd import _prepare_source, _sha256
+from acquire_layered_psd import _export_local_psd_previews, _prepare_source, _preview_contact_sheet, _sha256
 from finalize_psd_review import ReviewFinalizationError, finalize_review
+
+
+REVIEW_CHECK_IDS = (
+    "face-and-eyes",
+    "hair-and-headwear",
+    "clothing-and-limbs",
+    "layer-order-and-occlusion",
+    "background-and-alpha",
+    "overall-recomposition",
+)
+
+
+def completed_checks(*, repair: str | None = None, fail: str | None = None) -> list[dict[str, str]]:
+    return [
+        {
+            "id": check_id,
+            "status": "repair" if check_id == repair else "fail" if check_id == fail else "pass",
+        }
+        for check_id in REVIEW_CHECK_IDS
+    ]
 
 
 class SkillContractTests(unittest.TestCase):
@@ -24,6 +45,7 @@ class SkillContractTests(unittest.TestCase):
         cls.skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         cls.workflow = (ROOT / "references" / "from-zero-workflow.md").read_text(encoding="utf-8")
         cls.source_art = (ROOT / "references" / "source-art-and-layering.md").read_text(encoding="utf-8")
+        cls.local_see_through = (ROOT / "references" / "see-through-local-deployment.md").read_text(encoding="utf-8")
         cls.review = (ROOT / "references" / "agent-review-and-repair.md").read_text(encoding="utf-8")
         cls.visual = (ROOT / "references" / "visual-rigging-rules.md").read_text(encoding="utf-8")
         cls.learning = (ROOT / "references" / "calibration-and-learning.md").read_text(encoding="utf-8")
@@ -37,6 +59,7 @@ class SkillContractTests(unittest.TestCase):
         for relative in (
             "references/from-zero-workflow.md",
             "references/source-art-and-layering.md",
+            "references/see-through-local-deployment.md",
             "references/agent-review-and-repair.md",
             "references/visual-rigging-rules.md",
             "references/runtime-demonstration.md",
@@ -60,21 +83,39 @@ class SkillContractTests(unittest.TestCase):
             self.assertIn(f'"{command}"', self.wrapper)
 
     def test_source_art_and_see_through_route_is_complete(self) -> None:
-        combined = self.skill + self.workflow + self.source_art
+        combined = self.skill + self.workflow + self.source_art + self.local_see_through
         for phrase in (
             "完全没有原图",
             "可绑定角色原图",
-            "https://modelscope.cn/studios/ljsabc/See-Through",
+            "https://modelscope.cn/studios/ljsabc/See-Through/?st=1WIdxVcPQ8ylM43-0Vr14FQ",
             "https://ljsabc-see-through.ms.show",
             "/inference",
             "acquire_layered_psd.ps1",
-            "第三方 ModelScope",
-            "单条生图提示词",
+            "分辨率选择 1024",
+            "用户选择“Agent 代传”",
+            "选择 Agent 代传就构成本次具体上传授权",
+            "在用户选择前停止，不上传、不安装",
+            "本地部署只作为",
+            "E:\\Code\\see-through-webui",
+            "Alpha 总和先被裁剪到 0～255",
+            "group offload",
+            "每批 4～6 层",
+            "不限定头身比",
+            "不等于简化角色设计",
+            "默认不把完整鲸鱼娘原画",
+            "后加入的材料默认是补充",
+            "所有已经被否定的生成图",
+            "逐字返回实际提示词",
+            "回到仍然有效的原始参考完全重新生成",
+            "压力测试",
+            "第二个完整角色",
+            "一条当前任务指令",
+            "绿幕抠图",
             "重新合成",
             "create --reference",
             "只使用现有素材",
             "用户只要求生成或测试 PSD",
-            "正常二次元角色立绘",
+            "日系二次元单人",
             "source-original.*",
             "source-normalized.png",
             "previews/contact-sheet.png",
@@ -85,8 +126,70 @@ class SkillContractTests(unittest.TestCase):
             "accepted-with-repairs",
             "blockingIssues",
             "repairPlan",
+            "layer-order-and-occlusion",
+            "move-layer",
         ):
             self.assertIn(phrase, combined)
+        self.assertNotIn("只有原图时优先通过正式 API 自动取得 PSD", combined)
+        self.assertNotIn("不为角色设计增加一次无必要的确认暂停", combined)
+        self.assertNotIn("完整鲸鱼娘原画进入新原画生图上下文", combined)
+        reference_directory = ROOT / "assets" / "blue-whale-maid-reference"
+        for filename in (
+            "blue-whale-maid-source-art.png",
+            "blue-whale-maid-layered.psd",
+            "head-turn-deformation-guide.png",
+            "closed-eye-expression-reference.png",
+            "open-mouth-expression-reference.png",
+            "closed-mouth-expression-reference.png",
+        ):
+            self.assertTrue((reference_directory / filename).is_file(), filename)
+
+    def test_missing_expression_art_is_agent_owned_and_style_matched(self) -> None:
+        combined = self.skill + self.workflow + self.source_art + self.review + self.visual
+        for phrase in (
+            "不再向用户逐项索取授权",
+            "已有闭嘴",
+            "不能重画",
+            "原画、PSD 重组图",
+            "睫毛体量",
+            "不能是一条弧线",
+            "用户明确限定现有素材或禁止生图",
+        ):
+            self.assertIn(phrase, combined)
+        self.assertNotIn("图像模型补表情只在用户允许新增素材时生成候选", combined)
+
+    def test_readmes_credit_see_through_and_state_the_quality_boundary(self) -> None:
+        repository = ROOT.parents[1]
+        documents = "\n".join(
+            (repository / name).read_text(encoding="utf-8")
+            for name in ("README.md", "README.en.md", "README.ja.md", "THIRD_PARTY_NOTICES.md")
+        )
+        for phrase in (
+            "https://github.com/shitagaki-lab/see-through",
+            "https://arxiv.org/abs/2602.03749",
+            "重要的一环",
+            "专业角色画师和 Live2D 建模师",
+            "important bridge",
+            "professional character artist and Live2D modeler",
+            "重要な基盤",
+            "専門のキャラクターイラストレーターと Live2D モデラー",
+        ):
+            self.assertIn(phrase, documents)
+
+    def test_rejected_layers_and_missing_expression_assets_do_not_enter_blind_repair(self) -> None:
+        combined = self.workflow + self.source_art + self.review + self.visual
+        for phrase in (
+            "不进入绑定",
+            "孤立部件生图",
+            "具体部位、姿态或连续帧",
+            "已有闭嘴图层直接作为 `mouthOpen=0`",
+            "眉毛是独立表情结构",
+            "通用最小幅度",
+            "矩形托底",
+            "恢复最后接受的 revision",
+        ):
+            self.assertIn(phrase, combined)
+        self.assertNotIn("不透明结果只能在纯色背景上抠图再验证", combined)
 
     def test_see_through_client_preserves_self_contained_visual_evidence(self) -> None:
         client = (SCRIPTS / "acquire_layered_psd.py").read_text(encoding="utf-8")
@@ -127,6 +230,8 @@ class SkillContractTests(unittest.TestCase):
         self.assertNotIn("gradio_client", client)
         for phrase in ("D:\\Tools\\Python310\\python.exe", "SplitLimbs", "ReviewPsd", "FinalizeReview", "-Check"):
             self.assertIn(phrase, wrapper)
+        self.assertIn("[int]$Resolution = 1024", wrapper)
+        self.assertIn('parser.add_argument("--resolution", type=int, default=1024)', client)
         self.assertIn("Pillow==12.2.0", requirements)
         self.assertIn("psd-tools==1.17.4", requirements)
 
@@ -156,6 +261,27 @@ class SkillContractTests(unittest.TestCase):
                 self.assertEqual(uploaded.size, (5, 3))
                 self.assertEqual(uploaded.getpixel((0, 0)), (255, 255, 255))
                 self.assertEqual(uploaded.getpixel((2, 1)), (10, 30, 220))
+
+    def test_local_psd_review_exports_full_canvas_layer_previews_and_contact_sheet(self) -> None:
+        runtime_root = ROOT / "runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime_root) as temporary_directory:
+            run_directory = Path(temporary_directory)
+            psd_path = ROOT.parents[1] / "test" / "fixtures" / "semantic.psd"
+            expected_canvas = PSDImage.open(psd_path).size
+
+            preview_records = _export_local_psd_previews(psd_path, run_directory)
+            contact_sheet = _preview_contact_sheet(preview_records, run_directory)
+
+            self.assertGreater(len(preview_records), 0)
+            self.assertIsNotNone(contact_sheet)
+            self.assertTrue(Path(contact_sheet).is_file())
+            index = json.loads((run_directory / "previews" / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(index["items"]), len(preview_records))
+            for record in preview_records:
+                self.assertTrue(record["sourcePath"])
+                with Image.open(record["path"]) as preview:
+                    self.assertEqual(preview.size, expected_canvas)
 
     def test_finalize_review_synchronizes_the_three_level_decision(self) -> None:
         runtime_root = ROOT / "runtime"
@@ -187,7 +313,7 @@ class SkillContractTests(unittest.TestCase):
                 "blockingIssues": [],
                 "repairPlan": [{"part": "ahoge", "repair": "restore the missing strand"}],
                 "requiredViews": required_views,
-                "checks": [],
+                "checks": completed_checks(repair="hair-and-headwear"),
                 "notes": ["The missing strand is repairable."],
             }
             review_path.write_text(json.dumps(review), encoding="utf-8")
@@ -242,6 +368,7 @@ class SkillContractTests(unittest.TestCase):
                         "blockingIssues": [],
                         "repairPlan": [],
                         "requiredViews": required_views,
+                        "checks": completed_checks(),
                     }
                 ),
                 encoding="utf-8",
@@ -262,6 +389,14 @@ class SkillContractTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ReviewFinalizationError, "requires a non-empty repairPlan"):
                 finalize_review(review_path)
+
+    def test_finalize_review_requires_layer_order_visual_check(self) -> None:
+        review = {"checks": completed_checks()[:-1], "status": "accepted"}
+        from finalize_psd_review import _validate_checks
+        with self.assertRaisesRegex(ReviewFinalizationError, "missing required checks"):
+            _validate_checks(review, "accepted")
+        with self.assertRaisesRegex(ReviewFinalizationError, "requires accepted-with-repairs"):
+            _validate_checks({"checks": completed_checks(repair="layer-order-and-occlusion")}, "accepted")
 
     def test_psd_only_scope_stops_before_project_or_rigging(self) -> None:
         combined = self.skill + self.workflow + self.source_art

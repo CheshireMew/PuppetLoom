@@ -64,6 +64,39 @@ describe("CLI contract", () => {
     });
   });
 
+  it("plans and reviews PSD repair work without overwriting an input", async () => {
+    const files = artifactPath(`cli-psd-repair-${process.pid}-${Date.now()}`);
+    await mkdir(files, { recursive: true });
+    const recipe = resolve(files, "recipe.json");
+    await writeFile(recipe, JSON.stringify({
+      version: 1,
+      kind: "puppetloom-photoshop-psd-repair",
+      basePsd: resolve("test/fixtures/semantic.psd"),
+      sources: [],
+      operations: [{ op: "set-visibility", layer: "face", visible: true }],
+      checks: { requiredLayers: ["face"], opaqueInteriorLayers: [] }
+    }));
+    const planned = await cli(["psd", "repair", "--recipe", recipe, "--output", resolve(files, "new.psd"), "--workdir", resolve(files, "repair-run"), "--dry-run", "--json"]);
+    expect(planned.code).toBe(0);
+    expect(JSON.parse(planned.stdout)).toMatchObject({ ok: true, stage: "psd-repair-planned", dryRun: true, engine: "photoshop-com" });
+
+    const reviewDirectory = resolve(files, "review");
+    const reviewed = await cli(["psd", "review", "--input", "test/fixtures/semantic.psd", "--recipe", recipe, "--workdir", reviewDirectory, "--json"]);
+    expect(reviewed.code).toBe(4);
+    expect(JSON.parse(reviewed.stdout)).toMatchObject({ ok: false, completed: false, status: "awaiting-visual-review", stage: "psd-repair-awaiting-visual-review", readyForCreate: false, requiresVisualReview: true });
+    expect((await stat(resolve(reviewDirectory, "layer-contact-sheet.png"))).isFile()).toBe(true);
+
+    const decisionPath = resolve(reviewDirectory, "visual-review.json");
+    const decision = JSON.parse(await readFile(decisionPath, "utf8")) as { status: string; reviewer: string | null; checks: Array<{ status: string; note: string }> };
+    decision.status = "accepted";
+    decision.reviewer = "CLI contract reviewer";
+    for (const check of decision.checks) Object.assign(check, { status: "pass", note: "已检查对应视觉证据。" });
+    await writeFile(decisionPath, `${JSON.stringify(decision, null, 2)}\n`, "utf8");
+    const finalized = await cli(["psd", "finalize", "--workdir", reviewDirectory, "--decision", decisionPath, "--json"]);
+    expect(finalized.code).toBe(0);
+    expect(JSON.parse(finalized.stdout)).toMatchObject({ ok: true, completed: true, status: "accepted", stage: "psd-repair-visual-review-finalized", readyForCreate: true });
+  }, 120_000);
+
   it("lets an external Agent generate, edit and validate a revision-pinned rig specification", async () => {
     const generated = await cli(["agent", "specification", "--project", cliProject, "--scope", "frontHair", "--json"]);
     expect(generated.code).toBe(0);
@@ -99,6 +132,51 @@ describe("CLI contract", () => {
     const mixed = await cli(["agent", "plan", "--project", cliProject, "--spec", path, "--scope", "frontHair", "--json"]);
     expect(mixed.code).toBe(2);
     expect(JSON.parse(mixed.stderr).error).toContain("不能再传");
+  }, 120_000);
+
+  it("lets explicit layerIds route an unknown layer into accessory planning", async () => {
+    const unknownProject = artifactPath(`cli-unknown-accessory-${process.pid}-${Date.now()}`);
+    const created = await cli(["create", "--input", "test/fixtures/semantic.psd", "--output", unknownProject, "--seed", "42", "--json"]);
+    expect(created.code).toBe(0);
+    const projectPath = resolve(unknownProject, "puppetloom.json");
+    const project = JSON.parse(await readFile(projectPath, "utf8")) as {
+      layers: Array<{ id: string; sourceName: string; role: string }>;
+    };
+    for (const layer of project.layers) if (layer.role === "accessory") layer.role = "unknown";
+    const target = project.layers.find((layer) => layer.sourceName === "accessory_ribbon");
+    expect(target).toBeDefined();
+    await writeFile(projectPath, JSON.stringify(project));
+
+    const files = artifactPath(`cli-unknown-accessory-spec-${process.pid}-${Date.now()}`);
+    await mkdir(files, { recursive: true });
+    const specificationPath = resolve(files, "rig-spec.json");
+    await writeFile(specificationPath, JSON.stringify({
+      version: 1,
+      kind: "puppetloom-rig-spec",
+      scope: "selected",
+      baseRevision: 0,
+      goal: "把未识别但已确认的装饰图层作为配饰制作",
+      parts: [{
+        part: "accessory",
+        layerIds: [target!.id],
+        rationale: ["图层轮廓完整，自动命名不足以判断语义，因此由外部 Agent 显式指定。"],
+        intent: {
+          amplitude: 0.45,
+          response: 0.56,
+          stability: 0.64,
+          lagResponse: 7.4,
+          lagDamping: 0.78,
+          deformationScale: 0.82
+        }
+      }]
+    }));
+
+    const planned = await cli(["agent", "plan", "--project", unknownProject, "--spec", specificationPath, "--json"]);
+    expect(planned.code).toBe(0);
+    expect(JSON.parse(planned.stdout)).toMatchObject({
+      canApply: true,
+      parts: [{ part: "accessory", status: "ready", targetLayerIds: [target!.id] }]
+    });
   }, 120_000);
 
   it("keeps every whole-model responsibility visible and blocks omitted available parts", async () => {
@@ -307,10 +385,32 @@ describe("CLI contract", () => {
       revision: number;
       parameters: Array<{ id: string }>;
       bindings: Array<{ id: string }>;
+      layerOrder: Array<{ layerId: string; order: number }>;
     };
     expect(reopened.revision).toBe(result.revision);
     expect(reopened.parameters.some((parameter) => parameter.id === "expression-smile")).toBe(true);
     expect(reopened.bindings.some((binding) => binding.id === "expression-smile-opacity")).toBe(true);
+
+    const target = reopened.layerOrder[0]!;
+    const reference = reopened.layerOrder.at(-1)!;
+    const orderPatch = resolve(files, "layer-order.json");
+    await writeFile(orderPatch, JSON.stringify({
+      version: 1,
+      baseRevision: reopened.revision,
+      label: "Move a complete layer in back-to-front order",
+      operations: [{ op: "move-layer", layerId: target.layerId, afterLayerId: reference.layerId }]
+    }));
+    const moved = await cli(["author", "apply", "--project", cliProject, "--patch", orderPatch, "--json"]);
+    expect(moved.code).toBe(0);
+    const movedResult = JSON.parse(moved.stdout) as { revision: number; session: { patch: { authoring: { operations: Array<{ op: string }> } } } };
+    expect(movedResult.revision).toBe(reopened.revision + 1);
+    expect(movedResult.session.patch.authoring.operations).toEqual(expect.arrayContaining([expect.objectContaining({ op: "move-layer" })]));
+    const reordered = JSON.parse((await cli(["author", "inspect", "--project", cliProject, "--json"])).stdout) as {
+      revision: number;
+      layerOrder: Array<{ layerId: string; order: number }>;
+    };
+    expect(reordered.revision).toBe(movedResult.revision);
+    expect(reordered.layerOrder.at(-1)?.layerId).toBe(target.layerId);
   }, 120_000);
 
   it("exports the effective AI-authored revision as a verified portable directory", async () => {
@@ -386,7 +486,6 @@ describe("CLI contract", () => {
       rejected: [
         { requestId: "closed-eye-left" },
         { requestId: "closed-eye-right" },
-        { requestId: "mouth-neutral" },
         { requestId: "mouth-slight" },
         { requestId: "mouth-open-small" }
       ]

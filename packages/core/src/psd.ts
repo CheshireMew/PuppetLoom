@@ -4,6 +4,7 @@ import { initializeCanvas, readPsd, type Layer, type Psd } from "ag-psd";
 import { analyzeAlphaComponents, pixelsForComponents, unionComponentBounds, type AlphaComponent, type AlphaComponentAnalysis } from "./alpha-components.js";
 import { classifyLayerName, inferSideFromCenter, pairedRoles } from "./classify.js";
 import { PuppetLoomError } from "./errors.js";
+import { detectLayerOrderIssues } from "./layer-order.js";
 import { stableSlug } from "./math.js";
 import type { AlphaCleanupMode, ImportPreflightSummary, InspectionReport, LayerImportAlphaAnalysis, LayerInspection, PairSplitMethod, Point, Rect, SemanticRole, Side, Size } from "./types.js";
 
@@ -479,6 +480,7 @@ export async function importPsd(input: string, options: ImportPsdOptions = {}): 
     : `保留了 ${preflight.suspectedDetailComponentCount} 个可能属于高光、发丝或装饰的微小区域，共 ${preflight.suspectedDetailPixelCount} 个像素。`);
   if (preflight.fallbackSplitCount > 0) warnings.push(`${preflight.fallbackSplitCount} 个成对图层发生粘连，已退回按脸部中心切分。`);
   if (preflight.singleSideCount > 0) warnings.push(`${preflight.singleSideCount} 个成对图层只检测到单侧有效内容，已保留为单侧图层。`);
+  for (const issue of detectLayerOrderIssues(layers)) warnings.push(issue.message);
   const composite = compositePixels(psd);
 
   return {
@@ -509,6 +511,7 @@ export function inspectionFromImported(imported: ImportedPsd): InspectionReport 
     sourcePath: layer.sourcePath,
     role: layer.role,
     side: layer.side,
+    order: layer.order,
     bounds: layer.bounds,
     opaquePixels: layer.opaquePixels,
     visible: true,
@@ -532,6 +535,7 @@ export function inspectionFromImported(imported: ImportedPsd): InspectionReport 
     }
   }));
   const unknownLayerCount = layers.filter((layer) => layer.role === "unknown").length;
+  const layerOrderIssues = detectLayerOrderIssues(imported.layers);
   return {
     valid: true,
     input: imported.input,
@@ -542,6 +546,7 @@ export function inspectionFromImported(imported: ImportedPsd): InspectionReport 
     suggestedRigLevel: suggestedRigLevel(imported.layers),
     preflight: imported.preflight ?? summarizePreflight(imported.layers, [], "automatic"),
     layers,
+    layerOrderIssues,
     warnings: imported.warnings
   };
 }

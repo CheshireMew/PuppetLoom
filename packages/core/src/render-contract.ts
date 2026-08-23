@@ -4,6 +4,20 @@ import type { LayerBinding, MotionState, PuppetLoomProject } from "./types.js";
 
 const eyeSurfaceRoles = new Set(["eyeWhite", "iris", "eyelash"]);
 
+/**
+ * Missing replacement art must leave the painted neutral face intact. Runtime
+ * inputs and review timelines may still contain blink or mouth values, but a
+ * project that explicitly disables those features cannot safely render them.
+ */
+export function featureGatedMotionState(project: PuppetLoomProject, state: MotionState): MotionState {
+  const resolved = resolveMotionState(project, state);
+  return {
+    ...resolved,
+    blink: project.runtime.features.blink ? resolved.blink : 0,
+    mouthOpen: project.runtime.features.mouthMotion ? resolved.mouthOpen : 0
+  };
+}
+
 function eyeSurfaceRank(layer: LayerBinding): number {
   if (layer.role === "eyeWhite") return 0;
   if (layer.role === "iris") return 1;
@@ -23,7 +37,7 @@ export function layersInRenderOrder(layers: LayerBinding[]): LayerBinding[] {
 
 /** Authoring-aware order used by all renderers. */
 export function authoredLayersInRenderOrder(project: PuppetLoomProject, state: MotionState): LayerBinding[] {
-  const resolved = resolveMotionState(project, state);
+  const resolved = featureGatedMotionState(project, state);
   const offsets = new Map(project.layers.map((layer) => [layer.id, evaluateLayerAuthoring(project, layer, resolved).drawOrderOffset]));
   const authoredOrder = (layer: LayerBinding): number => layer.order + (offsets.get(layer.id) ?? 0);
   const face = project.layers.find((layer) => layer.role === "face");
@@ -56,7 +70,7 @@ export function opacityFor(layer: LayerBinding, state: MotionState): number {
 
 /** Authoring-aware opacity used by all renderers. */
 export function authoredOpacityFor(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): number {
-  const resolved = resolveMotionState(project, state);
+  const resolved = featureGatedMotionState(project, state);
   return Math.max(0, Math.min(1, opacityFor(layer, resolved) * evaluateLayerAuthoring(project, layer, resolved).opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
 }
 
@@ -74,7 +88,7 @@ export interface AuthoredRenderFrame {
 
 /** Resolves parameters and expensive authored geometry once for an entire render frame. */
 export function authoredRenderFrame(project: PuppetLoomProject, state: MotionState): AuthoredRenderFrame {
-  const resolved = resolveMotionState(project, state);
+  const resolved = featureGatedMotionState(project, state);
   const authoringByLayerId = new Map(project.layers.map((layer) => [layer.id, evaluateLayerAuthoringResolved(project, layer, resolved)]));
   const authoredOrder = (layer: LayerBinding): number => layer.order + (authoringByLayerId.get(layer.id)?.drawOrderOffset ?? 0);
   const face = project.layers.find((layer) => layer.role === "face");

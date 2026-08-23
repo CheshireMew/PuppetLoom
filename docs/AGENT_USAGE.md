@@ -77,7 +77,7 @@ node $cli runtime release --viewer 1 --source agent-demo --json
 node $cli author inspect --project E:\Puppets\CharacterName --json
 ```
 
-不要直接拼改整份 `puppetloom.json`。`author apply` 接受按顺序执行的高层操作，现支持参数、绑定、旋转/网格变形器、图层挂接、表情、参数物理和行为的新增、更新与删除。下面的补丁增加一个笑容参数，并把它绑定到一个图层顶点；实际点位必须来自同一 revision 的 `describe --layer`：
+不要直接拼改整份 `puppetloom.json`。`author apply` 接受按顺序执行的高层操作，现支持参数、绑定、旋转/网格变形器、图层挂接、基础图层顺序、表情、参数物理和行为的新增、更新与删除。下面的补丁增加一个笑容参数，并把它绑定到一个图层顶点；实际点位必须来自同一 revision 的 `describe --layer`：
 
 ```json
 {
@@ -115,6 +115,12 @@ node $cli author inspect --project E:\Puppets\CharacterName --json
 
 ```powershell
 node $cli author apply --project E:\Puppets\CharacterName --patch E:\Puppets\authoring.json --json
+```
+
+完整独立图层的遮挡顺序错误使用 `move-layer`：`beforeLayerId` 把目标放到参照层后面，`afterLayerId` 把目标放到参照层前面，二者必须且只能提供一个。操作会重新编号基础绘制顺序并保存为 revision，不改写源 PSD；前后内容已经粘在同一图层时不能用它伪装修复。
+
+```json
+{ "op": "move-layer", "layerId": "back-hair", "beforeLayerId": "neck" }
 ```
 
 操作按数组顺序执行，最终整图一次验证和提交。删除仍被引用的参数、变形器或表情会失败；确实要清理依赖链时必须在对应删除操作中显式写 `"cascade": true`。过期 `baseRevision`、不完整的双参数关键形态网格、循环变形器/物理依赖、越界参数和不存在的目标都不会写入。

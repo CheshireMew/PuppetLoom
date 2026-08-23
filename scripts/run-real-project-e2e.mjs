@@ -12,7 +12,7 @@ async function visibleVariation(image) {
   const statistics = await sharp(image).stats();
   return statistics.channels.slice(0, 3).reduce((sum, channel) => sum + channel.stdev, 0);
 }
-await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "测试结论仍然独立；来源素材和纹理通过只读硬链接复用，校准与项目清单保持可写副本。" } }, async (artifactRun) => {
+await executeManagedRun({ category: "real-project", producer: "scripts/run-real-project-e2e.mjs", evidence: { command: "node scripts/run-real-project-e2e.mjs [project]", scope: "真实项目桌面用户链" }, estimatedBytes: 512 * 1024 ** 2, maximumRelativePathLength: 168, reuse: { applicable: false, reason: "测试结论仍然独立；来源素材和纹理通过只读硬链接复用，校准与项目清单保持可写副本。" } }, async (artifactRun) => {
 const project = artifactRun.path(`project-${basename(source)}`);
 const screenshot = artifactRun.path("editor.png");
 const neutralActionScreenshot = artifactRun.path("viewer-action-neutral.png");

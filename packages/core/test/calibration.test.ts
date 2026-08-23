@@ -14,8 +14,10 @@ import {
   loadCalibrationDraft,
   loadCalibrationWorkspace,
   loadProject,
+  loadProjectRevision,
   restoreCalibrationRevision,
   renderProjectSuite,
+  renderProjectSuiteFromProject,
   saveCalibrationPatch,
   saveCalibrationDraft,
   setCalibrationEvidenceStatus,
@@ -133,6 +135,51 @@ describe("project calibration", () => {
     expect(comparison.visualDifference.meanAbsoluteDifference).toBeGreaterThanOrEqual(0);
     expect(comparison.visualDifference.significantPixelRatio).toBeLessThanOrEqual(comparison.visualDifference.changedPixelRatio);
   });
+
+  it("renders authored independent-ear follow instead of the merged-ear fallback", async () => {
+    const project = await loadProjectRevision(output, 1);
+    const ear = project.layers.find((layer) => layer.role === "accessory")!;
+    ear.role = "ear";
+    ear.side = "left";
+    const parameterId = "param-test-independent-ear-follow";
+    project.model!.parameters.push({
+      id: parameterId,
+      name: "Independent Ear Follow",
+      group: "Test",
+      kind: "continuous",
+      min: -1,
+      default: 0,
+      max: 1
+    });
+    project.model!.bindings.push({
+      id: "test-independent-ear-follow",
+      parameterIds: [parameterId],
+      target: { kind: "layer", id: ear.id },
+      keyforms: [
+        { values: [-1], transform: { translation: { x: -0.01, y: 0 } } },
+        { values: [0] },
+        { values: [1], transform: { translation: { x: 0.01, y: 0 } } }
+      ]
+    });
+    project.model!.physics.push({
+      id: "test-independent-ear-physics",
+      inputParameterId: "param-head-yaw",
+      outputParameterId: parameterId,
+      inputScale: 1,
+      outputScale: 1,
+      response: 10,
+      damping: 0.8
+    });
+    const evidence = resolve(output, "reports", "calibration", "independent-ear-motion");
+    const suite = await renderProjectSuiteFromProject(output, project, evidence, "motion", 1);
+    const left = suite.artifacts.find((artifact) => artifact.id === "ear-left")!;
+    const neutral = suite.artifacts.find((artifact) => artifact.id === "motion-neutral")!;
+    const right = suite.artifacts.find((artifact) => artifact.id === "ear-right")!;
+    expect(left.state?.parameters).toEqual({ [parameterId]: -0.8 });
+    expect(right.state?.parameters).toEqual({ [parameterId]: 0.8 });
+    expect(left.sha256).not.toBe(neutral.sha256);
+    expect(right.sha256).not.toBe(neutral.sha256);
+  }, 120_000);
 
   it("renders native high-resolution semantic close-ups for external Agents", async () => {
     const evidence = resolve(output, "reports", "calibration", "high-resolution-head");

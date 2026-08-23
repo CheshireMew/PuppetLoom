@@ -32,6 +32,8 @@ PSD + 可选原图
 
 `core` 是唯一创建真源。它负责：
 
+项目持久化不再集中在单个实现文件中：`project-create.ts` 只负责旁路创建与发布，`project-store.ts` 只负责基线、当前校准和草稿读写，`project-description.ts` 负责稳定的检查视图，`calibration-store.ts` 负责锁、持久事务、revision、会话和恢复。`project.ts` 只是这四个职责模块的公开出口，外部调用仍保持兼容。
+
 - 用 `ag-psd` 读取原始像素数据，遍历嵌套图层并继承分组可见性和透明度；
 - 把 8、16 和 32 位像素转换到运行纹理，应用可读取的位图或矢量蒙版；
 - 对每层 Alpha 做四连通区域预检，报告边界、质心、确定噪点、疑似绘画细节与实际拆分依据；默认只清理透明度很低、范围极小且与主体断开的高置信度噪点，疑似高光、发丝和装饰的区域继续保留；调用者可以显式保留全部区域或激进清理全部微小区域，源 PSD 始终不改；
@@ -68,11 +70,15 @@ PSD + 可选原图
 
 ### `apps/cli`
 
-CLI 是 Codex 一类外部 Agent 和自动化系统的唯一编排入口。命令只调用 `core`：`agent specification` 为当前 revision 生成明确的数值规格模板，外部 Agent 负责结合自然语言与画面填写它；顶层 `agent plan/apply --spec` 只验证并确定性执行规格，依次调用头脸/表情、前发和次级运动制作器。计划阶段只读，执行阶段让每个存在的部位形成独立可恢复 revision、局部前后对比和连续运动证据，最后重新 `verifyProject` 并汇总 `completed/not-present/needs-assets/blocked`、`verification` 与总阻断项。旧 `--instruction/--scope` 只为调用兼容保留，不承担正式的语言理解和审美判断。`actions` 生成幂等标准表演库；`runtime` 通过本机回环服务控制已打开窗口并录制/回放输入；`benchmark` 批量检查登记的真实角色。`describe` 读取稳定的控制点、图层和网格 ID；`author inspect/apply` 读取并事务修改参数图；`render` 生成视觉证据；`calibrate` 保存经过安全检查的稀疏修改；`compare/history/restore/evidence` 负责审计与用户确认；`export` 发布验证后的目录式副本；`cubism` 分析兼容范围、连接 Editor、生成交接与侧车并最终验证官方运行时目录；`edit/play` 启动同一 Electron 应用。错误在最外层统一映射为退出码，JSON 错误写到标准错误。
+CLI 是 Codex 一类外部 Agent 和自动化系统的唯一编排入口。39 行的 `index.ts` 只建立 Commander 根命令、登记业务域并统一处理最外层错误；`commands/input-project.ts` 管 PSD、创建、验证和基准，`commands/runtime.ts` 管实时控制与输入回放，`commands/cubism.ts` 管官方 Editor/运行时链，`commands/authoring.ts` 管扩展、表演库和 Agent 制作，`commands/project-workflow.ts` 管迁移、证据、revision 与桌面启动；进程、JSON 和桌面启动适配集中在 `cli-support.ts`。
+
+这些命令只调用 `core`：`agent specification` 为当前 revision 生成明确的数值规格模板，外部 Agent 负责结合自然语言与画面填写它；顶层 `agent plan/apply --spec` 只验证并确定性执行规格，依次调用头脸/表情、前发和次级运动制作器。计划阶段只读，执行阶段让每个存在的部位形成独立可恢复 revision、局部前后对比和连续运动证据，最后重新 `verifyProject` 并汇总 `completed/not-present/needs-assets/blocked`、`verification` 与总阻断项。旧 `--instruction/--scope` 只为调用兼容保留，不承担正式的语言理解和审美判断。`actions` 生成幂等标准表演库；`runtime` 通过本机回环服务控制已打开窗口并录制/回放输入；`benchmark` 批量检查登记的真实角色。`describe` 读取稳定的控制点、图层和网格 ID；`author inspect/apply` 读取并事务修改参数图；`render` 生成视觉证据；`calibrate` 保存经过安全检查的稀疏修改；`compare/history/restore/evidence` 负责审计与用户确认；`export` 发布验证后的目录式副本；`cubism` 分析兼容范围、连接 Editor、生成交接与侧车并最终验证官方运行时目录；`edit/play` 启动同一 Electron 应用。
 
 ### `apps/desktop`
 
-Electron 主进程只编排应用和窗口生命周期，不接收自然语言任务，也不运行 Agent 计划或执行。创建器与编辑器由同一个显式 `frame: false` 的控制窗口承载；主进程拥有最小化、最大化、还原、关闭和实际窗口状态，预加载层只暴露受限的窗口外壳 IPC，React 的 `WindowTitleBar` 负责呈现和发起动作。关闭动作仍进入 BrowserWindow 的正常 `close` 流程，因此编辑器原有的草稿刷新拦截不会被绕过。`project-ipc.ts` 封装文件对话框、项目发布、最近项目和受目录边界约束的资源读取；`calibration-ipc.ts` 封装编辑器 IPC、草稿串行化和证据读取，实际持久事务只由 `core` 执行。预加载脚本只暴露明确 IPC，React 界面不含直接文件系统权限；草稿自动保存和关窗刷新集中在 `useEditorDraftPersistence`，`EditorPresentation` 把图层树、画布覆盖层、authoring 检查、证据预览、属性与历史面板保持为无持久化职责的展示组件，`EditorWorkspace` 只编排编辑状态和操作。编辑器让用户在真实 WebGL 合成上用指针或键盘调整语义控制点、身体锚点、图层轴心、次级锚点与网格顶点，并只读核对外部 Agent 写入的参数、绑定、变形器、表情、物理和行为。渲染层通过 `updateProject` 即时预览，不重复上传纹理。角色窗口以 10 Hz 把系统光标目标写成带短 TTL 的 `pointer` 运行源，MediaPipe 与麦克风也只发送数值，不把原始媒体写入项目；所有来源变化通过同一快照进入渲染器，实时动作在 60 Hz 内部阻尼补间。按需录制动作数据时会先保存已有来源，再按时间追加后续事件；回放要求兼容 revision，只向渲染器呈现本次回放源，结束后恢复仍有效的实时源。MediaRecorder 直接捕获最终 Canvas，按秒把 WebM 分块交给主进程追加写盘；应用异常退出时留下可恢复 partial 和报告。暂停时播放时钟扣除停顿时长，恢复不会跳相位。
+Electron 主进程只编排应用和窗口生命周期，不接收自然语言任务，也不运行 Agent 计划或执行。创建器与编辑器由同一个显式 `frame: false` 的控制窗口承载；主进程拥有最小化、最大化、还原、关闭和实际窗口状态，预加载层只暴露受限的窗口外壳 IPC，React 的 `WindowTitleBar` 负责呈现和发起动作。关闭动作仍进入 BrowserWindow 的正常 `close` 流程，因此编辑器原有的草稿刷新拦截不会被绕过。`project-ipc.ts` 封装文件对话框、项目发布、最近项目和受目录边界约束的资源读取；`calibration-ipc.ts` 封装编辑器 IPC、草稿串行化和证据读取，实际持久事务只由 `core` 执行。
+
+预加载脚本只暴露明确 IPC，React 界面不含直接文件系统权限。编辑器草稿自动保存和关窗刷新集中在 `useEditorDraftPersistence`；网格选择、拖动、姿态关键形、参数/物理修改和 ArtMesh 升级集中在 `useEditorEditingTools`；`EditorWorkspaceModel` 保存纯预设与坐标工具；`EditorPresentation` 和 `EditorStudioPanels` 只呈现图层树、画布覆盖、检查、证据、属性与历史。`EditorWorkspace` 负责项目生命周期、WebGL 预览、历史和这些模块之间的组合，不再同时实现全部网格算法。编辑器让用户在真实 WebGL 合成上用指针或键盘调整语义控制点、身体锚点、图层轴心、次级锚点与网格顶点，并只读核对外部 Agent 写入的参数、绑定、变形器、表情、物理和行为。渲染层通过 `updateProject` 即时预览，不重复上传纹理。角色窗口以 10 Hz 把系统光标目标写成带短 TTL 的 `pointer` 运行源，MediaPipe 与麦克风也只发送数值，不把原始媒体写入项目；所有来源变化通过同一快照进入渲染器，实时动作在 60 Hz 内部阻尼补间。按需录制动作数据时会先保存已有来源，再按时间追加后续事件；回放要求兼容 revision，只向渲染器呈现本次回放源，结束后恢复仍有效的实时源。MediaRecorder 直接捕获最终 Canvas，按秒把 WebM 分块交给主进程追加写盘；应用异常退出时留下可恢复 partial 和报告。暂停时播放时钟扣除停顿时长，恢复不会跳相位。
 
 `puppetloom.json` 始终保留可复现的自动绑定基线。创建器先在同级 pending 目录生成、强验证，再以目录移动作为发布点；目标原先为空时也先移动到操作归档，不删除。`calibration/current.json` 只记录偏离基线的内容和唯一历史头；`loadProject` 返回基线与覆盖合成结果。稀疏点位、权重和运行参数之外，校准层也允许保存完整替换网格，用于把旧项目从矩形网格非破坏式升级为 Alpha ArtMesh；替换仍经过同一 schema、安全姿态和视觉证据边界。校准先写 pending 操作、生成并校验证据、写不可达会话，最后原子切换当前头。这样恢复自动绑定不需要猜测旧数值，并发和中断也不会形成两个“当前版本”。用户在界面中的一次保存与 Agent 通过 CLI 的一次修改进入同一修订链，接受或拒绝状态记录在会话中，但单个角色的接受记录不会自动变成所有角色的通用规则。
 

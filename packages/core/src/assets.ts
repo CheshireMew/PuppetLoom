@@ -49,9 +49,11 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
       crop,
       reference: { path: `requests/references/${id}.png` },
       output: { path: `supplements/${id}.png`, width: crop.width, height: crop.height, transparent: true },
-      prompt: `Using the reference crop, draw only this character's ${side} eye gently closed in the same position and style. Put only the eyelid and lashes on a clean pure white background.`,
+      prompt: `Using the original character art, the current PSD recomposition, and this reference crop together, draw only this character's ${side} eye gently closed at the requested position. Match the original line weight, full upper-lash volume, outer-corner shape, shading, color treatment, and antialiasing; a single curved line is not acceptable. Put only the complete closed eyelid and lashes on a clean pure white background.`,
       constraints: [
         "不得包含皮肤、眉毛、头发或另一只眼睛。",
+        "闭眼必须保留原画完整上睫毛体量和眼角结构，不能简化成一条弧线。",
+        "眉毛是独立图层，不得画进闭眼素材，也不得用闭眼切换隐藏眉毛。",
         "生图阶段使用纯白背景，接入前抠成真实透明 PNG。"
       ],
       validation: { requireAlpha: true, minOpaqueCoverage: 0.002, maxOpaqueCoverage: 0.32 }
@@ -70,10 +72,12 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
     const x = Math.max(0, Math.min(project.canvas.width - cropWidth, Math.round(centerX - cropWidth * 0.5)));
     const y = Math.max(0, Math.min(project.canvas.height - cropHeight, Math.round(centerY - cropHeight * 0.5)));
     const crop = { x, y, width: cropWidth, height: cropHeight };
-    for (const variant of ["closed", "slight", "open"] as const) {
-      if (variant === "closed" ? project.layers.some((layer) => layer.id === "mouth-neutral") : project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
-      const id = variant === "closed" ? "mouth-neutral" : variant === "slight" ? "mouth-slight" : "mouth-open-small";
-      const description = variant === "closed" ? "closed with a very subtle, relaxed smile" : variant === "slight" ? "slightly open with the same subtle smile" : "open a small, natural amount with the same subtle smile";
+    // The imported mouth is already the authoritative closed pose. Requesting
+    // another closed drawing would duplicate it and can alter the neutral face.
+    for (const variant of ["slight", "open"] as const) {
+      if (project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
+      const id = variant === "slight" ? "mouth-slight" : "mouth-open-small";
+      const description = variant === "slight" ? "slightly open with the same subtle smile" : "open a small, natural amount with the same subtle smile";
       requests.push({
         id,
         kind: "mouth-shape",
@@ -83,9 +87,10 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
         crop,
         reference: { path: `requests/references/${id}.png` },
         output: { path: `supplements/${id}.png`, width: crop.width, height: crop.height, transparent: true },
-        prompt: `Using the reference crop, draw only this character's mouth ${description} in the same position and style. Put only the mouth on a clean pure white background.`,
+        prompt: `Using the original character art, the current PSD recomposition, and this reference crop together, draw only this character's mouth ${description} at the requested position. Match the original line weight, lip and mouth colors, shading, edge softness, and antialiasing. The existing closed mouth is authoritative and must not be redrawn. Put only the requested mouth shape on a clean pure white background.`,
         constraints: [
           "不得包含脸、鼻子、头发或背景。",
+          "严格继承原画画风，不得把嘴形简化成与原图不一致的符号或线条。",
           "保持中立表情，不露齿；接入前抠成真实透明 PNG。"
         ],
         validation: { requireAlpha: true, minOpaqueCoverage: 0.002, maxOpaqueCoverage: 0.35 }
@@ -167,10 +172,6 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
       await mkdir(dirname(target), { recursive: true });
       await copyFile(candidate, target);
       layers.push(supplementalLayer(request, project, existing));
-      if (request.kind === "mouth-shape" && request.variant === "closed") {
-        const existingIndex = layers.findIndex((layer) => layer.id === existing.id);
-        if (existingIndex >= 0) layers[existingIndex] = { ...layers[existingIndex]!, opacity: 0 };
-      }
       accepted.push(request.id);
     } catch (error) {
       rejected.push({ requestId: request.id, reason: error instanceof Error ? error.message : "无法读取补充素材。" });
@@ -178,7 +179,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
   }
 
   const blinkEnabled = ["left", "right"].every((side) => layers.some((layer) => layer.role === "eyeClosed" && layer.side === side));
-  const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant && layer.opacity > 0));
+  const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && (layer.mouthVariant ?? "closed") === variant && layer.opacity > 0));
   const nextProject: PuppetLoomProject = {
     ...project,
     version: PUPPETLOOM_PROJECT_VERSION,

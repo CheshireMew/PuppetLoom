@@ -3,7 +3,7 @@ import { createProject } from "@puppetloom/core";
 import { _electron as electron } from "playwright";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 
-await executeManagedRun({ category: "performance", producer: "scripts/run-performance-check.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "帧时间与运行环境绑定，每次测量都是独立性能证据。" } }, async (artifactRun) => {
+await executeManagedRun({ category: "performance", producer: "scripts/run-performance-check.mjs", evidence: { command: "node scripts/run-performance-check.mjs", scope: "23 图层桌面渲染性能检查" }, estimatedBytes: 512 * 1024 ** 2, maximumRelativePathLength: 152, reuse: { applicable: false, reason: "帧时间与运行环境绑定，每次测量都是独立性能证据。" } }, async (artifactRun) => {
 const output = artifactRun.path("project");
 await createProject({ input: resolve("test/fixtures/performance-23.psd"), output, seed: 42 });
 

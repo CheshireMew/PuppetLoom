@@ -54,6 +54,34 @@ describe("authoring operations", () => {
     expect(removed.model.bindings).toHaveLength(0);
   });
 
+  it("moves complete layers in recoverable back-to-front order without mutating the baseline", () => {
+    const before = fixture();
+    const face = before.layers[0]!;
+    before.layers = [
+      { ...face, id: "face", sourceName: "face", sourcePath: ["face"], role: "face", order: 0 },
+      { ...face, id: "brow", sourceName: "brow", sourcePath: ["brow"], role: "eyebrow", order: 1 },
+      { ...face, id: "neck", sourceName: "neck", sourcePath: ["neck"], role: "neck", order: 2 },
+      { ...face, id: "back-hair", sourceName: "back_hair", sourcePath: ["back_hair"], role: "backHair", order: 3 }
+    ];
+    const after = applyAuthoringOperations(before, [
+      { op: "move-layer", layerId: "back-hair", beforeLayerId: "face" }
+    ]);
+    expect(after.layers.map((layer) => layer.id)).toEqual(["back-hair", "face", "brow", "neck"]);
+    expect(after.layers.map((layer) => layer.order)).toEqual([0, 1, 2, 3]);
+    expect(before.layers.map((layer) => layer.id)).toEqual(["face", "brow", "neck", "back-hair"]);
+    expect(authoringLayerOverrides(before, after)).toMatchObject({
+      "back-hair": { order: 0 },
+      face: { order: 1 },
+      brow: { order: 2 },
+      neck: { order: 3 }
+    });
+  });
+
+  it("rejects ambiguous or self-referencing layer moves", () => {
+    expect(() => applyAuthoringOperations(fixture(), [{ op: "move-layer", layerId: "face" }])).toThrow(/必须且只能/);
+    expect(() => applyAuthoringOperations(fixture(), [{ op: "move-layer", layerId: "face", beforeLayerId: "face" }])).toThrow(/不能引用自身/);
+  });
+
   it("turns keyform coordinates into visual evidence previews and persists intent in calibration", () => {
     const before = fixture();
     const patch = {

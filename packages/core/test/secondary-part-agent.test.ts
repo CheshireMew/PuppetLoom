@@ -72,6 +72,31 @@ describe("secondary part Agent", () => {
     expect(proposal.checks.every((check) => check.passed)).toBe(true);
   });
 
+  it("lets an explicit accessory specification adopt an otherwise unknown layer", () => {
+    const fixture = project();
+    fixture.layers = [
+      ...fixture.layers.filter((candidate) => candidate.role !== "accessory"),
+      layer("wings", "unknown", 0.47, 0.52, 0.08, 0.24)
+    ];
+    const proposal = createSecondaryPartAgentProposal(fixture, {
+      part: "accessory",
+      layerIds: ["wings"],
+      instruction: "把四片翅膀作为明确配饰轻微跟随",
+      intent: {
+        amplitude: 0.45,
+        response: 0.56,
+        stability: 0.64,
+        lagResponse: 7.4,
+        lagDamping: 0.78,
+        deformationScale: 0.82,
+        explanation: ["自动语义没有识别翅膀，但图层轮廓和根部清楚。"]
+      }
+    });
+
+    expect(proposal.layers.map((candidate) => candidate.id)).toEqual(["wings"]);
+    expect(proposal.checks.every((check) => check.passed)).toBe(true);
+  });
+
   it("executes an external Agent's stronger tail intent and records deterministic repair passes", () => {
     const proposal = createSecondaryPartAgentProposal(project(), {
       part: "tail",
@@ -100,6 +125,26 @@ describe("secondary part Agent", () => {
     const rigidity = proposal.checks.find((check) => check.id === "rigid-root-hinge")!;
     expect(rigidity.details.maximumRadialError).toBeLessThanOrEqual(1e-8);
     expect(rigidity.details.maximumAngularSpread).toBeLessThanOrEqual(1e-5);
+  });
+
+  it("authors separate ears as rigid root rotations without the procedural flap", () => {
+    const proposal = createSecondaryPartAgentProposal(project(), { part: "ears", instruction: "精灵耳以贴脸端为根轻微跟随" });
+    const ear = proposal.layers.find((candidate) => candidate.role === "ear")!;
+    const proposedEar = proposal.project.layers.find((candidate) => candidate.id === ear.id)!;
+    const binding = proposal.operations.find((operation) => operation.op === "upsert-binding"
+      && operation.binding.id.includes("agent-ears-direct"));
+
+    expect(binding?.op).toBe("upsert-binding");
+    expect(proposedEar.weights.physics).toBe(0);
+    if (binding?.op !== "upsert-binding") return;
+    for (const keyform of binding.binding.keyforms.filter((candidate) => candidate.values[0] !== 0)) {
+      for (const [index, base] of ear.mesh.points.entries()) {
+        const delta = keyform.meshPointDeltas?.[String(index)] ?? { x: 0, y: 0 };
+        const beforeRadius = Math.hypot(base.x - ear.pivot.x, base.y - ear.pivot.y);
+        const afterRadius = Math.hypot(base.x + delta.x - ear.pivot.x, base.y + delta.y - ear.pivot.y);
+        expect(Math.abs(afterRadius - beforeRadius)).toBeLessThanOrEqual(1e-7);
+      }
+    }
   });
 
   it("locks the clothing waist, reduces skirt amplitude, and places merged back bows behind overlapping arms", () => {

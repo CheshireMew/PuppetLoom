@@ -130,4 +130,29 @@ describe("rig attachment pivots", () => {
       earHingeRight: { x: 0.594, y: 0.33 }
     });
   });
+
+  it("does not treat headwear side details as merged ears when separate ear layers exist", () => {
+    const imported: ImportedPsd = {
+      input: "fixture.psd",
+      fileName: "fixture.psd",
+      canvas: { width: 1000, height: 1000 },
+      warnings: [],
+      layers: [
+        importedLayer("headwear", "headwear", "center", 300, 120, 400, 300),
+        importedLayer("ear-left", "ear", "left", 600, 260, 100, 60),
+        importedLayer("ear-right", "ear", "right", 300, 260, 100, 60),
+        importedLayer("face", "face", "center", 400, 200, 200, 260)
+      ]
+    };
+    const project = buildRig({
+      imported,
+      name: "fixture",
+      seed: 42,
+      source: { originalFileName: "fixture.psd", psdSha256: "fixture", psdPath: "source/source.psd" }
+    });
+
+    expect(project.layers.find((layer) => layer.role === "headwear")?.secondaryAnchors).toBeUndefined();
+    expect(project.layers.find((layer) => layer.id === "ear-left")?.pivot).toEqual({ x: 0.6, y: 0.2852 });
+    expect(project.layers.find((layer) => layer.id === "ear-right")?.pivot).toEqual({ x: 0.4, y: 0.2852 });
+  });
 });

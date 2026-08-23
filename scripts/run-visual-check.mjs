@@ -5,7 +5,7 @@ import { _electron as electron } from "playwright";
 import sharp from "sharp";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 
-await executeManagedRun({ category: "visual", producer: "scripts/run-visual-check.mjs", estimatedBytes: 512 * 1024 ** 2, reuse: { applicable: false, reason: "截图和 GPU 上下文属性用于证明本轮实际渲染，不跨运行复用。" } }, async (artifactRun) => {
+await executeManagedRun({ category: "visual", producer: "scripts/run-visual-check.mjs", evidence: { command: "node scripts/run-visual-check.mjs", scope: "编辑器与查看器视觉/GPU 检查" }, estimatedBytes: 512 * 1024 ** 2, maximumRelativePathLength: 152, reuse: { applicable: false, reason: "截图和 GPU 上下文属性用于证明本轮实际渲染，不跨运行复用。" } }, async (artifactRun) => {
 const output = artifactRun.path("project");
 const firstPath = artifactRun.path("viewer-a.png");
 const secondPath = artifactRun.path("viewer-b.png");

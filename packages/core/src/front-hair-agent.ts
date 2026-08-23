@@ -911,6 +911,7 @@ function operationId(operation: AuthoringOperation): string {
   if (operation.op === "upsert-expression") return operation.expression.id;
   if (operation.op === "upsert-behavior") return operation.behavior.id;
   if (operation.op === "set-layer-deformer") return operation.layerId;
+  if (operation.op === "move-layer") return operation.layerId;
   return operation.id;
 }
 

@@ -80,6 +80,30 @@ describe("primary model Agent", () => {
     expect(mouth.operations.filter((operation) => operation.op === "upsert-expression")).toHaveLength(3);
   });
 
+  it("reports the exact failed pose ids and reasons instead of only a count", () => {
+    const value = project();
+    const iris = value.layers.find((candidate) => candidate.id === "iris-left")!;
+    iris.bounds.x = 1.2;
+    iris.mesh = makeGridMesh(iris.bounds, 5, 5);
+    const proposal = createPrimaryPartAgentProposal(value, { part: "eyes", instruction: "自然" });
+    const poseSafety = proposal.checks.find((check) => check.id === "pose-safety")!;
+    expect(poseSafety.passed).toBe(false);
+    expect(poseSafety.details.failedPoseIds).toContain("neutral");
+    expect(poseSafety.details.failureReasons).toContain("超出安全画布");
+  });
+
+  it("does not enlarge an existing gaze envelope while adding blink authoring", () => {
+    const value = project();
+    value.runtime.envelope.gazeX = 0.064;
+    value.runtime.envelope.gazeY = 0.04;
+    const proposal = createPrimaryPartAgentProposal(value, {
+      part: "eyes",
+      instruction: "自然眨眼",
+      intent: { amplitude: 0.7, response: 0.82, stability: 0.9, explanation: [] }
+    });
+    expect(proposal.overrides.runtime?.envelope).toMatchObject({ gazeX: 0.064, gazeY: 0.04 });
+  });
+
   it("carries head contour, depth and occlusion decisions into runtime calibration", () => {
     const value = project();
     value.runtime.poseField = { kind: "ellipsoid-v1", center: { x: 0.5, y: 0.3 }, radiusX: 0.2, radiusY: 0.22, maxYawRadians: 0.2, maxPitchRadians: 0.2, perspective: 0.12 };

@@ -2,9 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, link, mkdir, open, readFile, readdir, rename, rm, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
+import { createRunEvidence } from "./run-evidence.mjs";
 
 export const DEFAULT_MAXIMUM_MANAGED_BYTES = 2 * 1024 ** 3;
 export const DEFAULT_MINIMUM_FREE_BYTES = 2 * 1024 ** 3;
+export const DEFAULT_MAXIMUM_PATH_LENGTH = 240;
+const RESERVED_RUN_ID_LENGTH = 32;
 
 async function exists(path) {
   try { await access(path); return true; } catch { return false; }
@@ -210,6 +213,17 @@ function positiveInteger(value, fallback, label) {
   return selected;
 }
 
+function validatePathBudget(managedRoot, maximumRelativePathLength, maximumPathLength) {
+  const prospectiveDirectory = join(managedRoot, "runs", "x".repeat(RESERVED_RUN_ID_LENGTH));
+  const requiredPathLength = prospectiveDirectory.length + 1 + maximumRelativePathLength;
+  if (requiredPathLength > maximumPathLength) {
+    throw new Error(
+      `托管运行路径预算不足：运行根最多 ${prospectiveDirectory.length} 字符 + 产物相对路径 ${maximumRelativePathLength} 字符 > 上限 ${maximumPathLength} 字符；尚未写入运行目录。`
+    );
+  }
+  return { maximumPathLength, maximumRelativePathLength, prospectiveRunDirectoryLength: prospectiveDirectory.length };
+}
+
 async function atomicJson(path, value) {
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -305,20 +319,28 @@ async function recoverInterruptedRuns(runsRoot) {
 export async function startManagedRun({
   category,
   producer,
+  evidence,
   root = process.env.PUPPETLOOM_ARTIFACT_ROOT || resolve("test/artifacts"),
   estimatedBytes,
   reuse,
+  maximumRelativePathLength,
+  maximumPathLength = process.env.PUPPETLOOM_ARTIFACT_MAX_PATH_LENGTH,
   maximumManagedBytes = process.env.PUPPETLOOM_ARTIFACT_MAX_BYTES,
   minimumFreeBytes = process.env.PUPPETLOOM_ARTIFACT_MIN_FREE_BYTES
 }) {
   if (!category || !producer) throw new Error("托管产物运行必须声明 category 和 producer。" );
+  if (!evidence || typeof evidence !== "object") throw new Error("托管产物运行必须声明 evidence。" );
   if (!reuse || typeof reuse.applicable !== "boolean" || typeof reuse.reason !== "string" || !reuse.reason.trim()) {
     throw new Error("托管产物运行必须声明可复用性判断和依据。" );
   }
   const estimate = positiveInteger(estimatedBytes, undefined, "estimatedBytes");
   const maximum = positiveInteger(maximumManagedBytes, DEFAULT_MAXIMUM_MANAGED_BYTES, "maximumManagedBytes");
   const minimumFree = positiveInteger(minimumFreeBytes, DEFAULT_MINIMUM_FREE_BYTES, "minimumFreeBytes");
+  const maximumRelative = positiveInteger(maximumRelativePathLength, undefined, "maximumRelativePathLength");
+  const maximumPath = positiveInteger(maximumPathLength, DEFAULT_MAXIMUM_PATH_LENGTH, "maximumPathLength");
   const managedRoot = resolve(root);
+  const pathBudget = validatePathBudget(managedRoot, maximumRelative, maximumPath);
+  const runEvidence = await createRunEvidence(evidence);
   const runsRoot = join(managedRoot, "runs");
   const initialFilesystem = await statfs(await nearestExistingDirectory(managedRoot));
   const initialFreeBytes = Number(initialFilesystem.bavail) * Number(initialFilesystem.bsize);
@@ -342,13 +364,17 @@ export async function startManagedRun({
 
     const id = `${Date.now().toString(36)}-${process.pid.toString(36)}-${randomUUID().slice(0, 8)}`;
     const directory = join(runsRoot, id);
-    if (directory.length > 120) throw new Error(`托管运行根目录过长，无法为 Windows 产物保留安全路径余量：${directory}`);
+    if (directory.length + 1 + maximumRelative > maximumPath) {
+      throw new Error(`托管运行路径预算不足：${directory.length} + 1 + ${maximumRelative} > ${maximumPath}；尚未写入运行目录。`);
+    }
     const manifestPath = join(directory, "run.json");
     const createdAt = new Date().toISOString();
     await mkdir(directory, { recursive: true });
     const pending = {
-      version: 1, id, category, producer, status: "pending", createdAt, updatedAt: createdAt, processId: process.pid,
+      version: 2, id, category, producer, status: "pending", createdAt, updatedAt: createdAt, processId: process.pid,
       root: relative(resolve("."), directory),
+      evidence: runEvidence,
+      pathBudget,
       artifactClasses: ["evidence", "temporary"],
       reuse: { applicable: reuse.applicable, reason: reuse.reason.trim(), ...(reuse.identity ? { identity: String(reuse.identity) } : {}) },
       reusedObjects: [],

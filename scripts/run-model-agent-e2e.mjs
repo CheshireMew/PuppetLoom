@@ -10,7 +10,9 @@ const source = await resolveProjectSource(process.argv[2]);
 await executeManagedRun({
   category: "model-agent",
   producer: "scripts/run-model-agent-e2e.mjs",
+  evidence: { command: "node scripts/run-model-agent-e2e.mjs [project]", scope: "单部位外部 Agent 制作与复审链" },
   estimatedBytes: 512 * 1024 ** 2,
+  maximumRelativePathLength: 168,
   reuse: { applicable: false, reason: "Agent 每轮必须重新分析、制作和验证；相同输入素材与证据由内容对象库物理复用。" }
 }, async (artifactRun) => {
   const project = artifactRun.path(`project-${basename(source)}`);

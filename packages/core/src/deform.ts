@@ -297,6 +297,7 @@ export interface DeformationFrameContext {
   pitch: number;
   headRoll: number;
   bodyRoll: number;
+  hasSeparateEarLayers: boolean;
   hairLayerMotion: WeakMap<LayerBinding, PreparedHairLayerMotion | null>;
 }
 
@@ -314,6 +315,7 @@ export function createDeformationFrameContext(project: PuppetLoomProject, resolv
     pitch: clamp(resolvedState.headPitch, -1, 1) * envelope.headPitch,
     headRoll: (clamp(resolvedState.headRoll, -1, 1) * envelope.headRollDegrees * Math.PI) / 180,
     bodyRoll: (clamp(resolvedState.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180,
+    hasSeparateEarLayers: project.layers?.some((layer) => layer.visible !== false && layer.role === "ear") ?? false,
     hairLayerMotion: new WeakMap()
   };
 }
@@ -464,7 +466,7 @@ function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, ba
       if (hinge) {
         const flap = state.earY * hinge.mirror * 20 + state.earX * 6;
         addLocalBend(point, base, hinge.pivot, flap * weight, free);
-      } else {
+      } else if (!frame.hasSeparateEarLayers) {
         point.y += state.earY * faceHeight * 2.8 * weight * free;
         addLocalBend(point, base, layer.pivot, state.earX * 0.72 * weight, free);
       }

@@ -210,6 +210,7 @@ const authoringOperationSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("upsert-deformer"), deformer: modelDeformerSchema }),
   z.object({ op: z.literal("remove-deformer"), id: z.string().min(1), cascade: z.boolean().optional() }),
   z.object({ op: z.literal("set-layer-deformer"), layerId: z.string().min(1), deformerId: z.string().min(1).nullable() }),
+  z.object({ op: z.literal("move-layer"), layerId: z.string().min(1), beforeLayerId: z.string().min(1).optional(), afterLayerId: z.string().min(1).optional() }),
   z.object({ op: z.literal("upsert-binding"), binding: modelBindingSchema }),
   z.object({ op: z.literal("remove-binding"), id: z.string().min(1) }),
   z.object({ op: z.literal("upsert-expression"), expression: modelExpressionSchema }),
@@ -227,18 +228,33 @@ const authoringPreviewSchema = z.object({
   behavior: z.object({ id: z.string().min(1), timeSeconds: z.number().min(0) }).optional(),
   settleSeconds: z.number().min(0).max(10).optional()
 }).refine((preview) => preview.parameters || preview.expressions || preview.behavior, { message: "Authoring 预览必须驱动参数、表情或行为。" });
+function validateMoveLayerOperations(
+  value: { operations: Array<{ op: string; beforeLayerId?: string | undefined; afterLayerId?: string | undefined }> },
+  context: z.RefinementCtx
+): void {
+  value.operations.forEach((operation, index) => {
+    if (operation.op !== "move-layer") return;
+    if (Boolean(operation.beforeLayerId) === Boolean(operation.afterLayerId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["operations", index],
+        message: "move-layer 必须且只能提供 beforeLayerId 或 afterLayerId。"
+      });
+    }
+  });
+}
 const authoringAuditSchema = z.object({
   version: z.literal(1),
   operations: z.array(authoringOperationSchema).min(1).max(200),
   previews: z.array(authoringPreviewSchema).max(12)
-});
+}).superRefine(validateMoveLayerOperations);
 export const authoringPatchSchema = z.object({
   version: z.literal(1),
   baseRevision: z.number().int().nonnegative(),
   label: z.string().trim().min(1).max(160).optional(),
   operations: z.array(authoringOperationSchema).min(1).max(200),
   previews: z.array(authoringPreviewSchema).max(12).optional()
-});
+}).superRefine(validateMoveLayerOperations);
 
 export const puppetLoomProjectSchema = z.object({
   version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),

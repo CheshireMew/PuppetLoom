@@ -41,7 +41,13 @@
 
 PuppetLoom 是一套 Windows 桌面应用、确定性 CLI、普通目录项目格式和外部 Agent Skill。它读取分层角色 PSD，生成保守的初始绑定，验证中立姿态和 12 个运动姿态，把每次修改保存为可恢复 revision，最后在透明桌面窗口中运行。桌面应用负责创建、查看、播放和人工兜底；外部 Agent 通过公开 CLI 与仓库内 Skill 制作和返修角色，软件内部不增加 Agent 对话或隐藏的模型调用。
 
-第一次结果追求的是“在现有素材能支持的范围内合理地会动”。缺少闭眼或三态嘴形素材时，PuppetLoom 会报告缺口，不伪造图层；动作不安全时会缩小范围或阻断；每次校准都先生成证据，再切换当前 revision。
+第一次结果追求的是“在现有素材能支持的范围内合理地会动”。PuppetLoom 软件本身不会用参数伪造缺少的闭眼或嘴形；完整 Agent 制作流程可以按原画风格补齐真正缺少的表情素材，已有闭嘴不会重画。动作不安全时会缩小范围或阻断；每次校准都先生成证据，再切换当前 revision。
+
+## See-Through 与效果边界
+
+PuppetLoom 从单张原画开始的自动流程建立在 [See-Through](https://github.com/shitagaki-lab/see-through) 提供的动漫角色分层能力之上。See-Through 把确认后的原画转换为带原始画布坐标和透明通道的分层 PSD，是原画进入 PuppetLoom 结构分析、绑定和验证的重要的一环。我们感谢 See-Through 作者及其论文 [“See-through: Single-image Layer Decomposition for Anime Characters”](https://arxiv.org/abs/2602.03749)。PuppetLoom 不内置或再分发 See-Through 的代码与模型；默认使用官方在线演示，只有在线入口不可用且用户主动选择时才考虑本地部署。
+
+PuppetLoom 的目标是用自动化流程较快得到效果不错、可以使用、够用的简单 2D 动态角色，但它不等于专业定制 Live2D。自动分层和自动绑定难以替代画师对遮挡托底、表情素材和可动结构的专门设计，也难以替代建模师对大角度转头、精细网格、复杂物理和演出节奏的逐项打磨。需要更高完成度时，应找专业角色画师和 Live2D 建模师制作。
 
 ## 你能得到什么
 
@@ -65,7 +71,7 @@ PuppetLoom 是一套 Windows 桌面应用、确定性 CLI、普通目录项目�
 ```powershell
 git clone https://github.com/CheshireMew/PuppetLoom.git
 cd PuppetLoom
-npm install
+npm ci
 npm run build
 npm run desktop
 ```

@@ -45,7 +45,13 @@ PuppetLoom combines a Windows desktop application, deterministic CLI, project fo
 
 The desktop application handles creation, playback, inspection, and manual fallback. An external agent uses the public CLI and bundled Skill; PuppetLoom does not embed an agent chat or hide model changes behind opaque files.
 
-The first result aims for a character that moves plausibly with the artwork it actually has. Missing closed-eye or three-state mouth art is reported instead of invented, unsafe motion is reduced or blocked, and every accepted calibration remains recoverable.
+The first result aims for a character that moves plausibly with the artwork it actually has. PuppetLoom itself never fakes missing closed-eye or mouth art with parameters; the complete Agent workflow can create genuinely missing expression assets in the source style and never redraw an existing closed mouth. Unsafe motion is reduced or blocked, and every accepted calibration remains recoverable.
+
+## See-Through and the quality boundary
+
+PuppetLoom's workflow from a single illustration is built around the anime-character layer decomposition provided by [See-Through](https://github.com/shitagaki-lab/see-through). See-Through converts approved artwork into a layered PSD with original canvas coordinates and transparency, forming an important bridge into PuppetLoom's structural analysis, rigging, and verification. We thank the See-Through authors and their paper, [“See-through: Single-image Layer Decomposition for Anime Characters”](https://arxiv.org/abs/2602.03749). PuppetLoom does not embed or redistribute See-Through code or model weights. The official online demo is the default route; local deployment is a last option when the online service is unavailable and the user chooses it.
+
+PuppetLoom is intended to produce a simple, good-looking, usable 2D puppet relatively quickly. It is not a replacement for a professionally commissioned Live2D model. Automated decomposition and rigging cannot fully replace artwork designed for hidden overlap, expression assets, and motion, or a modeler's work on large head turns, detailed meshes, complex physics, and performance timing. For higher-end results, work with a professional character artist and Live2D modeler.
 
 ## What you get
 
@@ -67,7 +73,7 @@ PuppetLoom is currently verified on Windows. You need Node.js 24+, npm 11, and a
 ```powershell
 git clone https://github.com/CheshireMew/PuppetLoom.git
 cd PuppetLoom
-npm install
+npm ci
 npm run build
 npm run desktop
 ```

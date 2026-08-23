@@ -153,10 +153,16 @@ function intentFor(part: SecondaryModelAgentPart, rawInstruction?: string): { in
 
 function targetLayers(project: PuppetLoomProject, part: SecondaryModelAgentPart, requested?: string[]): LayerBinding[] {
   const requestedSet = requested ? new Set(requested) : undefined;
-  const layers = project.layers.filter((layer) => policies[part].roles.includes(layer.role) && (!requestedSet || requestedSet.has(layer.id)));
+  const layers = requestedSet
+    ? project.layers.filter((layer) => requestedSet.has(layer.id))
+    : project.layers.filter((layer) => policies[part].roles.includes(layer.role));
   if (requestedSet) {
     const missing = (requested ?? []).filter((id) => !layers.some((layer) => layer.id === id));
     if (missing.length > 0) throw new PuppetLoomError("INVALID_INPUT", `${policies[part].label} Agent 找不到目标图层：${missing.join("、")}`);
+    const incompatible = layers.filter((layer) => !policies[part].roles.includes(layer.role) && !(part === "accessory" && layer.role === "unknown"));
+    if (incompatible.length > 0) {
+      throw new PuppetLoomError("INVALID_INPUT", `${policies[part].label} Agent 不能接管这些语义不兼容的图层：${incompatible.map((layer) => layer.id).join("、")}`);
+    }
   }
   if (layers.length === 0) throw new PuppetLoomError("INVALID_INPUT", `项目中没有识别到${policies[part].label}图层。`);
   if (part === "ahoge" && !layers.some((layer) => layer.secondaryAnchors?.ahogeRoot)) throw new PuppetLoomError("INVALID_INPUT", "前发图层没有识别到呆毛根部，无法安全制作呆毛运动。" );
@@ -198,6 +204,11 @@ function layerBinding(part: SecondaryModelAgentPart, layer: LayerBinding, parame
         const angle = -value * direction * scale * policy.baseScale * 3.2;
         const delta = rotationDelta(point, pivot, angle);
         return [[String(index), { x: rounded(delta.x * release, 8), y: rounded(delta.y * release, 8) }]];
+      }
+      if (part === "ears") {
+        const angle = value * direction * scale * policy.baseScale * 1.6;
+        const delta = rotationDelta(point, layer.pivot, angle);
+        return [[String(index), { x: rounded(delta.x, 8), y: rounded(delta.y, 8) }]];
       }
       if (part === "skirt" && layer.garmentStructure === "supported") {
         const angle = value * direction * scale * policy.baseScale;
@@ -286,7 +297,7 @@ function layerOverrides(part: SecondaryModelAgentPart, project: PuppetLoomProjec
         : rounded(Math.max(layer.mesh.influences?.physics?.[index] ?? 0, vertexRelease(part, layer, point)), 6)
     ]));
     const weights = policy.driver === "param-head-yaw"
-      ? { ...layer.weights, head: 1, physics: 1 }
+      ? { ...layer.weights, head: 1, physics: part === "ears" ? 0 : 1 }
       : { ...layer.weights, body: 1, physics: 1 };
     const order = part === "skirt" ? skirtOrderBehindArms(project, layer) : undefined;
     return [layer.id, {
@@ -556,6 +567,7 @@ function operationId(operation: AuthoringOperation): string {
   if (operation.op === "upsert-expression") return operation.expression.id;
   if (operation.op === "upsert-behavior") return operation.behavior.id;
   if (operation.op === "set-layer-deformer") return operation.layerId;
+  if (operation.op === "move-layer") return operation.layerId;
   return operation.id;
 }
 

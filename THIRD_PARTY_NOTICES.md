@@ -19,6 +19,15 @@ The MIT license text is reproduced in `docs/licenses/Anime2.5DRig-MIT.txt`.
 
 AutoLive2d is not vendored as an application. PuppetLoom does not include its Cubism, face-tracking, microphone, editor, or See-through integration code.
 
+## See-Through
+
+- Project: `shitagaki-lab/see-through` — <https://github.com/shitagaki-lab/see-through>
+- Paper: Jian Lin et al., “See-through: Single-image Layer Decomposition for Anime Characters,” ACM SIGGRAPH 2026 Conference Proceedings — <https://arxiv.org/abs/2602.03749>
+- Use: an external, important upstream stage that turns approved anime character artwork into a coordinate-preserving layered PSD for PuppetLoom inspection and rigging
+- License: Apache License 2.0
+
+PuppetLoom does not vendor, embed, or redistribute See-Through source code or model weights. The normal workflow sends the user to the official online demonstration, or uses a separately installed local See-Through project only when the online service is unavailable and the user explicitly chooses local execution. Generated PSDs and character artwork remain subject to their own applicable rights. We thank the See-Through authors for making single-image anime layer decomposition available to this workflow.
+
 ## MediaPipe Tasks Vision and Face Landmarker
 
 - Project: Google MediaPipe Tasks Vision (`@mediapipe/tasks-vision`)

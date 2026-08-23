@@ -12,4 +12,4 @@ jobs:
   update:
     permissions:
       contents: write
-    uses: CheshireMew/project-steward/.github/workflows/star-history.yml@main
+    uses: CheshireMew/project-steward/.github/workflows/star-history.yml@f3a7998cff1e2b0855ae1c0fd4e3cbe591aae44c

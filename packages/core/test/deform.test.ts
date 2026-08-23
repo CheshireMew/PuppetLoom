@@ -254,6 +254,17 @@ describe("secondary motion anchoring", () => {
     expect(movedRight.y).toBeGreaterThan(rightTip.y + 0.005);
   });
 
+  it("does not apply ear parameters to headwear when separate ear layers exist", () => {
+    const headwear = secondaryLayer("headwear");
+    const ear = secondaryLayer("ear", { x: 0.62, y: 0.24, width: 0.12, height: 0.08 });
+    const splitProject = { ...project, layers: [headwear, ear] } as PuppetLoomProject;
+    const point = { x: headwear.bounds.x + headwear.bounds.width, y: headwear.bounds.y + headwear.bounds.height };
+    const state = { ...neutralMotionState, earX: 0.05, earY: 0.05 };
+
+    expect(deformPoint(splitProject, headwear, point, state)).toEqual(point);
+    expect(movement(point, deformPoint(splitProject, ear, point, state))).toBeGreaterThan(0);
+  });
+
   it("can bend front and back hair in opposite directions around fixed roots", () => {
     const front = secondaryLayer("frontHair");
     const back = secondaryLayer("backHair");

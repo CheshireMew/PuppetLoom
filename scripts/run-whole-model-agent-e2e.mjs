@@ -31,7 +31,9 @@ async function runCliJson(arguments_) {
 await executeManagedRun({
   category: "whole-model-agent",
   producer: "scripts/run-whole-model-agent-e2e.mjs",
+  evidence: { command: "node scripts/run-whole-model-agent-e2e.mjs [project]", scope: "整模外部 Agent 制作与复审链" },
   estimatedBytes: 1024 * 1024 ** 2,
+  maximumRelativePathLength: 168,
   reuse: { applicable: false, reason: "整模 Agent 每轮都必须重新执行各部位检查；输入素材和相同证据由内容对象库复用。" }
 }, async (artifactRun) => {
   const projectDirectory = artifactRun.path(`project-${basename(source)}`);

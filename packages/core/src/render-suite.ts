@@ -51,13 +51,35 @@ const motionSamples: Sample[] = [
   { id: "wind-left", label: "头发向左", kind: "motion", state: state({ hairX: -0.024, backHairX: -0.038, ahogeX: -0.045, clothX: -0.012 }) },
   { id: "ahoge-up", label: "呆毛弹起", kind: "motion", state: state({ ahogeX: 0.035, ahogeY: -0.026 }) },
   { id: "wind-right", label: "头发向右", kind: "motion", state: state({ hairX: 0.024, backHairX: 0.038, ahogeX: 0.045, clothX: 0.012 }) },
-  { id: "ear-left", label: "左侧耳翼抬起", kind: "motion", state: state({ earX: -0.006, earY: -0.018 }) },
+  { id: "ear-left", label: "耳朵向左跟随", kind: "motion", state: state({ earX: -0.006, earY: -0.018 }) },
   { id: "motion-neutral", label: "次级运动中立", kind: "motion", state: state({}) },
-  { id: "ear-right", label: "右侧耳翼抬起", kind: "motion", state: state({ earX: 0.006, earY: -0.018 }) },
+  { id: "ear-right", label: "耳朵向右跟随", kind: "motion", state: state({ earX: 0.006, earY: -0.018 }) },
   { id: "skirt-left-tail-up", label: "裙摆左 / 尾巴上", kind: "motion", state: state({ clothX: -0.02, tailY: -0.055 }) },
   { id: "cloth-breath", label: "衣物与呼吸", kind: "motion", state: state({ breath: 0.65, clothY: 0.01 }) },
   { id: "skirt-right-tail-down", label: "裙摆右 / 尾巴下", kind: "motion", state: state({ clothX: 0.02, tailY: 0.055 }) }
 ];
+
+function independentEarFollowParameter(project: import("./types.js").PuppetLoomProject): string | undefined {
+  const earLayerIds = new Set(project.layers.filter((layer) => layer.role === "ear").map((layer) => layer.id));
+  if (earLayerIds.size === 0 || !project.model) return undefined;
+  const physicsOutputs = new Set((project.model.physics ?? []).map((entry) => entry.outputParameterId));
+  return project.model.bindings
+    .filter((binding) => binding.target.kind === "layer" && earLayerIds.has(binding.target.id))
+    .flatMap((binding) => binding.parameterIds)
+    .find((parameterId) => physicsOutputs.has(parameterId));
+}
+
+function motionSamplesFor(project: import("./types.js").PuppetLoomProject): Sample[] {
+  const earFollowParameter = independentEarFollowParameter(project);
+  if (!earFollowParameter) return motionSamples;
+  return motionSamples.map((sample) => {
+    if (sample.id !== "ear-left" && sample.id !== "ear-right") return sample;
+    return {
+      ...sample,
+      state: state({ parameters: { [earFollowParameter]: sample.id === "ear-left" ? -0.8 : 0.8 } })
+    };
+  });
+}
 
 function previewState(project: import("./types.js").PuppetLoomProject, preview: AuthoringPreview): MotionState {
   const initial = state({
@@ -81,8 +103,9 @@ function samplesFor(project: import("./types.js").PuppetLoomProject, suite: Rend
     state: previewState(project, preview)
   }));
   if (suite === "poses") return poseSamples;
-  if (suite === "motion") return motionSamples;
-  return [...poseSamples, ...authoringSamples, ...motionSamples];
+  const projectMotionSamples = motionSamplesFor(project);
+  if (suite === "motion") return projectMotionSamples;
+  return [...poseSamples, ...authoringSamples, ...projectMotionSamples];
 }
 
 function escapeXml(value: string): string {

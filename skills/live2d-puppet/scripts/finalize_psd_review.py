@@ -68,6 +68,40 @@ def _validate_evidence(review_path: Path, review: dict[str, Any], result: dict[s
         raise ReviewFinalizationError("Original source hash no longer matches result.json")
 
 
+def _validate_checks(review: dict[str, Any], status: str) -> None:
+    checks = review.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise ReviewFinalizationError("visual-review.json is missing checks")
+    required = {
+        "face-and-eyes",
+        "hair-and-headwear",
+        "clothing-and-limbs",
+        "layer-order-and-occlusion",
+        "background-and-alpha",
+        "overall-recomposition",
+    }
+    found: set[str] = set()
+    values: list[str] = []
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            raise ReviewFinalizationError(f"checks[{index}] must be an object")
+        check_id = check.get("id")
+        value = check.get("status")
+        if not isinstance(check_id, str) or not check_id:
+            raise ReviewFinalizationError(f"checks[{index}].id is missing")
+        if value not in {"pass", "repair", "fail", "not-applicable"}:
+            raise ReviewFinalizationError(f"checks[{index}].status must be pass, repair, fail, or not-applicable")
+        found.add(check_id)
+        values.append(value)
+    missing = sorted(required - found)
+    if missing:
+        raise ReviewFinalizationError(f"visual-review.json is missing required checks: {missing}")
+    if "fail" in values and status != "rejected":
+        raise ReviewFinalizationError("A failed visual check requires rejected status")
+    if "repair" in values and status == "accepted":
+        raise ReviewFinalizationError("A repair visual check requires accepted-with-repairs or rejected status")
+
+
 def finalize_review(review_value: str | Path) -> dict[str, Any]:
     review_path = Path(review_value).resolve(strict=True)
     if review_path.name.lower() != "visual-review.json":
@@ -86,6 +120,7 @@ def finalize_review(review_value: str | Path) -> dict[str, Any]:
     allowed = {"accepted", "accepted-with-repairs", "rejected"}
     if status not in allowed:
         raise ReviewFinalizationError(f"Review status must be one of {sorted(allowed)}")
+    _validate_checks(review, status)
     blockers = review.get("blockingIssues", [])
     repairs = review.get("repairPlan", [])
     if not isinstance(blockers, list) or not isinstance(repairs, list):

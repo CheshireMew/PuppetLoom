@@ -29,7 +29,9 @@ async function runCliJson(arguments_) {
 const managed = await startManagedRun({
   category: "external-agent-review",
   producer: "scripts/run-external-agent-review-session.mjs",
+  evidence: { command: "node scripts/run-external-agent-review-session.mjs", scope: "外部 Agent 准确 revision 复审链" },
   estimatedBytes: 1024 * 1024 ** 2,
+  maximumRelativePathLength: 160,
   reuse: { applicable: false, reason: "外部 Agent 必须逐轮查看准确 revision 的新证据；相同输入素材由内容对象库复用。" }
 });
 

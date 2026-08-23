@@ -3,7 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 
-await executeManagedRun({ category: "launcher-smoke", producer: "scripts/run-launcher-smoke.mjs", estimatedBytes: 64 * 1024 ** 2, reuse: { applicable: false, reason: "运行日志记录本次进程身份和事件序列，不能冒充另一轮启动证据。" } }, async (artifactRun) => {
+await executeManagedRun({ category: "launcher-smoke", producer: "scripts/run-launcher-smoke.mjs", evidence: { command: "node scripts/run-launcher-smoke.mjs", scope: "Windows 启动器冒烟检查" }, estimatedBytes: 64 * 1024 ** 2, maximumRelativePathLength: 96, reuse: { applicable: false, reason: "运行日志记录本次进程身份和事件序列，不能冒充另一轮启动证据。" } }, async (artifactRun) => {
 const profile = artifactRun.path("profile");
 const runtimeLog = resolve(profile, "runtime.log");
 await mkdir(profile, { recursive: true });

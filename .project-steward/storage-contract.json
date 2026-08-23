@@ -22,19 +22,22 @@
       },
       "budget": {
         "maximum_managed_bytes_source": "PUPPETLOOM_ARTIFACT_MAX_BYTES or the 2 GiB project default",
-        "minimum_free_bytes_source": "PUPPETLOOM_ARTIFACT_MIN_FREE_BYTES or the 2 GiB project default"
+        "minimum_free_bytes_source": "PUPPETLOOM_ARTIFACT_MIN_FREE_BYTES or the 2 GiB project default",
+        "maximum_path_length_source": "PUPPETLOOM_ARTIFACT_MAX_PATH_LENGTH or the 240-character Windows project default",
+        "maximum_relative_path_length_source": "Every public producer declares maximumRelativePathLength before startManagedRun creates lock or run infrastructure"
       },
       "reuse": {
         "required": false,
         "reason": "Each run is a distinct observable evidence result; repeatable PSD inputs are read from the single tracked test/fixtures source instead of being downloaded or regenerated per run."
       },
       "lifecycle": {
-        "preflight": "Measure managed bytes and filesystem free space before creating the run directory or any payload.",
-        "finalization": "Rewrite run.json with succeeded or failed status, reuse decision, class byte totals, the conservative peak bound, complete file inventory, byte counts, and SHA-256 hashes.",
+        "preflight": "Validate the complete Windows path budget, capture source/command/scope/platform identity, then measure managed bytes and filesystem free space before creating the run directory or any payload.",
+        "finalization": "Rewrite version 2 run.json with succeeded or failed status, source-bound evidence identity, reuse decision, class byte totals, the conservative peak bound, complete file inventory, byte counts, and SHA-256 hashes.",
         "interruption": "A later run marks ownerless pending manifests interrupted, inventories every payload, and preserves report-only cleanup candidates."
       },
       "implementation_files": [
         "scripts/lib/managed-run.mjs",
+        "scripts/lib/run-evidence.mjs",
         "scripts/lib/vitest-artifacts.mjs",
         "scripts/report-artifacts.mjs"
       ],
@@ -47,12 +50,63 @@
           "estimatedBytes",
           "maximumManagedBytes",
           "minimumFreeBytes",
+          "maximumRelativePathLength",
+          "maximumPathLength",
+          "createRunEvidence",
+          "version: 2",
           "status: \"pending\"",
           "inventory",
           "categoryBytes",
           "executeManagedRun",
           "reuse",
           "policy: \"report-only\""
+        ]
+      }
+    },
+    {
+      "id": "psd-repair-operations",
+      "root_source": {
+        "kind": "explicit-cli-paths",
+        "value": "psd repair/review --workdir plus the declared output PSD; repository runtime/ is ignored local state, not a source root"
+      },
+      "artifact_classes": ["operation-state", "evidence", "output", "recovery"],
+      "peak_estimate": {
+        "unknown_behavior": "block",
+        "source": "estimatePsdRepairBytes combines input bytes, canvas-sized review images, layer contact sheets, output expansion, and fixed overhead before operation.json is created"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "PUPPETLOOM_PSD_REPAIR_MAX_BYTES or the 4 GiB project default",
+        "minimum_free_bytes_source": "PUPPETLOOM_PSD_REPAIR_MIN_FREE_BYTES or the 2 GiB project default",
+        "maximum_path_length_source": "PUPPETLOOM_PSD_REPAIR_MAX_PATH_LENGTH or the 240-character Windows project default"
+      },
+      "reuse": {
+        "required": false,
+        "reason": "A repair operation is bound to exact input hashes and one output path. The same operation directory resumes its own confirmed stages; it never treats another run as current evidence."
+      },
+      "lifecycle": {
+        "preflight": "Validate input hashes, deterministic storage and Windows path budgets, then write and flush pending operation.json before Photoshop or review payloads.",
+        "finalization": "Automated success stops at awaiting-visual-review. Only a hash-bound visual-review.json can produce accepted, accepted-with-repairs, or rejected.",
+        "interruption": "An ownerless running operation becomes interrupted. The same command resumes; unconfirmed partial PSD output is moved into recovery/ and never deleted or overwritten."
+      },
+      "implementation_files": [
+        "packages/core/src/psd-repair.ts",
+        "packages/core/src/psd-repair-operation.ts",
+        "apps/cli/src/index.ts"
+      ],
+      "test_files": [
+        "packages/core/test/psd-repair.test.ts",
+        "test/cli.test.ts"
+      ],
+      "enforcement": {
+        "file": "packages/core/src/psd-repair-operation.ts",
+        "tokens": [
+          "status: \"pending\"",
+          "awaiting-visual-review",
+          "PUPPETLOOM_PSD_REPAIR_MAX_BYTES",
+          "PUPPETLOOM_PSD_REPAIR_MIN_FREE_BYTES",
+          "PUPPETLOOM_PSD_REPAIR_MAX_PATH_LENGTH",
+          "archivedPartialOutput",
+          "finalizePhotoshopPsdRepairVisualReview"
         ]
       }
     },

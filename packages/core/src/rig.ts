@@ -207,9 +207,14 @@ function frontHairAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | un
   };
 }
 
-function secondaryAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | undefined, canvas: ImportedPsd["canvas"]): LayerSecondaryAnchors | undefined {
+function secondaryAnchorsFor(
+  layer: ImportedLayer,
+  faceLayer: ImportedLayer | undefined,
+  canvas: ImportedPsd["canvas"],
+  hasSeparateEarLayers: boolean
+): LayerSecondaryAnchors | undefined {
   if (layer.role === "frontHair") return frontHairAnchorsFor(layer, faceLayer, canvas);
-  if (layer.role !== "headwear" || !faceLayer) return undefined;
+  if (layer.role !== "headwear" || !faceLayer || hasSeparateEarLayers) return undefined;
   const hingeLeftX = faceLayer.bounds.x + faceLayer.bounds.width * 0.03;
   const hingeRightX = faceLayer.bounds.x + faceLayer.bounds.width * 0.97;
   const hingeY = faceLayer.bounds.y + faceLayer.bounds.height * 0.5;
@@ -362,6 +367,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
   const level = suggestedRigLevel(imported.layers);
   const anchors = deriveAnchors(imported);
   const faceLayer = findLayer(imported.layers, "face");
+  const hasSeparateEarLayers = imported.layers.some((layer) => layer.role === "ear");
   const headBoundsPx = rectUnion(imported.layers.filter((layer) => headRoles.has(layer.role)).map((layer) => layer.bounds));
   const headBounds = headBoundsPx ? normalizedRect(headBoundsPx, imported.canvas.width, imported.canvas.height) : undefined;
   const layers: LayerBinding[] = imported.layers.map((layer) => {
@@ -372,7 +378,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     const weights = weightsFor(layer.role, level, insideHead);
     const parentGroup: LayerBinding["parentGroup"] = weights.head >= 0.5 ? "head" : weights.body > 0 ? "body" : "root";
     const clipLayerId = clipLayerFor(layer, imported.layers);
-    const secondaryAnchors = secondaryAnchorsFor(layer, faceLayer, imported.canvas);
+    const secondaryAnchors = secondaryAnchorsFor(layer, faceLayer, imported.canvas, hasSeparateEarLayers);
     const binding: LayerBinding = {
       id: layer.id,
       sourceName: layer.sourceName,

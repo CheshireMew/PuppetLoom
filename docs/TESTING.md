@@ -58,7 +58,9 @@ node apps/cli/dist/index.js benchmark run --manifest benchmarks/real-characters/
 
 真实项目还可执行 `node scripts/report-secondary-motion.mjs <project-dir> 26`。它以 60 Hz 采样呆毛、前后发、头饰、耳朵、衣摆、尾巴和饰品，分别报告状态峰值、横纵轴像素位移、固定区与自由端位移；前发还单独报告呆毛根与刘海根之间的头皮保护区最大位移，尾巴额外报告旋转过程中各点到根部的最大半径漂移，用来区分真实转轴摆动和伸缩。最后再用当前变形代码重新检查 13 个安全姿态。
 
-所有正式测试运行先由 `scripts/lib/managed-run.mjs` 在 `test/artifacts/runs/` 创建托管目录。预检会在第一份大文件前核对调用方声明的峰值、2 GiB 默认总预算和 2 GiB 最低磁盘余量；未知峰值或预算不足直接阻止。`run.json` 先以 pending 写入，并要求生产者说明本轮产物是否可复用：固定 PSD 输入直接读取仓库中唯一的 `test/fixtures` 真源；截图、视频、运行日志和可修改项目副本属于一次具体验收，不能拿旧结果冒充新运行。结束时统一写入 succeeded 或 failed、分类字节数、峰值口径、完整文件清单和 SHA-256；所有者异常退出后，下一轮把记录标成 interrupted，补齐残留清单并保留文件。`npm run artifacts:report` 会列出历史非托管目录和终态运行，清理始终是 report-only，不自动删除。`.project-steward/storage-contract.json` 和 Windows CI 固化了同一约定。
+所有正式测试运行先由 `scripts/lib/managed-run.mjs` 在 `test/artifacts/runs/` 创建托管目录。预检会按 Windows 的 240 字符默认上限核对“运行根 + 生产者声明的最长相对产物路径”，再核对调用方声明的峰值、2 GiB 默认总预算和 2 GiB 最低磁盘余量；未知峰值、路径余量或预算不足都会在创建运行目录前阻止。
+
+`run.json` 使用 v2 清单，pending 状态已经包含 Git 提交、当前工作区内容指纹、实际命令、验收范围、平台和 Node 版本，因此旧运行不能冒充当前源码证据。生产者还必须说明本轮产物是否可复用：固定 PSD 输入直接读取仓库中唯一的 `test/fixtures` 真源；截图、视频、运行日志和可修改项目副本属于一次具体验收，不能拿旧结果冒充新运行。结束时统一写入 succeeded 或 failed、分类字节数、峰值口径、完整文件清单和 SHA-256；所有者异常退出后，下一轮把记录标成 interrupted，补齐残留清单并保留文件。`npm run artifacts:report` 会列出历史非托管目录和终态运行，清理始终是 report-only，不自动删除。`.project-steward/storage-contract.json` 和 Windows CI 固化了同一约定。
 
 ## Cubism 真实格式复验
 

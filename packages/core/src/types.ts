@@ -576,6 +576,7 @@ export type AuthoringOperation =
   | { op: "upsert-deformer"; deformer: ModelDeformer }
   | { op: "remove-deformer"; id: string; cascade?: boolean }
   | { op: "set-layer-deformer"; layerId: string; deformerId: string | null }
+  | { op: "move-layer"; layerId: string; beforeLayerId?: string; afterLayerId?: string }
   | { op: "upsert-binding"; binding: ModelBinding }
   | { op: "remove-binding"; id: string }
   | { op: "upsert-expression"; expression: ModelExpression }
@@ -922,10 +923,18 @@ export interface LayerInspection {
   sourcePath: string[];
   role: SemanticRole;
   side: Side;
+  order: number;
   bounds: Rect;
   opaquePixels: number;
   visible: boolean;
   alpha: LayerImportAlphaAnalysis;
+}
+
+export interface LayerOrderInspectionIssue {
+  id: string;
+  behindLayerId: string;
+  frontLayerId: string;
+  message: string;
 }
 
 export type PairSplitMethod = "components" | "center-fallback" | "single-side" | "not-applicable";
@@ -988,6 +997,7 @@ export interface InspectionReport {
   suggestedRigLevel: RigLevel;
   preflight: ImportPreflightSummary;
   layers: LayerInspection[];
+  layerOrderIssues: LayerOrderInspectionIssue[];
   warnings: string[];
 }
 

@@ -208,12 +208,21 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
     };
   }
   if (part === "eyes") {
+    const gazeX = project.runtime.envelope.gazeX > 0
+      ? project.runtime.envelope.gazeX
+      : 0.13 * amplitude;
+    const gazeY = project.runtime.envelope.gazeY > 0
+      ? project.runtime.envelope.gazeY
+      : 0.085 * amplitude;
     return {
       layers: patches,
       runtime: {
         envelope: {
-          gazeX: rounded(clamp(Math.max(project.runtime.envelope.gazeX, 0.13) * amplitude, 0.08, 0.18)),
-          gazeY: rounded(clamp(Math.max(project.runtime.envelope.gazeY, 0.085) * amplitude, 0.055, 0.12))
+          // An accepted project may already sit at the largest gaze range its
+          // eye whites can contain. Eye/blink authoring must never enlarge that
+          // range merely to reach a generic default.
+          gazeX: rounded(clamp(gazeX, 0.02, 0.18)),
+          gazeY: rounded(clamp(gazeY, 0.015, 0.12))
         }
       }
     };
@@ -360,10 +369,24 @@ function requestedAssets(project: PuppetLoomProject, part: PrimaryModelAgentPart
 function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, proposed: PuppetLoomProject, layers: LayerBinding[], assets: AssetRequest[]): ModelAgentCheck[] {
   const ids = new Set(layers.map((layer) => layer.id));
   const otherIds = new Set(proposed.layers.filter((layer) => !ids.has(layer.id)).map((layer) => layer.id));
+  const poseValidations = validateProjectPoses(proposed);
+  const failedPoses = poseValidations.filter((pose) => !pose.passed);
   const checks: ModelAgentCheck[] = [
     { id: "neutral-preservation", label: "中立姿态保持原样", passed: maximumDrift(before, proposed, ids, neutralMotionState) <= 1e-8, details: { maximumDrift: rounded(maximumDrift(before, proposed, ids, neutralMotionState), 10) } },
     { id: "other-layers-preserved", label: "没有改变其他图层的中立结果", passed: maximumDrift(before, proposed, otherIds, neutralMotionState) <= 1e-8, details: { maximumOtherLayerDrift: rounded(maximumDrift(before, proposed, otherIds, neutralMotionState), 10) } },
-    { id: "pose-safety", label: "联合姿态通过关系和网格安全检查", passed: validateProjectPoses(proposed).every((pose) => pose.passed), details: { passed: validateProjectPoses(proposed).filter((pose) => pose.passed).length, total: validateProjectPoses(proposed).length } }
+    {
+      id: "pose-safety",
+      label: "联合姿态通过关系和网格安全检查",
+      passed: failedPoses.length === 0,
+      details: {
+        passed: poseValidations.length - failedPoses.length,
+        total: poseValidations.length,
+        failedPoseIds: failedPoses.map((pose) => pose.id).join(","),
+        failureReasons: failedPoses
+          .map((pose) => `${pose.id}: ${pose.issues.map((issue) => issue.message).join("；")}`)
+          .join(" | ")
+      }
+    }
   ];
   if (part === "headFace") {
     const movement = Math.max(stateMovement(proposed, layers, safetyPoseState(-1, 0, 0)), stateMovement(proposed, layers, safetyPoseState(1, 0, 0)));
@@ -488,6 +511,7 @@ function operationId(operation: AuthoringOperation): string {
   if (operation.op === "upsert-deformer") return operation.deformer.id;
   if (operation.op === "upsert-behavior") return operation.behavior.id;
   if (operation.op === "set-layer-deformer") return operation.layerId;
+  if (operation.op === "move-layer") return operation.layerId;
   return operation.id;
 }
 

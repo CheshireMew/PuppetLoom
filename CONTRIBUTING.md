@@ -9,7 +9,7 @@
 ```powershell
 git clone https://github.com/CheshireMew/PuppetLoom.git
 cd PuppetLoom
-npm install
+npm ci
 npm run build
 ```
 

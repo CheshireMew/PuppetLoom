@@ -203,7 +203,9 @@ export async function planModelAgent(projectDirectory: string, options: ModelAge
   const parts: ModelAgentPartPlanSummary[] = [];
   for (const part of partOrder(requested)) {
     const capability = capabilities.get(part)!;
-    if (!capability.available) {
+    const partSpecification = partSpecifications.get(part);
+    const hasExplicitTargets = Boolean(partSpecification?.layerIds?.length);
+    if (!capability.available && !hasExplicitTargets) {
       parts.push({ part, label: labelFor(part), status: "not-present", targetLayerIds: [], checks: [], repairs: [], blockers: [capability.reason ?? `没有识别到${labelFor(part)}。`], assetRequests: [] });
       continue;
     }
@@ -220,7 +222,7 @@ export async function planModelAgent(projectDirectory: string, options: ModelAge
       });
       continue;
     }
-    parts.push(await planOne(root, part, instruction, partSpecifications.get(part)));
+    parts.push(await planOne(root, part, instruction, partSpecification));
   }
   const draftState = wholeDraftAssessment(project, draft);
   const revisionBlockers = specification && specification.baseRevision !== calibration.revision

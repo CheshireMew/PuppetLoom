@@ -25,7 +25,7 @@ from finalize_psd_review import ReviewFinalizationError, finalize_review
 DEFAULT_SERVICE_URL = "https://ljsabc-see-through.ms.show"
 ENDPOINT_NAME = "/inference"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
-MANUAL_URL = "https://modelscope.cn/studios/ljsabc/See-Through"
+MANUAL_URL = "https://modelscope.cn/studios/ljsabc/See-Through/?st=1WIdxVcPQ8ylM43-0Vr14FQ"
 MAX_INFERENCE_ATTEMPTS = 2
 
 
@@ -243,6 +243,52 @@ def _download_previews(gallery_value: Any, service_url: str, run_directory: Path
     return preview_records
 
 
+def _export_local_psd_previews(psd_path: Path, run_directory: Path) -> list[dict[str, Any]]:
+    psd = PSDImage.open(psd_path)
+    previews_directory = run_directory / "previews"
+    previews_directory.mkdir(exist_ok=True)
+    preview_records: list[dict[str, Any]] = []
+
+    def visit(container: Any, parent_path: list[str]) -> None:
+        for layer in container:
+            layer_name = str(layer.name or "unnamed-layer")
+            source_path = [*parent_path, layer_name]
+            if layer.is_group():
+                visit(layer, source_path)
+                continue
+            preview = layer.composite(
+                viewport=(0, 0, psd.width, psd.height),
+                force=True,
+                color=0.0,
+                alpha=0.0,
+            )
+            if preview is None:
+                continue
+            index = len(preview_records) + 1
+            caption = " / ".join(source_path)
+            preview_path = previews_directory / f"{index:03d}-{_slugify_caption(caption, f'layer-{index:03d}')}.png"
+            preview.convert("RGBA").save(preview_path)
+            preview_records.append(
+                {
+                    "index": index,
+                    "caption": caption,
+                    "sourcePath": source_path,
+                    "visible": bool(layer.is_visible()),
+                    "path": str(preview_path),
+                }
+            )
+
+    visit(psd, [])
+    _write_json(
+        previews_directory / "index.json",
+        {
+            "items": preview_records,
+            "note": "Previews were deterministically rendered from the local PSD layer tree on the full PSD canvas.",
+        },
+    )
+    return preview_records
+
+
 def _preview_contact_sheet(preview_records: list[dict[str, Any]], run_directory: Path) -> str | None:
     if not preview_records:
         return None
@@ -368,11 +414,12 @@ def _create_review_evidence(source_normalized: Path, psd_path: Path, run_directo
             {"id": "face-and-eyes", "status": None, "question": "Are the face, both eyes, irises, eyelashes, brows, nose, and mouth present and aligned?"},
             {"id": "hair-and-headwear", "status": None, "question": "Are front hair, back hair, ears, and headwear complete without white residue or missing edges?"},
             {"id": "clothing-and-limbs", "status": None, "question": "Are clothing details, arms, hands, legs, feet, tail, and accessories complete and clean?"},
+            {"id": "layer-order-and-occlusion", "status": None, "question": "Does the back-to-front order match the source, including back skirt behind exposed legs, back hair behind neck and face, and brows in front of the face?"},
             {"id": "background-and-alpha", "status": None, "question": "Are transparent edges clean on both light and dark backgrounds, without detached noise or retained background?"},
             {"id": "overall-recomposition", "status": None, "question": "Does the visible-layer recomposition preserve the normalized source on the same canvas?"},
         ],
         "notes": [],
-        "rule": "The external Agent must open the required images and record accepted, accepted-with-repairs, or rejected, then finalize the review through the wrapper. Reject only defects that prevent reliable project creation; preserve repairable issues in repairPlan. Structural inspect and numeric metrics cannot decide this.",
+        "rule": "The external Agent must open the required images, set every check to pass, repair, fail, or not-applicable, and record accepted, accepted-with-repairs, or rejected before finalizing through the wrapper. Independent layer-order defects may be repaired through a recorded move-layer plan; merged front/back content is a blocker. Structural inspect and numeric metrics cannot decide this.",
     }
     visual_review_path = run_directory / "visual-review.json"
     _write_json(visual_review_path, visual_review)
@@ -639,9 +686,9 @@ def review_existing(args: argparse.Namespace) -> dict[str, Any]:
         request_record["source"] = source_record
         request_record["psdSha256"] = _sha256(psd_path)
         _write_json(run_directory / "request.json", request_record)
+        preview_records = _export_local_psd_previews(psd_path, run_directory)
+        preview_contact_sheet = _preview_contact_sheet(preview_records, run_directory)
         previews_directory = run_directory / "previews"
-        previews_directory.mkdir(exist_ok=True)
-        _write_json(previews_directory / "index.json", {"items": [], "note": "Local PSD review uses the PSD layer tree; no remote gallery was downloaded."})
         inspect_report = _run_puppetloom_inspect(psd_path, run_directory, args.timeout)
         review_evidence = _create_review_evidence(Path(source_record["sourceNormalized"]), psd_path, run_directory)
         result = {
@@ -654,9 +701,9 @@ def review_existing(args: argparse.Namespace) -> dict[str, Any]:
             "psd": str(psd_path),
             "psdBytes": psd_path.stat().st_size,
             "psdSha256": _sha256(psd_path),
-            "previews": [],
+            "previews": preview_records,
             "previewIndex": str(previews_directory / "index.json"),
-            "previewContactSheet": None,
+            "previewContactSheet": preview_contact_sheet,
             "inspect": str(run_directory / "inspect.json"),
             "inspectSummary": _inspect_summary(inspect_report),
             "reviewEvidence": review_evidence,

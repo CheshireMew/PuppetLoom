@@ -4,6 +4,7 @@ import type {
   AuthoringOperation,
   AuthoringPatch,
   AuthoringPreview,
+  LayerCalibrationOverride,
   ModelBinding,
   ModelBehavior,
   ModelDeformer,
@@ -42,6 +43,25 @@ function descendantDeformerIds(deformers: ModelDeformer[], rootId: string): Set<
     }
   }
   return result;
+}
+
+function moveLayer(project: PuppetLoomProject, operation: Extract<AuthoringOperation, { op: "move-layer" }>): void {
+  const references = [operation.beforeLayerId, operation.afterLayerId].filter((value): value is string => Boolean(value));
+  if (references.length !== 1) throw new Error("move-layer 必须且只能提供 beforeLayerId 或 afterLayerId。" );
+  const target = requireExisting(project.layers, operation.layerId, "图层");
+  const referenceId = references[0]!;
+  if (referenceId === target.id) throw new Error("move-layer 的目标图层不能引用自身。" );
+  requireExisting(project.layers, referenceId, "参照图层");
+  const ordered = project.layers
+    .map((layer, index) => ({ layer, index }))
+    .sort((left, right) => left.layer.order - right.layer.order || left.index - right.index)
+    .map((entry) => entry.layer)
+    .filter((layer) => layer.id !== target.id);
+  const referenceIndex = ordered.findIndex((layer) => layer.id === referenceId);
+  const insertIndex = operation.beforeLayerId ? referenceIndex : referenceIndex + 1;
+  ordered.splice(insertIndex, 0, target);
+  ordered.forEach((layer, index) => { layer.order = index; });
+  project.layers = ordered;
 }
 
 /** Applies ordered, semantic authoring operations and validates the complete project graph. */
@@ -96,6 +116,10 @@ export function applyAuthoringOperations(project: PuppetLoomProject, operations:
       else layer.deformerId = operation.deformerId;
       continue;
     }
+    if (operation.op === "move-layer") {
+      moveLayer(next, operation);
+      continue;
+    }
     if (operation.op === "upsert-binding") {
       upsertById(next.model.bindings, operation.binding);
       continue;
@@ -133,8 +157,10 @@ export function applyAuthoringOperations(project: PuppetLoomProject, operations:
       upsertById(next.model.behaviors, operation.behavior);
       continue;
     }
-    requireExisting(next.model.behaviors, operation.id, "行为");
-    next.model.behaviors = next.model.behaviors.filter((behavior) => behavior.id !== operation.id);
+    if (operation.op === "remove-behavior") {
+      requireExisting(next.model.behaviors, operation.id, "行为");
+      next.model.behaviors = next.model.behaviors.filter((behavior) => behavior.id !== operation.id);
+    }
   }
   return parsePuppetLoomProject(next);
 }
@@ -237,10 +263,14 @@ export function buildAuthoringAudit(patch: AuthoringPatch, before: PuppetLoomPro
   return { version: 1, operations: clone(patch.operations), previews: validatePreviews(deduplicated, [before, after]) };
 }
 
-export function authoringLayerOverrides(before: PuppetLoomProject, after: PuppetLoomProject): Record<string, { deformerId: string | null }> {
+export function authoringLayerOverrides(before: PuppetLoomProject, after: PuppetLoomProject): Record<string, LayerCalibrationOverride> {
   return Object.fromEntries(after.layers.flatMap((layer) => {
     const previous = before.layers.find((candidate) => candidate.id === layer.id);
-    return previous?.deformerId === layer.deformerId ? [] : [[layer.id, { deformerId: layer.deformerId ?? null }]];
+    if (!previous) return [];
+    const override: LayerCalibrationOverride = {};
+    if (previous.deformerId !== layer.deformerId) override.deformerId = layer.deformerId ?? null;
+    if (previous.order !== layer.order) override.order = layer.order;
+    return Object.keys(override).length > 0 ? [[layer.id, override]] : [];
   }));
 }
 
@@ -254,6 +284,7 @@ export function authoringSummary(project: PuppetLoomProject, revision: number): 
   physics: PuppetLoomProject["model"]["physics"];
   behaviors: PuppetLoomProject["model"]["behaviors"];
   layerAttachments: Array<{ layerId: string; deformerId: string }>;
+  layerOrder: Array<{ layerId: string; role: string; order: number }>;
 } {
   return {
     project: project.name,
@@ -264,6 +295,7 @@ export function authoringSummary(project: PuppetLoomProject, revision: number): 
     expressions: project.model.expressions,
     physics: project.model.physics,
     behaviors: project.model.behaviors,
-    layerAttachments: project.layers.flatMap((layer) => layer.deformerId ? [{ layerId: layer.id, deformerId: layer.deformerId }] : [])
+    layerAttachments: project.layers.flatMap((layer) => layer.deformerId ? [{ layerId: layer.id, deformerId: layer.deformerId }] : []),
+    layerOrder: project.layers.map((layer) => ({ layerId: layer.id, role: layer.role, order: layer.order })).sort((left, right) => left.order - right.order)
   };
 }

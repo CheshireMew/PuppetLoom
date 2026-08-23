@@ -28,6 +28,8 @@ export * from "./project.js";
 export * from "./primary-part-agent.js";
 export * from "./project-format.js";
 export * from "./psd.js";
+export * from "./psd-repair.js";
+export * from "./psd-repair-operation.js";
 export * from "./render-suite.js";
 export * from "./render-contract.js";
 export * from "./pose-field.js";
