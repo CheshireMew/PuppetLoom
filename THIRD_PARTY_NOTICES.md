@@ -75,4 +75,6 @@ The unpublished project shown in the Bilibili video “即刻出道！零基础�
 
 ## Artwork
 
-No user artwork or downloaded character sample is committed to PuppetLoom. Repository fixtures are programmatically generated geometric test art. Locally inspected third-party samples retain their original rights and are excluded from Git.
+PuppetLoom deliberately versions one named character-art reference pack under `skills/live2d-puppet/assets/blue-whale-maid-reference/`. It supports the bundled Skill's documented layering, rigging, expression, and visual-review workflow; it is not a programmatic test fixture, runtime artifact, or private user project. The artwork and generated layered PSD remain subject to their applicable rights and are not relicensed by the Apache-2.0 code license.
+
+All ordinary repository fixtures are programmatically generated geometric test art. Other private user artwork and downloaded character samples remain excluded from Git; locally inspected third-party samples retain their original rights.

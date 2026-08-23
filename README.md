@@ -165,7 +165,7 @@ npm run test:performance
 npm run artifacts:report
 ```
 
-`build`、`typecheck` 和 `test` 都会重建当前核心与渲染源码，避免旧声明文件产生假绿。测试 PSD 全部由脚本生成，不包含用户角色。运行产物在写入前检查预算与磁盘余量，并保存清单和哈希；`artifacts:report` 只报告可处理候选，不自动删除。真实角色基准通过带素材用途声明和 revision 锁定的清单运行，仓库本身不提交用户素材。贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+`build`、`typecheck` 和 `test` 都会重建当前核心与渲染源码，避免旧声明文件产生假绿。测试 PSD 全部由脚本生成，不包含用户角色。运行产物在写入前检查预算与磁盘余量，并保存清单和哈希；`artifacts:report` 只报告可处理候选，不自动删除。真实角色基准通过带素材用途声明和 revision 锁定的清单运行。仓库中唯一明确登记的角色美术例外是 `skills/live2d-puppet/assets/blue-whale-maid-reference/` 长期参考包；它不是测试 fixture、runtime 产物或私人用户项目，其它真实角色素材仍不得提交。贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## Star History
 

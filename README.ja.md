@@ -175,4 +175,4 @@ build、typecheck、test は現在の core / renderer を再構築し、古い�
 
 ## ライセンスと第三者素材
 
-PuppetLoom は [Apache License 2.0](LICENSE) で公開されています。採用したプロジェクト、依存関係の用途、モデル取得境界、完全な帰属情報は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) にあります。ユーザーキャラクターやダウンロードした第三者キャラクター例はリポジトリに含めません。
+PuppetLoom は [Apache License 2.0](LICENSE) で公開されています。採用したプロジェクト、依存関係の用途、モデル取得境界、完全な帰属情報は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) にあります。明示的に登録されたキャラクター素材の例外は、`skills/live2d-puppet/assets/blue-whale-maid-reference/` の長期参照パックだけです。これはテスト fixture、runtime 成果物、非公開ユーザープロジェクトではありません。それ以外のユーザーキャラクターやダウンロードした第三者キャラクター例はリポジトリに含めません。

@@ -185,4 +185,4 @@ Build, typecheck, and test rebuild the active core/renderer sources so stale dec
 
 ## License and third-party work
 
-PuppetLoom is licensed under the [Apache License 2.0](LICENSE). Adopted projects, dependency roles, model-download boundaries, and complete attribution are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). User characters and downloaded third-party character samples are not committed to this repository.
+PuppetLoom is licensed under the [Apache License 2.0](LICENSE). Adopted projects, dependency roles, model-download boundaries, and complete attribution are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The sole explicitly registered character-art exception is the long-term reference pack under `skills/live2d-puppet/assets/blue-whale-maid-reference/`; it is not a test fixture, runtime artifact, or private user project. Other user characters and downloaded third-party character samples remain excluded from the repository.
