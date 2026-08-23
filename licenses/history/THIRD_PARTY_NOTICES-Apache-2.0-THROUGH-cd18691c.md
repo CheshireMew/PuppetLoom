@@ -34,7 +34,7 @@ PuppetLoom does not vendor, embed, or redistribute See-Through source code or mo
 - Use: local camera face landmarks and blendshapes in the desktop character window
 - License: Apache License 2.0
 
-PuppetLoom uses the published JavaScript/Wasm package and downloads the official Face Landmarker task model to `D:\Tools\PuppetLoom\runtime-assets\mediapipe` with a pinned SHA-256 check. The model is not committed to this repository. Camera frames stay in the local renderer and are converted to short-lived motion values; PuppetLoom does not upload or save video frames. MediaPipe remains under Apache License 2.0; its published package also links its license and privacy notice at <https://goo.gle/mediapipe-privacy>.
+PuppetLoom uses the published JavaScript/Wasm package and downloads the official Face Landmarker task model to `D:\Tools\PuppetLoom\runtime-assets\mediapipe` with a pinned SHA-256 check. The model is not committed to this repository. Camera frames stay in the local renderer and are converted to short-lived motion values; PuppetLoom does not upload or save video frames. The Apache License 2.0 text is available in the repository root `LICENSE`; MediaPipe's package also links its privacy notice at <https://goo.gle/mediapipe-privacy>.
 
 ## ag-psd
 
@@ -75,7 +75,6 @@ The unpublished project shown in the Bilibili video “即刻出道！零基础�
 
 ## Artwork
 
-PuppetLoom deliberately versions one named character-art reference pack under `skills/live2d-puppet/assets/blue-whale-maid-reference/`. It supports the bundled Skill's documented layering, rigging, expression, and visual-review workflow; it is not a programmatic test fixture, runtime artifact, or private user project. The artwork and generated layered PSD remain subject to their applicable rights and are not relicensed by the AGPL-3.0-or-later code license.
+PuppetLoom deliberately versions one named character-art reference pack under `skills/live2d-puppet/assets/blue-whale-maid-reference/`. It supports the bundled Skill's documented layering, rigging, expression, and visual-review workflow; it is not a programmatic test fixture, runtime artifact, or private user project. The artwork and generated layered PSD remain subject to their applicable rights and are not relicensed by the Apache-2.0 code license.
 
 All ordinary repository fixtures are programmatically generated geometric test art. Other private user artwork and downloaded character samples remain excluded from Git; locally inspected third-party samples retain their original rights.
-
