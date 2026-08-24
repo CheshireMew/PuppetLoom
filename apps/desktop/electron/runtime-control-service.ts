@@ -13,7 +13,7 @@ import {
   type RuntimeControlResponse,
   type RuntimeControlSnapshot,
   type RuntimeViewerDescriptor
-} from "@puppetloom/core";
+} from "@puppetloom/core/browser";
 
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 
@@ -85,6 +85,14 @@ export class RuntimeControlService {
   private manifest: RuntimeControlManifest | undefined;
   private readonly recordings = new Map<number, ActiveRecording>();
   private readonly replays = new Map<number, ActiveReplay>();
+  private runtimeRequestLog: {
+    startedAt: string;
+    count: number;
+    operations: Record<string, number>;
+    viewers: Set<number>;
+    lastRequestId: string;
+  } | undefined;
+  private runtimeRequestLogTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: RuntimeControlServiceOptions) {
     this.profileDirectory = options.profileDirectory;
@@ -151,6 +159,7 @@ export class RuntimeControlService {
       this.writeManifest(this.manifest);
       this.log("runtime-control-stopped", { url: this.manifest.url });
     }
+    this.flushRuntimeRequestLog();
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -194,8 +203,41 @@ export class RuntimeControlService {
     const result = this.store.apply(request, nowMs);
     this.capture(request, nowMs);
     this.publish(request.viewerId, nowMs);
-    this.log("runtime-control-request", { requestId: request.requestId, op: request.op, viewerId: request.viewerId });
+    this.summarizeRuntimeRequest(request);
     return result;
+  }
+
+  private summarizeRuntimeRequest(request: Exclude<RuntimeControlRequest, { op: "inspect" }>): void {
+    this.runtimeRequestLog ??= {
+      startedAt: new Date().toISOString(),
+      count: 0,
+      operations: {},
+      viewers: new Set(),
+      lastRequestId: request.requestId
+    };
+    this.runtimeRequestLog.count += 1;
+    this.runtimeRequestLog.operations[request.op] = (this.runtimeRequestLog.operations[request.op] ?? 0) + 1;
+    this.runtimeRequestLog.viewers.add(request.viewerId);
+    this.runtimeRequestLog.lastRequestId = request.requestId;
+    if (!this.runtimeRequestLogTimer) {
+      this.runtimeRequestLogTimer = setTimeout(() => this.flushRuntimeRequestLog(), 1_000);
+      this.runtimeRequestLogTimer.unref?.();
+    }
+  }
+
+  private flushRuntimeRequestLog(): void {
+    if (this.runtimeRequestLogTimer) clearTimeout(this.runtimeRequestLogTimer);
+    this.runtimeRequestLogTimer = undefined;
+    const summary = this.runtimeRequestLog;
+    this.runtimeRequestLog = undefined;
+    if (!summary) return;
+    this.log("runtime-control-request-batch", {
+      startedAt: summary.startedAt,
+      count: summary.count,
+      operations: summary.operations,
+      viewers: [...summary.viewers].sort((left, right) => left - right),
+      lastRequestId: summary.lastRequestId
+    });
   }
 
   private startRecording(viewerId: number, nowMs: number): unknown {

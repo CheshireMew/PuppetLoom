@@ -1,5 +1,5 @@
 import type { CalibrationOverrides, MotionState } from "@puppetloom/core";
-import { mergeCalibrationOverrides, neutralMotionState } from "@puppetloom/core/browser";
+import { mergeCalibrationOverridesForPreview, neutralMotionState } from "@puppetloom/core/browser";
 import {
   ArrowDown,
   ArrowDownLeft,
@@ -40,7 +40,7 @@ export const editorPoses: Record<string, { label: string; state: MotionState; ic
 };
 
 export function layerOverride(overrides: CalibrationOverrides, layerId: string, patch: NonNullable<CalibrationOverrides["layers"]>[string]): CalibrationOverrides {
-  return mergeCalibrationOverrides(overrides, { layers: { [layerId]: patch } });
+  return mergeCalibrationOverridesForPreview(overrides, { layers: { [layerId]: patch } });
 }
 
 export function relativeProjectPath(root: string, absolute: string): string {

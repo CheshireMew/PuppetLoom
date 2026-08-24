@@ -2,18 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CalibrationOverrides,
   MotionState,
-  PoseValidation,
   PuppetLoomProject,
   RevisionComparisonResult
 } from "@puppetloom/core";
 import {
-  applyCalibrationOverrides,
+  applyCalibrationOverridesForInteractivePreview,
   deformedPoints,
-  mergeCalibrationOverrides,
+  deformedPointsForPreview,
+  mergeCalibrationOverridesForPreview,
   neutralMotionState,
   poseCorrectionSamples,
-  validateProjectPoses,
-  validatePose
+  rebaseCalibrationOverridesForPreview,
+  isModelBehaviorAvailable
 } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import { Anchor, ArrowLeft, Bone, ExternalLink, GitCompare, Grid3x3, Minimize2, Pause, Play, Redo2, RotateCcw, Save, ScanFace, Undo2, View, X } from "lucide-react";
@@ -44,6 +44,7 @@ import {
   type StudioSection
 } from "./editor/EditorStudioPanels.js";
 import { useEditorDraftPersistence } from "./editor/useEditorDraftPersistence.js";
+import { useEditorValidation } from "./editor/useEditorValidation.js";
 
 export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory: string; onBack: () => void }): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -74,6 +75,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [previewBackground, setPreviewBackground] = useState<PreviewBackground>("checker");
   const [focusedPreview, setFocusedPreview] = useState(false);
   const [activePreviewSample, setActivePreviewSample] = useState("neutral");
+  const [previewChecks, setPreviewChecks] = useState<Record<string, boolean>>({});
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [meshUpgrading, setMeshUpgrading] = useState(false);
@@ -83,8 +85,6 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const [comparison, setComparison] = useState<ComparisonImages>();
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>("split");
   const [splitPercent, setSplitPercent] = useState(50);
-  const [poseChecks, setPoseChecks] = useState<Record<string, PoseValidation>>({});
-  const [draftSafetyChecks, setDraftSafetyChecks] = useState<PoseValidation[]>([]);
   const { pendingRef, cancelScheduled, flushDraft } = useEditorDraftPersistence({
     projectDirectory,
     revision: workspace?.calibration.revision,
@@ -104,9 +104,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     setSelectedParameterId((current) => loaded.project.model.parameters.some((parameter) => parameter.id === current)
       ? current
       : loaded.project.model.parameters[0]?.id ?? "");
-    setSelectedBehaviorId((current) => loaded.project.model.behaviors.some((behavior) => behavior.id === current)
+    setSelectedBehaviorId((current) => loaded.project.model.behaviors.some((behavior) => behavior.id === current && isModelBehaviorAvailable(loaded.project, behavior))
       ? current
-      : loaded.project.model.behaviors[0]?.id ?? "");
+      : loaded.project.model.behaviors.find((behavior) => isModelBehaviorAvailable(loaded.project, behavior))?.id ?? "");
     if (restoreDraft && loaded.draft) {
       pendingRef.current = loaded.draft.overrides;
       setPending(loaded.draft.overrides);
@@ -133,13 +133,21 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [projectDirectory]);
 
   const hasPending = Object.keys(pending).length > 0;
-  const effectiveOverrides = useMemo(() => workspace ? mergeCalibrationOverrides(workspace.calibration.overrides, pending) : pending, [workspace, pending]);
+  const effectiveOverrides = useMemo(() => workspace ? mergeCalibrationOverridesForPreview(workspace.calibration.overrides, pending) : pending, [workspace, pending]);
+  const interactiveOverrides = useMemo(() => workspace
+    ? rebaseCalibrationOverridesForPreview(workspace.calibration.overrides, pending)
+    : pending, [workspace, pending]);
   // A draft must stay spatially stable while a point is dragged. Safety is
   // reported below and enforced by the save transaction, never by silently
   // shrinking the whole runtime envelope during pointer movement.
   const project = useMemo(() => workspace
-    ? hasPending ? applyCalibrationOverrides(workspace.baseProject, effectiveOverrides) : workspace.project
-    : undefined, [workspace, effectiveOverrides, hasPending]);
+    ? hasPending ? applyCalibrationOverridesForInteractivePreview(workspace.project, interactiveOverrides) : workspace.project
+    : undefined, [workspace, interactiveOverrides, hasPending]);
+  const previewCheckRevisionKey = `${projectDirectory}:${workspace?.calibration.revision ?? -1}:${JSON.stringify(interactiveOverrides)}`;
+  useEffect(() => {
+    setPreviewChecks({});
+  }, [previewCheckRevisionKey]);
+  const { poseChecks, draftSafetyChecks, error: validationError, validateNow } = useEditorValidation(project);
   const selectedLayer = project?.layers.find((layer) => layer.id === selectedLayerId);
   const interactionLocked = busy || meshUpgrading;
   const renderProject = useMemo(() => {
@@ -157,7 +165,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   renderProjectRef.current = renderProject;
   const renderSelectedLayer = renderProject?.layers.find((layer) => layer.id === selectedLayerId);
   const posedMeshPoints = useMemo(() => renderProject && renderSelectedLayer
-    ? deformedPoints(renderProject, renderSelectedLayer, previewState)
+    ? deformedPointsForPreview(renderProject, renderSelectedLayer, previewState)
     : [], [renderProject, renderSelectedLayer, previewState]);
   const liveMeshPoints = useCallback(() => {
     const state = renderer.current?.motionState;
@@ -165,13 +173,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [renderProject, renderSelectedLayer]);
 
   useEffect(() => {
-    if (!project) return;
-    const timeout = window.setTimeout(() => {
-      setPoseChecks(Object.fromEntries(Object.entries(editorPoses).map(([id, item]) => [id, validatePose(project, id, item.state)])));
-      setDraftSafetyChecks(validateProjectPoses(project));
-    }, 240);
-    return () => window.clearTimeout(timeout);
-  }, [project]);
+    if (validationError) setError(`后台安全检查失败：${validationError}`);
+  }, [validationError]);
 
   useEffect(() => {
     if (!workspace || !canvas.current) return;
@@ -215,7 +218,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   useEffect(() => {
     if (!behaviorPlaying || !project) return;
-    const behavior = project.model.behaviors.find((candidate) => candidate.id === selectedBehaviorId);
+    const behavior = project.model.behaviors.find((candidate) => candidate.id === selectedBehaviorId && isModelBehaviorAvailable(project, candidate));
     if (!behavior) return;
     let frame = 0;
     let previous = performance.now();
@@ -232,11 +235,12 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   useEffect(() => {
     setPreviewState((current) => {
       const next = { ...current };
-      if (selectedBehaviorId) next.behavior = { id: selectedBehaviorId, timeSeconds: behaviorTime };
+      const selectedBehavior = project?.model.behaviors.find((candidate) => candidate.id === selectedBehaviorId && isModelBehaviorAvailable(project, candidate));
+      if (selectedBehavior) next.behavior = { id: selectedBehavior.id, timeSeconds: behaviorTime };
       else delete next.behavior;
       return next;
     });
-  }, [selectedBehaviorId, behaviorTime]);
+  }, [project, selectedBehaviorId, behaviorTime]);
 
   useEffect(() => () => {
     for (const url of comparison ? [comparison.before, comparison.after, comparison.difference] : []) URL.revokeObjectURL(url);
@@ -337,7 +341,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     setEditorOverlayVisible,
     setNotice,
     setError,
-    setMeshUpgrading
+    setMeshUpgrading,
+    posedMeshPoints
   });
 
   useEffect(() => {
@@ -389,17 +394,17 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   async function save(): Promise<void> {
     if (!hasPending) return;
-    const failed = validateProjectPoses(project!).filter((check) => !check.passed);
-    if (failed.length > 0) {
-      const firstIssue = failed[0]?.issues[0]?.message ?? "存在不安全姿态";
-      setError(`当前草稿未保存：${failed.length} 个安全姿态未通过。${firstIssue} 请先微调或撤销这次改动。`);
-      setSection("rig"); setMode("mesh"); setEditorOverlayVisible(true);
-      if (failed[0]?.id && editorPoses[failed[0].id]) selectPose(failed[0].id);
-      return;
-    }
-    cancelScheduled();
     operationLock.current = true; setBusy(true); setError(""); setNotice("");
     try {
+      const failed = (await validateNow(project!)).draftSafetyChecks.filter((check) => !check.passed);
+      if (failed.length > 0) {
+        const firstIssue = failed[0]?.issues[0]?.message ?? "存在不安全姿态";
+        setError(`当前草稿未保存：${failed.length} 个安全姿态未通过。${firstIssue} 请先微调或撤销这次改动。`);
+        setSection("rig"); setMode("mesh"); setEditorOverlayVisible(true);
+        if (failed[0]?.id && editorPoses[failed[0].id]) selectPose(failed[0].id);
+        return;
+      }
+      cancelScheduled();
       const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: label.trim() || "用户界面校准", overrides: pending });
       pendingRef.current = {}; setPending({}); setUndoStack([]); setRedoStack([]); setLabel(""); setDraftStatus("idle");
       await reload();
@@ -414,6 +419,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }
 
   async function restoreRevision(revision: number, restoreLabel: string): Promise<void> {
+    if (revision === workspace?.calibration.revision) { setError("当前已经是这个版本，不需要再次恢复。" ); return; }
     if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复历史版本。草稿仍然保留。" ); return; }
     if (!window.confirm(`把版本 ${revision} 恢复为一个新的当前版本？现有历史不会删除。`)) return;
     operationLock.current = true; setBusy(true); setError("");
@@ -433,6 +439,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   async function resetSelectedLayer(): Promise<void> {
     if (!selectedLayer) return;
+    if (!workspace?.calibration.overrides.layers?.[selectedLayer.id]) { setError("这个图层当前使用的就是自动绑定，没有需要恢复的人工校准。" ); return; }
     if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复自动绑定。草稿仍然保留。" ); return; }
     if (!window.confirm(`恢复“${selectedLayer.sourceName}”的自动绑定？其它图层不会改变。`)) return;
     operationLock.current = true; setBusy(true); setError("");
@@ -495,6 +502,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const currentPoseCheck = poseChecks[poseId];
   const draftSafetyPassed = draftSafetyChecks.length > 0 && draftSafetyChecks.every((check) => check.passed);
   const currentPoseLabel = editorPoses[poseId]?.label ?? "自定义姿态";
+  const canRestoreAll = workspace.calibration.revision > 0 && Object.keys(workspace.calibration.overrides).length > 0;
+  const canResetSelectedLayer = Boolean(selectedLayer && workspace.calibration.overrides.layers?.[selectedLayer.id]);
 
   return (
     <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
@@ -508,7 +517,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
           <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
           <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="恢复全部自动绑定" title="恢复全部自动绑定" onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked}><RotateCcw aria-hidden="true" /></button>
+          <button className="icon-only" aria-label="恢复全部自动绑定" title={canRestoreAll ? "恢复全部自动绑定" : "当前没有已保存的人工校准可恢复"} onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
           <button className="header-save with-icon" aria-label="保存更改" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存"}</button>
           <button className="with-icon" aria-label="运行角色窗口" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行</button>
         </div>
@@ -540,7 +549,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           const status = `${corrected ? "，已有人工微调" : "，尚未微调"}${check?.passed === false ? `，${check.issues[0]?.message ?? "安全检查未通过"}` : ""}`;
           return <button className={`pose-shortcut icon-only ${!autonomous && poseId === id ? "active" : ""} ${corrected ? "is-corrected" : ""} ${check?.passed === false ? "pose-warning" : ""}`} aria-label={`${item.label}${status}`} title={`${item.label}${status}`} key={id} onClick={() => selectPose(id)}><Icon aria-hidden="true" /></button>;
         })}<button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => setAutonomous((value) => !value)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停动作" : "自主预览"}</button></div></>
-          : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查中立、左右、上下、闭眼和张嘴。"}</small></div><div className="pose-tabs"><button className="with-icon" onClick={() => selectPose("neutral")}><RotateCcw aria-hidden="true" />恢复中立</button><button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
+          : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查九向头部姿态，以及素材实际支持的闭眼和张嘴。"}</small></div><div className="pose-tabs"><button className="with-icon" onClick={() => selectPose("neutral")}><RotateCcw aria-hidden="true" />恢复中立</button><button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
       </section>
 
       <section className={`editor-workspace preview-background-${previewBackground}`}>
@@ -559,7 +568,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
               setSoloSelectedLayer(true);
             }
           }}
-        /> : section === "parameters" ? <ParameterLeftPanel project={project} selectedId={selectedParameterId} onSelect={setSelectedParameterId} /> : section === "dynamics" ? <DynamicsLeftPanel project={project} selectedBehaviorId={selectedBehaviorId} onBehavior={(id) => { setSelectedBehaviorId(id); setBehaviorTime(0); setBehaviorPlaying(false); setAutonomous(false); }} onCreateStarter={createStarterDynamics} /> : <PreviewLeftPanel activeSample={activePreviewSample} onSample={selectPreviewSample} />}
+        /> : section === "parameters" ? <ParameterLeftPanel project={project} selectedId={selectedParameterId} onSelect={setSelectedParameterId} /> : section === "dynamics" ? <DynamicsLeftPanel project={project} selectedBehaviorId={selectedBehaviorId} onBehavior={(id) => { setSelectedBehaviorId(id); setBehaviorTime(0); setBehaviorPlaying(false); setAutonomous(false); }} onCreateStarter={createStarterDynamics} /> : <PreviewLeftPanel project={project} activeSample={activePreviewSample} onSample={selectPreviewSample} />}
         <EditorViewportPanel
           canvas={canvas}
           project={project}
@@ -588,7 +597,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onSplitPercent={setSplitPercent}
           onCloseComparison={() => setComparison(undefined)}
         />
-        {section === "overview" ? <OverviewInspector project={project} revision={workspace.calibration.revision} sessionCount={sessions.length} /> : section === "rig" ? <EditorInspectorPanel
+        {section === "overview" ? <OverviewInspector project={project} revision={workspace.calibration.revision} sessions={sessions} /> : section === "rig" ? <EditorInspectorPanel
           project={project}
           selectedLayer={selectedLayer}
           selectedVertex={selectedVertex}
@@ -599,6 +608,8 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           label={label}
           hasPending={hasPending}
           busy={busy}
+          currentRevision={workspace.calibration.revision}
+          canResetLayer={canResetSelectedLayer}
           sessions={sessions}
           comparison={comparison}
           meshUpgrading={meshUpgrading}
@@ -620,7 +631,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
           onShowEvidence={(sessionId) => void showSessionEvidence(sessionId)}
           onRestore={(revision, restoreLabel) => void restoreRevision(revision, restoreLabel)}
           onMarkEvidence={(sessionId, status) => void markEvidence(sessionId, status)}
-        /> : section === "parameters" ? <ParameterInspector project={project} state={previewState} selectedId={selectedParameterId} onParameter={setPreviewParameter} onState={setPreviewField} onPose={setPreviewPose} onExpression={setPreviewExpression} /> : section === "dynamics" ? <DynamicsInspector project={project} state={previewState} selectedBehaviorId={selectedBehaviorId} behaviorTime={behaviorTime} behaviorPlaying={behaviorPlaying} secondaryPart={secondaryPart} secondaryTuning={selectedTuning} onExpression={setPreviewExpression} onBehaviorTime={(value) => { setBehaviorTime(value); setAutonomous(false); }} onBehaviorPlaying={(value) => { setBehaviorPlaying(value); setAutonomous(false); }} onSecondaryPart={setSecondaryPart} onSecondaryTuning={setSecondaryTuning} onPhysics={patchPhysics} /> : <PreviewInspector project={project} background={previewBackground} focused={focusedPreview} autonomous={autonomous} onBackground={setPreviewBackground} onFocused={setFocusedPreview} onAutonomous={(value) => { setBehaviorPlaying(false); setAutonomous(value); }} onLaunch={() => void launchViewer()} />}
+        /> : section === "parameters" ? <ParameterInspector project={project} state={previewState} selectedId={selectedParameterId} onParameter={setPreviewParameter} onState={setPreviewField} onPose={setPreviewPose} onExpression={setPreviewExpression} /> : section === "dynamics" ? <DynamicsInspector project={project} state={previewState} selectedBehaviorId={selectedBehaviorId} behaviorTime={behaviorTime} behaviorPlaying={behaviorPlaying} secondaryPart={secondaryPart} secondaryTuning={selectedTuning} onExpression={setPreviewExpression} onBehaviorTime={(value) => { setBehaviorTime(value); setAutonomous(false); }} onBehaviorPlaying={(value) => { setBehaviorPlaying(value); setAutonomous(false); }} onSecondaryPart={setSecondaryPart} onSecondaryTuning={setSecondaryTuning} onPhysics={patchPhysics} /> : <PreviewInspector project={project} revision={workspace.calibration.revision} sessions={sessions} background={previewBackground} focused={focusedPreview} autonomous={autonomous} manualChecks={previewChecks} busy={busy} onBackground={setPreviewBackground} onFocused={setFocusedPreview} onAutonomous={(value) => { setBehaviorPlaying(false); setAutonomous(value); }} onLaunch={() => void launchViewer()} onManualCheck={(id, checked) => setPreviewChecks((current) => ({ ...current, [id]: checked }))} onShowEvidence={(sessionId) => void showSessionEvidence(sessionId)} onMarkEvidence={(sessionId, status) => void markEvidence(sessionId, status)} />}
       </section>
     </main>
   );

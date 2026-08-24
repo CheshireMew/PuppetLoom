@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, writeFile, type FileHandle } from "node:fs/promises";
+import { access, mkdir, open, readFile, readdir, rename, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { applyAuthoringOperations, authoringLayerOverrides, buildAuthoringAudit } from "./authoring.js";
 import { applyCalibrationOverrides, clearCalibrationOverrides, mergeCalibrationOverrides } from "./calibration.js";
 import { PuppetLoomError } from "./errors.js";
 import {
   applyStoredCalibration,
-  loadBaseProject,
   loadCalibration,
   loadProject,
   readBaseProject,
@@ -213,7 +213,14 @@ async function commitCalibrationPatch(root: string, patch: CalibrationPatch, rep
   let committed = false;
   try {
     const { project: base, hash } = await readBaseProject(root);
-    const current = await loadCalibration(root);
+    let calibrationInitialized = true;
+    try {
+      await access(join(root, "calibration", "current.json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      calibrationInitialized = false;
+    }
+    const current = await readCalibrationDocument(root, hash);
     await recoverCalibrationOperationsUnlocked(root, current);
     if (current.baseProjectSha256 !== hash && current.revision > 0) throw new PuppetLoomError("INVALID_PROJECT", "基础项目已改变，不能继续追加校准。" );
     if (patch.baseRevision !== current.revision) {
@@ -221,6 +228,9 @@ async function commitCalibrationPatch(root: string, patch: CalibrationPatch, rep
     }
     const before = applySafetyLimits(applyCalibrationOverrides(base, current.overrides));
     const overrides = replacementOverrides ?? mergeCalibrationOverrides(clearCalibrationOverrides(current.overrides, patch.clear), patch.overrides);
+    if (calibrationInitialized && isDeepStrictEqual(overrides, current.overrides)) {
+      throw new PuppetLoomError("INVALID_INPUT", "当前校准已经是目标状态，没有创建新版本。" );
+    }
     const after = applySafetyLimits(applyCalibrationOverrides(base, overrides));
     const rebuiltLayers = rebuiltMeshLayerIds(before, after);
     if (replacementOverrides === undefined && rebuiltLayers.length > 1) {
@@ -548,9 +558,10 @@ export async function loadCalibrationWorkspace(projectDirectory: string): Promis
 
 export async function loadProjectRevision(projectDirectory: string, revision: number): Promise<PuppetLoomProject> {
   if (!Number.isInteger(revision) || revision < 0) throw new PuppetLoomError("INVALID_INPUT", "校准修订号必须是非负整数。" );
-  const base = await loadBaseProject(projectDirectory);
+  const root = resolve(projectDirectory);
+  const { project: base, hash } = await readBaseProject(root);
   if (revision === 0) return applySafetyLimits(base);
-  const current = await loadCalibration(projectDirectory);
+  const current = await readCalibrationDocument(root, hash);
   if (revision === current.revision) return applySafetyLimits(applyCalibrationOverrides(base, current.overrides));
   const session = (await listCalibrationSessions(projectDirectory)).find((candidate) => candidate.toRevision === revision);
   if (!session) throw new PuppetLoomError("INVALID_INPUT", `找不到校准修订 ${revision}。`);

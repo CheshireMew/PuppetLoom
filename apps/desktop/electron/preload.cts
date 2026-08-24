@@ -1,5 +1,85 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron") as typeof import("electron");
 
+interface RecordingMessagePort {
+  onmessage: ((message: Electron.MessageEvent) => void) | null;
+  start(): void;
+  close(): void;
+  postMessage(message: unknown): void;
+}
+
+interface RecordingPortState {
+  port: RecordingMessagePort;
+  pending: Map<number, { resolve: (result: { id: string; bytes: number }) => void; reject: (cause: Error) => void }>;
+}
+
+const recordingPorts = new Map<string, RecordingPortState>();
+let recordingChunkSequence = 0;
+let editorCloseListener: (() => void | Promise<void>) | undefined;
+let editorClosePending = false;
+let editorCloseInFlight = false;
+
+function deliverEditorCloseRequest(): void {
+  if (!editorClosePending || !editorCloseListener || editorCloseInFlight) return;
+  editorClosePending = false;
+  editorCloseInFlight = true;
+  Promise.resolve()
+    .then(() => editorCloseListener?.())
+    .catch(() => undefined)
+    .finally(() => {
+      editorCloseInFlight = false;
+      deliverEditorCloseRequest();
+    });
+}
+
+// The editor UI is lazy-loaded. Buffer close requests in preload so an app
+// quit during startup cannot lose the event before React registers its saver.
+ipcRenderer.on("editor:prepare-close", () => {
+  editorClosePending = true;
+  deliverEditorCloseRequest();
+});
+
+function openPerformanceRecordingStream(id: string): void {
+  const Channel = (globalThis as unknown as { window: { MessageChannel: new () => { port1: RecordingMessagePort; port2: RecordingMessagePort } } }).window.MessageChannel;
+  const channel = new Channel();
+  const port = channel.port1;
+  const state: RecordingPortState = { port, pending: new Map() };
+  recordingPorts.set(id, state);
+  port.onmessage = (message: Electron.MessageEvent) => {
+    const data = message.data as { sequence: number; result?: { id: string; bytes: number }; error?: string };
+    const pending = state.pending.get(data.sequence);
+    if (!pending) return;
+    state.pending.delete(data.sequence);
+    if (data.result) pending.resolve(data.result);
+    else pending.reject(new Error(data.error || "主进程没有确认录制分块。"));
+  };
+  port.start();
+  ipcRenderer.postMessage("viewer:performance-recording-open-stream", { id }, [channel.port2 as unknown as import("node:worker_threads").MessagePort]);
+}
+
+function closePerformanceRecordingStream(id: string): void {
+  const state = recordingPorts.get(id);
+  if (!state) return;
+  recordingPorts.delete(id);
+  state.port.close();
+  for (const pending of state.pending.values()) pending.reject(new Error("录制数据流已经关闭。"));
+  state.pending.clear();
+}
+
+function appendPerformanceRecording(id: string, bytes: Uint8Array, position?: number): Promise<{ id: string; bytes: number }> {
+  const state = recordingPorts.get(id);
+  if (!state) return Promise.reject(new Error("录制数据流尚未建立。"));
+  const sequence = recordingChunkSequence + 1;
+  recordingChunkSequence = sequence;
+  const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? bytes.buffer as ArrayBuffer
+    : bytes.slice().buffer;
+  const promise = new Promise<{ id: string; bytes: number }>((resolve, reject) => {
+    state.pending.set(sequence, { resolve, reject });
+  });
+  state.port.postMessage({ sequence, buffer, ...(position === undefined ? {} : { position }) });
+  return promise;
+}
+
 contextBridge.exposeInMainWorld("puppetloom", {
   choosePsd: () => ipcRenderer.invoke("dialog:psd"),
   chooseReference: () => ipcRenderer.invoke("dialog:reference"),
@@ -34,9 +114,11 @@ contextBridge.exposeInMainWorld("puppetloom", {
   },
   confirmEditorClose: () => ipcRenderer.invoke("editor:confirm-close"),
   onPrepareEditorClose: (listener: () => void | Promise<void>) => {
-    const handler = () => { void listener(); };
-    ipcRenderer.on("editor:prepare-close", handler);
-    return () => ipcRenderer.removeListener("editor:prepare-close", handler);
+    editorCloseListener = listener;
+    deliverEditorCloseRequest();
+    return () => {
+      if (editorCloseListener === listener) editorCloseListener = undefined;
+    };
   },
   readAsset: async (projectDirectory: string, layer: { texture: string }) => {
     const result = (await ipcRenderer.invoke("project:asset", projectDirectory, layer.texture)) as { mime: string; bytes: Uint8Array };
@@ -55,6 +137,7 @@ contextBridge.exposeInMainWorld("puppetloom", {
   copyText: (text: string) => ipcRenderer.invoke("system:copy-text", text),
   controlViewer: (id: number, action: string) => ipcRenderer.invoke("viewer:control", id, action),
   viewerAction: (action: string) => ipcRenderer.invoke("viewer:self-control", action),
+  viewerDrag: (action: "start" | "move" | "end", point?: { x: number; y: number }) => ipcRenderer.send("viewer:drag", action, point),
   pointerTarget: () => ipcRenderer.invoke("viewer:pointer-target"),
   runtimeControl: () => ipcRenderer.invoke("viewer:runtime-control"),
   runtimeDescriptor: () => ipcRenderer.invoke("viewer:runtime-descriptor"),
@@ -79,10 +162,20 @@ contextBridge.exposeInMainWorld("puppetloom", {
     ipcRenderer.on("viewer:input-replay-state", handler);
     return () => ipcRenderer.removeListener("viewer:input-replay-state", handler);
   },
-  startPerformanceRecording: (metadata: unknown) => ipcRenderer.invoke("viewer:performance-recording-start", metadata),
-  appendPerformanceRecording: (id: string, bytes: Uint8Array) => ipcRenderer.invoke("viewer:performance-recording-append", id, bytes),
-  stopPerformanceRecording: (id: string, durationMs: number, inputSession?: unknown) => ipcRenderer.invoke("viewer:performance-recording-stop", id, durationMs, inputSession),
-  failPerformanceRecording: (id: string, error: string) => ipcRenderer.invoke("viewer:performance-recording-fail", id, error),
+  startPerformanceRecording: async (metadata: unknown) => {
+    const session = await ipcRenderer.invoke("viewer:performance-recording-start", metadata) as { id: string };
+    openPerformanceRecordingStream(session.id);
+    return session;
+  },
+  appendPerformanceRecording,
+  stopPerformanceRecording: async (id: string, durationMs: number, inputSession?: unknown) => {
+    try { return await ipcRenderer.invoke("viewer:performance-recording-stop", id, durationMs, inputSession); }
+    finally { closePerformanceRecordingStream(id); }
+  },
+  failPerformanceRecording: async (id: string, error: string) => {
+    try { return await ipcRenderer.invoke("viewer:performance-recording-fail", id, error); }
+    finally { closePerformanceRecordingStream(id); }
+  },
   onViewerState: (listener: (state: unknown) => void) => {
     const handler = (_event: unknown, state: unknown) => listener(state);
     ipcRenderer.on("viewer:state", handler);

@@ -1,10 +1,54 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { parseRuntimeControlRequest, parseRuntimeControlServiceRequest } from "../packages/core/src/runtime-control.js";
 import { RuntimeControlService } from "../apps/desktop/electron/runtime-control-service.js";
+import { RuntimeLogWriter } from "../apps/desktop/electron/runtime-log-writer.js";
 
 afterEach(() => vi.useRealTimers());
 
 describe("desktop input session recording and replay", () => {
+  it("batches, rotates and caps runtime diagnostics without synchronous callers", async () => {
+    const directory = join("D:\\Tools", "PuppetLoom", "e2e", "runtime-log-writer", randomUUID());
+    const path = join(directory, "runtime.log");
+    const writer = new RuntimeLogWriter({ path, rotateBytes: 260, maximumTotalBytes: 900, maximumBatchBytes: 120, flushIntervalMs: 60_000 });
+    for (let index = 0; index < 16; index += 1) writer.log("sample", { index, payload: "runtime-control" });
+    await writer.close();
+    const names = await readdir(directory);
+    const logs = names.filter((name) => name.endsWith(".log"));
+    const totalBytes = (await Promise.all(logs.map((name) => stat(join(directory, name))))).reduce((sum, item) => sum + item.size, 0);
+    const lines = (await Promise.all(logs.map((name) => readFile(join(directory, name), "utf8")))).join("").trim().split("\n").filter(Boolean);
+    expect(logs.length).toBeGreaterThan(1);
+    expect(totalBytes).toBeLessThanOrEqual(900);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(names).toContain("runtime-log-policy.json");
+  });
+
+  it("summarizes high-frequency runtime requests instead of logging every sample", () => {
+    vi.useFakeTimers();
+    const log = vi.fn();
+    const service = new RuntimeControlService({ profileDirectory: "D:\\Tools\\PuppetLoom\\e2e\\runtime-log-batch-test", port: 0, log });
+    service.registerViewer({ id: 1, projectDirectory: "E:\\Characters\\A", projectName: "A", parameters: [], expressions: [], behaviors: [] });
+    for (let index = 0; index < 100; index += 1) {
+      service.applyLocal(parseRuntimeControlRequest({
+        version: 1,
+        requestId: `sample-${index}`,
+        op: "set",
+        viewerId: 1,
+        source: { id: "camera", motion: { headYaw: index / 100 }, ttlMs: 100 }
+      }));
+    }
+    expect(log.mock.calls.filter(([event]) => event === "runtime-control-request-batch")).toHaveLength(0);
+    vi.advanceTimersByTime(1_000);
+    expect(log).toHaveBeenCalledWith("runtime-control-request-batch", expect.objectContaining({
+      count: 100,
+      operations: { set: 100 },
+      viewers: [1],
+      lastRequestId: "sample-99"
+    }));
+  });
+
   it("records effective control events and isolates replay from live sources", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T00:00:00.000Z"));

@@ -63,8 +63,7 @@ export function faceDepthAt(field: CoherentPoseField, normalizedFaceY: number): 
   return 0;
 }
 
-function rolePoseBlend(layer: LayerBinding, base: Point): number {
-  const { role } = layer;
+function rolePoseBlend(layer: LayerBinding, base: Point, role: SemanticRole = layer.role): number {
   if (role === "face" || role === "nose" || role === "mouth" || role === "eyeWhite" || role === "iris" || role === "eyelash" || role === "eyeClosed" || role === "eyebrow") return 1;
   if (role === "ear") return 0.74;
   if (role === "frontHair") {
@@ -104,8 +103,14 @@ type SemanticCageMapping =
   | { kind: "weighted"; entries: Array<{ id: SemanticCagePointId; weight: number }>; total: number };
 
 interface SemanticCageMappingCache {
-  face: WeakMap<Point, SemanticCageMapping>;
-  skull: WeakMap<Point, SemanticCageMapping>;
+  face: SemanticCageRegionMappingCache;
+  skull: SemanticCageRegionMappingCache;
+}
+
+interface SemanticCageRegionMappingCache {
+  byIdentity: WeakMap<Point, SemanticCageMapping>;
+  byCoordinates: Map<number, Map<number, SemanticCageMapping>>;
+  coordinateCount: number;
 }
 
 interface PoseEvaluationCache {
@@ -115,8 +120,9 @@ interface PoseEvaluationCache {
   pitchAngle: number;
   yaw: number;
   pitch: number;
-  projectedFace: Map<SemanticCagePointId, Point>;
-  projectedSkull: Map<SemanticCagePointId, Point>;
+  projectedFace: Partial<Record<SemanticCagePointId, Point>>;
+  projectedSkull: Partial<Record<SemanticCagePointId, Point>>;
+  semanticMappings: SemanticCageMappingCache;
   surfacePivots: WeakMap<LayerBinding, Point>;
   cagePivots: WeakMap<LayerBinding, Point>;
   attachmentPivots: WeakMap<LayerBinding, { surface: Point; cage: Point; faceFollow?: Point }>;
@@ -126,6 +132,55 @@ let poseEvaluationCache: PoseEvaluationCache | undefined;
 let angleCache: { yawAngle: number; pitchAngle: number; cosYaw: number; sinYaw: number; cosPitch: number; sinPitch: number } | undefined;
 const semanticCageMappingCaches = new WeakMap<CoherentPoseField, WeakMap<SemanticControlCage, SemanticCageMappingCache>>();
 const faceDepthCaches = new WeakMap<CoherentPoseField, WeakMap<Point, number>>();
+interface SurfaceProjectionProfile {
+  surface: Surface;
+  nx: number;
+  ny: number;
+  z: number;
+  blend: number;
+  rootWeight: number;
+  skullAligned: boolean;
+}
+
+interface SurfaceProjectionFrame {
+  field: CoherentPoseField;
+  yawAngle: number;
+  pitchAngle: number;
+  skullRoot?: Point;
+  commonOffset?: Point;
+}
+
+const surfaceProjectionProfiles = new WeakMap<
+  CoherentPoseField,
+  WeakMap<LayerBinding, Map<SemanticRole, WeakMap<Point, SurfaceProjectionProfile>>>
+>();
+let surfaceProjectionFrame: SurfaceProjectionFrame | undefined;
+const MAX_SEMANTIC_CAGE_COORDINATE_MAPPINGS = 32_768;
+
+function emptySemanticCageRegionMappingCache(): SemanticCageRegionMappingCache {
+  return { byIdentity: new WeakMap(), byCoordinates: new Map(), coordinateCount: 0 };
+}
+
+function cachedSemanticCageMapping(cache: SemanticCageRegionMappingCache, point: Point): SemanticCageMapping | undefined {
+  return cache.byIdentity.get(point) ?? cache.byCoordinates.get(point.x)?.get(point.y);
+}
+
+function rememberSemanticCageMapping(cache: SemanticCageRegionMappingCache, point: Point, mapping: SemanticCageMapping): void {
+  cache.byIdentity.set(point, mapping);
+  const existing = cache.byCoordinates.get(point.x)?.get(point.y);
+  if (existing) return;
+  if (cache.coordinateCount >= MAX_SEMANTIC_CAGE_COORDINATE_MAPPINGS) {
+    cache.byCoordinates.clear();
+    cache.coordinateCount = 0;
+  }
+  let byY = cache.byCoordinates.get(point.x);
+  if (!byY) {
+    byY = new Map();
+    cache.byCoordinates.set(point.x, byY);
+  }
+  byY.set(point.y, mapping);
+  cache.coordinateCount += 1;
+}
 
 function cachedFaceDepth(field: CoherentPoseField, base: Point, normalizedFaceY: number): number {
   let values = faceDepthCaches.get(field);
@@ -138,6 +193,20 @@ function cachedFaceDepth(field: CoherentPoseField, base: Point, normalizedFaceY:
   const depth = faceDepthAt(field, normalizedFaceY);
   values.set(base, depth);
   return depth;
+}
+
+function semanticCageMappingCacheFor(field: CoherentPoseField, cage: SemanticControlCage): SemanticCageMappingCache {
+  let byCage = semanticCageMappingCaches.get(field);
+  if (!byCage) {
+    byCage = new WeakMap();
+    semanticCageMappingCaches.set(field, byCage);
+  }
+  let mappings = byCage.get(cage);
+  if (!mappings) {
+    mappings = { face: emptySemanticCageRegionMappingCache(), skull: emptySemanticCageRegionMappingCache() };
+    byCage.set(cage, mappings);
+  }
+  return mappings;
 }
 
 function evaluationCacheFor(
@@ -160,8 +229,9 @@ function evaluationCacheFor(
     pitchAngle,
     yaw,
     pitch,
-    projectedFace: new Map(),
-    projectedSkull: new Map(),
+    projectedFace: {},
+    projectedSkull: {},
+    semanticMappings: semanticCageMappingCacheFor(field, cage),
     surfacePivots: new WeakMap(),
     cagePivots: new WeakMap(),
     attachmentPivots: new WeakMap()
@@ -180,6 +250,49 @@ function surfaceFor(field: CoherentPoseField, role: SemanticRole): Surface {
     return { center: field.skullCenter, radiusX: field.skullRadiusX, radiusY: field.skullRadiusY };
   }
   return { center: field.center, radiusX: field.radiusX, radiusY: field.radiusY };
+}
+
+function surfaceProjectionProfile(
+  field: CoherentPoseField,
+  layer: LayerBinding,
+  base: Point,
+  role: SemanticRole
+): SurfaceProjectionProfile {
+  let byLayer = surfaceProjectionProfiles.get(field);
+  if (!byLayer) {
+    byLayer = new WeakMap();
+    surfaceProjectionProfiles.set(field, byLayer);
+  }
+  let byRole = byLayer.get(layer);
+  if (!byRole) {
+    byRole = new Map();
+    byLayer.set(layer, byRole);
+  }
+  let byPoint = byRole.get(role);
+  if (!byPoint) {
+    byPoint = new WeakMap();
+    byRole.set(role, byPoint);
+  }
+  const cached = byPoint.get(base);
+  if (cached) return cached;
+
+  const surface = surfaceFor(field, role);
+  const nx = (base.x - surface.center.x) / surface.radiusX;
+  const ny = (base.y - surface.center.y) / surface.radiusY;
+  const radial = nx * nx + ny * ny;
+  const surfaceDepth = Math.sqrt(Math.max(0, 1 - Math.min(1, radial)));
+  const authoredDepth = faceDepthRoles.has(role) ? cachedFaceDepth(field, base, (ny + 1) * 0.5) : 0;
+  const profile: SurfaceProjectionProfile = {
+    surface,
+    nx,
+    ny,
+    z: surfaceDepth + (roleDepth(role) + authoredDepth) * clamp(field.depthStrength ?? 1, 0.4, 1.6),
+    blend: rolePoseBlend(layer, base, role) * layer.weights.head,
+    rootWeight: layer.weights.head,
+    skullAligned: field.kind === "head-surfaces-v2" && skullRoles.has(role)
+  };
+  byPoint.set(base, profile);
+  return profile;
 }
 
 function projectedCoordinate(
@@ -216,6 +329,30 @@ function projectedCoordinate(
     x: surface.center.x + yawX * surface.radiusX * perspectiveScale,
     y: surface.center.y + pitchY * surface.radiusY * perspectiveScale
   };
+}
+
+function projectionFrameFor(field: CoherentPoseField, yawAngle: number, pitchAngle: number): SurfaceProjectionFrame {
+  if (
+    surfaceProjectionFrame?.field === field &&
+    surfaceProjectionFrame.yawAngle === yawAngle &&
+    surfaceProjectionFrame.pitchAngle === pitchAngle
+  ) return surfaceProjectionFrame;
+  surfaceProjectionFrame = { field, yawAngle, pitchAngle };
+  return surfaceProjectionFrame;
+}
+
+function skullAlignmentFor(field: CoherentPoseField, yawAngle: number, pitchAngle: number): { skullRoot: Point; commonOffset: Point } {
+  const frame = projectionFrameFor(field, yawAngle, pitchAngle);
+  if (frame.skullRoot && frame.commonOffset) return { skullRoot: frame.skullRoot, commonOffset: frame.commonOffset };
+  const skullSurface = surfaceFor(field, "frontHair");
+  const faceSurface = { center: field.center, radiusX: field.radiusX, radiusY: field.radiusY };
+  frame.skullRoot = projectedCoordinate(skullSurface, 0, 0, 1, yawAngle, pitchAngle, field.perspective);
+  const commonRoot = projectedCoordinate(faceSurface, 0, 0, 1, yawAngle, pitchAngle, field.perspective);
+  frame.commonOffset = {
+    x: commonRoot.x - faceSurface.center.x,
+    y: commonRoot.y - faceSurface.center.y
+  };
+  return { skullRoot: frame.skullRoot, commonOffset: frame.commonOffset };
 }
 
 function semanticLandmarkAdjustment(
@@ -323,20 +460,11 @@ function semanticCageMapping(
   field: CoherentPoseField,
   cage: SemanticControlCage,
   base: Point,
-  region: "face" | "skull"
+  region: "face" | "skull",
+  mappings = semanticCageMappingCacheFor(field, cage)
 ): SemanticCageMapping {
-  let byCage = semanticCageMappingCaches.get(field);
-  if (!byCage) {
-    byCage = new WeakMap();
-    semanticCageMappingCaches.set(field, byCage);
-  }
-  let mappings = byCage.get(cage);
-  if (!mappings) {
-    mappings = { face: new WeakMap(), skull: new WeakMap() };
-    byCage.set(cage, mappings);
-  }
   const cache = mappings[region];
-  const cached = cache.get(base);
+  const cached = cachedSemanticCageMapping(cache, base);
   if (cached) return cached;
 
   const triangles = region === "face" ? cage.faceTriangles : cage.skullTriangles;
@@ -344,7 +472,7 @@ function semanticCageMapping(
     const weights = barycentric(base, cage.points[aId].position, cage.points[bId].position, cage.points[cId].position);
     if (!weights || Math.min(weights.a, weights.b, weights.c) < -0.015) continue;
     const mapping: SemanticCageMapping = { kind: "triangle", ids: [aId, bId, cId], weights };
-    cache.set(base, mapping);
+    rememberSemanticCageMapping(cache, base, mapping);
     return mapping;
   }
 
@@ -355,7 +483,7 @@ function semanticCageMapping(
     return { id, weight: source.confidence / (distanceSquared + softening) };
   });
   const mapping: SemanticCageMapping = { kind: "weighted", entries, total: entries.reduce((sum, entry) => sum + entry.weight, 0) };
-  cache.set(base, mapping);
+  rememberSemanticCageMapping(cache, base, mapping);
   return mapping;
 }
 
@@ -372,13 +500,13 @@ function mappedBySemanticCage(
   const cache = evaluationCacheFor(field, cage, yawAngle, pitchAngle, yaw, pitch);
   const projected = region === "face" ? cache.projectedFace : cache.projectedSkull;
   const targetFor = (id: SemanticCagePointId): Point => {
-    const existing = projected.get(id);
+    const existing = projected[id];
     if (existing) return existing;
     const target = projectedCagePoint(field, cage, id, region, yawAngle, pitchAngle, yaw, pitch);
-    projected.set(id, target);
+    projected[id] = target;
     return target;
   };
-  const mapping = semanticCageMapping(field, cage, base, region);
+  const mapping = semanticCageMapping(field, cage, base, region, cache.semanticMappings);
   if (mapping.kind === "triangle") {
     const [aId, bId, cId] = mapping.ids;
     const { weights } = mapping;
@@ -427,6 +555,19 @@ interface FrontHairBangProfile {
   root: Point;
 }
 
+interface FrontHairAttachmentProfile {
+  anchor: Point;
+}
+
+const frontHairStrandProfileCaches = new WeakMap<
+  SemanticControlCage,
+  WeakMap<LayerBinding, WeakMap<Point, FrontHairStrandProfile>>
+>();
+const frontHairAttachmentProfileCaches = new WeakMap<
+  SemanticControlCage,
+  WeakMap<LayerBinding, WeakMap<Point, FrontHairAttachmentProfile>>
+>();
+
 function posedFrontHairAnchor(
   field: CoherentPoseField,
   cage: SemanticControlCage,
@@ -447,6 +588,18 @@ function posedFrontHairAnchor(
 }
 
 function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, base: Point): FrontHairStrandProfile {
+  let byLayer = frontHairStrandProfileCaches.get(cage);
+  if (!byLayer) {
+    byLayer = new WeakMap();
+    frontHairStrandProfileCaches.set(cage, byLayer);
+  }
+  let byPoint = byLayer.get(layer);
+  if (!byPoint) {
+    byPoint = new WeakMap();
+    byLayer.set(layer, byPoint);
+  }
+  const cached = byPoint.get(base);
+  if (cached) return cached;
   const forehead = cage.points.forehead.position;
   const eyeY = (cage.points.eyeLeft.position.y + cage.points.eyeRight.position.y) * 0.5;
   const faceLeft = cage.points.faceLeft.position.x;
@@ -493,7 +646,29 @@ function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, 
   // ceiling keeps the transition continuous without replacing adjacent mesh
   // columns discontinuously.
   const strandRelease = strandMask * smoothstep01((progress - 0.015) / 0.56) * 0.94;
-  return { faceFollow, rootLock, strandRelease, root: strandRoot };
+  const profile = { faceFollow, rootLock, strandRelease, root: strandRoot };
+  byPoint.set(base, profile);
+  return profile;
+}
+
+function frontHairAttachmentProfile(cage: SemanticControlCage, layer: LayerBinding, base: Point): FrontHairAttachmentProfile {
+  let byLayer = frontHairAttachmentProfileCaches.get(cage);
+  if (!byLayer) {
+    byLayer = new WeakMap();
+    frontHairAttachmentProfileCaches.set(cage, byLayer);
+  }
+  let byPoint = byLayer.get(layer);
+  if (!byPoint) {
+    byPoint = new WeakMap();
+    byLayer.set(layer, byPoint);
+  }
+  const cached = byPoint.get(base);
+  if (cached) return cached;
+  const centerX = (cage.points.faceLeft.position.x + cage.points.faceRight.position.x) * 0.5;
+  const edge = base.x < centerX ? cage.points.faceLeft.position : cage.points.faceRight.position;
+  const profile = { anchor: { x: edge.x, y: base.y } };
+  byPoint.set(base, profile);
+  return profile;
 }
 
 function frontHairBangProfile(cage: SemanticControlCage, layer: LayerBinding, base: Point): FrontHairBangProfile {
@@ -528,11 +703,8 @@ function frontHairAttachmentDisplacement(
   yaw: number,
   pitch: number
 ): Point {
-  const centerX = (cage.points.faceLeft.position.x + cage.points.faceRight.position.x) * 0.5;
-  const edge = base.x < centerX ? cage.points.faceLeft.position : cage.points.faceRight.position;
-  const anchor = { x: edge.x, y: base.y };
-  const faceLayer = { ...layer, role: "face" as const, side: "center" as const };
-  const surfaceTarget = projectSurface(field, faceLayer, anchor, yawAngle, pitchAngle);
+  const { anchor } = frontHairAttachmentProfile(cage, layer, base);
+  const surfaceTarget = projectSurface(field, layer, anchor, yawAngle, pitchAngle, "face");
   const cageTarget = mappedBySemanticCage(field, cage, anchor, "face", yawAngle, pitchAngle, yaw, pitch);
   const blend = cageBlendFor("face");
   return {
@@ -637,8 +809,7 @@ function applyHeadwearCrownPerspective(
   // Keep the band seated on the same outer shell as the front hair. Using the
   // shallower generic headwear depth made the cap and the band drift around
   // different centres during a turn.
-  const hairShellLayer = { ...layer, role: "frontHair" as const };
-  const surfacePivot = projectSurface(field, hairShellLayer, crownPivot, yawAngle, pitchAngle);
+  const surfacePivot = projectSurface(field, layer, crownPivot, yawAngle, pitchAngle, "frontHair");
   const cagePivot = cage
     ? mappedBySemanticCage(field, cage, crownPivot, "skull", yawAngle, pitchAngle, yaw, pitch)
     : surfacePivot;
@@ -671,7 +842,7 @@ function applyHeadwearCrownPerspective(
     x: layer.bounds.x + layer.bounds.width * (side < 0 ? 0.34 : 0.66),
     y: layer.bounds.y + layer.bounds.height * 0.54
   };
-  const sideSurface = projectSurface(field, hairShellLayer, sideRoot, yawAngle, pitchAngle);
+  const sideSurface = projectSurface(field, layer, sideRoot, yawAngle, pitchAngle, "frontHair");
   const sideCage = cage
     ? mappedBySemanticCage(field, cage, sideRoot, "skull", yawAngle, pitchAngle, yaw, pitch)
     : sideSurface;
@@ -694,6 +865,47 @@ function applyHeadwearCrownPerspective(
   };
 }
 
+interface BackHairPointProfile {
+  pivot: Point;
+  side: -1 | 1;
+  geometricFreeLength: number;
+  localX: number;
+  localY: number;
+}
+
+const backHairPointProfileCaches = new WeakMap<
+  CoherentPoseField,
+  WeakMap<LayerBinding, WeakMap<Point, BackHairPointProfile>>
+>();
+
+function backHairPointProfile(field: CoherentPoseField, layer: LayerBinding, base: Point): BackHairPointProfile {
+  let byLayer = backHairPointProfileCaches.get(field);
+  if (!byLayer) {
+    byLayer = new WeakMap();
+    backHairPointProfileCaches.set(field, byLayer);
+  }
+  let byPoint = byLayer.get(layer);
+  if (!byPoint) {
+    byPoint = new WeakMap();
+    byLayer.set(layer, byPoint);
+  }
+  const cached = byPoint.get(base);
+  if (cached) return cached;
+  const pivot = layer.role === "backHair" && field.skullCenter
+    ? { x: field.skullCenter.x, y: field.skullCenter.y + (field.skullRadiusY ?? layer.bounds.height * 0.3) * 0.12 }
+    : layer.pivot;
+  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
+  const profile: BackHairPointProfile = {
+    pivot,
+    side: base.x < pivot.x ? -1 : 1,
+    geometricFreeLength: smoothstep01((v - 0.28) / 0.62),
+    localX: base.x - pivot.x,
+    localY: base.y - pivot.y
+  };
+  byPoint.set(base, profile);
+  return profile;
+}
+
 function applyBackHairVolume(
   field: CoherentPoseField,
   cage: SemanticControlCage | undefined,
@@ -708,9 +920,8 @@ function applyBackHairVolume(
   explicitAttachment?: number
 ): Point {
   if (layer.role !== "backHair" && layer.role !== "sideHair") return posed;
-  const pivot = layer.role === "backHair" && field.skullCenter
-    ? { x: field.skullCenter.x, y: field.skullCenter.y + (field.skullRadiusY ?? layer.bounds.height * 0.3) * 0.12 }
-    : layer.pivot;
+  const profile = backHairPointProfile(field, layer, base);
+  const { pivot } = profile;
   const cachedPivots = cage ? evaluationCacheFor(field, cage, yawAngle, pitchAngle, yaw, pitch).attachmentPivots.get(layer) : undefined;
   const surfacePivot = cachedPivots?.surface ?? projectSurface(field, layer, pivot, yawAngle, pitchAngle);
   const cagePivot = cachedPivots?.cage ?? (cage
@@ -722,19 +933,17 @@ function applyBackHairVolume(
     x: surfacePivot.x + (cagePivot.x - surfacePivot.x) * blend,
     y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * blend
   };
-  const side: -1 | 1 = base.x < pivot.x ? -1 : 1;
-  const depth = sidePerspective(yaw, side);
+  const depth = sidePerspective(yaw, profile.side);
   const vertical = clamp(pitch, -1, 1);
-  const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
   const freeLength = explicitAttachment === undefined
-    ? smoothstep01((v - 0.28) / 0.62)
-    : Math.max(smoothstep01((v - 0.28) / 0.62), 1 - clamp(explicitAttachment, 0, 1));
+    ? profile.geometricFreeLength
+    : Math.max(profile.geometricFreeLength, 1 - clamp(explicitAttachment, 0, 1));
   const attached = {
-    x: posedPivot.x + (base.x - pivot.x) * (1 + depth.near * 0.035 - depth.far * 0.055),
-    y: posedPivot.y + (base.y - pivot.y) * (1 - Math.max(0, -vertical) * 0.08 + Math.max(0, vertical) * 0.09)
+    x: posedPivot.x + profile.localX * (1 + depth.near * 0.035 - depth.far * 0.055),
+    y: posedPivot.y + profile.localY * (1 - Math.max(0, -vertical) * 0.08 + Math.max(0, vertical) * 0.09)
   };
   const hanging = {
-    x: base.x + (posedPivot.x - pivot.x) + (base.x - pivot.x) * (depth.near * 0.018 - depth.far * 0.028),
+    x: base.x + (posedPivot.x - pivot.x) + profile.localX * (depth.near * 0.018 - depth.far * 0.028),
     y: base.y + (posedPivot.y - pivot.y)
   };
   return {
@@ -877,39 +1086,42 @@ function applyFrontHairVolume(
   };
 }
 
-function projectSurface(field: CoherentPoseField, layer: LayerBinding, base: Point, yawAngle: number, pitchAngle: number): Point {
-  const surface = surfaceFor(field, layer.role);
-  const nx = (base.x - surface.center.x) / surface.radiusX;
-  const ny = (base.y - surface.center.y) / surface.radiusY;
-  const radial = nx * nx + ny * ny;
-  const surfaceDepth = Math.sqrt(Math.max(0, 1 - Math.min(1, radial)));
-  const authoredDepth = faceDepthRoles.has(layer.role) ? cachedFaceDepth(field, base, (ny + 1) * 0.5) : 0;
-  const z = surfaceDepth + (roleDepth(layer.role) + authoredDepth) * clamp(field.depthStrength ?? 1, 0.4, 1.6);
-
-  let projected = projectedCoordinate(surface, nx, ny, z, yawAngle, pitchAngle, field.perspective);
-  let commonOffset: Point | undefined;
-  if (field.kind === "head-surfaces-v2" && skullRoles.has(layer.role)) {
-    const surfaceRoot = projectedCoordinate(surface, 0, 0, 1, yawAngle, pitchAngle, field.perspective);
-    const faceSurface = { center: field.center, radiusX: field.radiusX, radiusY: field.radiusY };
-    const commonRoot = projectedCoordinate(faceSurface, 0, 0, 1, yawAngle, pitchAngle, field.perspective);
-    commonOffset = { x: commonRoot.x - faceSurface.center.x, y: commonRoot.y - faceSurface.center.y };
+function projectSurface(
+  field: CoherentPoseField,
+  layer: LayerBinding,
+  base: Point,
+  yawAngle: number,
+  pitchAngle: number,
+  role: SemanticRole = layer.role
+): Point {
+  const profile = surfaceProjectionProfile(field, layer, base, role);
+  let projected = projectedCoordinate(
+    profile.surface,
+    profile.nx,
+    profile.ny,
+    profile.z,
+    yawAngle,
+    pitchAngle,
+    field.perspective
+  );
+  if (profile.skullAligned) {
+    const { skullRoot, commonOffset } = skullAlignmentFor(field, yawAngle, pitchAngle);
     projected = {
-      x: surface.center.x + commonOffset.x + (projected.x - surfaceRoot.x),
-      y: surface.center.y + commonOffset.y + (projected.y - surfaceRoot.y)
+      x: profile.surface.center.x + commonOffset.x + (projected.x - skullRoot.x),
+      y: profile.surface.center.y + commonOffset.y + (projected.y - skullRoot.y)
     };
-  }
-  const blend = rolePoseBlend(layer, base) * layer.weights.head;
-  if (commonOffset) {
-    const rootWeight = layer.weights.head;
-    const rooted = { x: base.x + commonOffset.x * rootWeight, y: base.y + commonOffset.y * rootWeight };
+    const rooted = {
+      x: base.x + commonOffset.x * profile.rootWeight,
+      y: base.y + commonOffset.y * profile.rootWeight
+    };
     return {
-      x: rooted.x + (projected.x - (base.x + commonOffset.x)) * blend,
-      y: rooted.y + (projected.y - (base.y + commonOffset.y)) * blend
+      x: rooted.x + (projected.x - (base.x + commonOffset.x)) * profile.blend,
+      y: rooted.y + (projected.y - (base.y + commonOffset.y)) * profile.blend
     };
   }
   return {
-    x: base.x + (projected.x - base.x) * blend,
-    y: base.y + (projected.y - base.y) * blend
+    x: base.x + (projected.x - base.x) * profile.blend,
+    y: base.y + (projected.y - base.y) * profile.blend
   };
 }
 

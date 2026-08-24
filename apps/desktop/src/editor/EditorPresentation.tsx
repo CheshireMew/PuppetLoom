@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import type {
   AnchorGraph,
@@ -49,18 +49,15 @@ export interface ComparisonImages {
 type LayerPatch = NonNullable<CalibrationOverrides["layers"]>[string];
 type VertexChannel = "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin" | "headAttachment" | "physicsRelease";
 
-function meshEdgePath(points: Point[], triangles: number[]): string {
-  const commands: string[] = [];
+function meshEdgePairs(triangles: number[]): Array<[number, number]> {
+  const pairs: Array<[number, number]> = [];
   const edges = new Set<string>();
   const append = (left: number | undefined, right: number | undefined): void => {
     if (left === undefined || right === undefined) return;
     const key = left < right ? `${left},${right}` : `${right},${left}`;
     if (edges.has(key)) return;
-    const a = points[left];
-    const b = points[right];
-    if (!a || !b) return;
     edges.add(key);
-    commands.push(`M${a.x} ${a.y}L${b.x} ${b.y}`);
+    pairs.push([left, right]);
   };
   for (let index = 0; index < triangles.length; index += 3) {
     const a = triangles[index];
@@ -68,12 +65,26 @@ function meshEdgePath(points: Point[], triangles: number[]): string {
     const c = triangles[index + 2];
     append(a, b); append(b, c); append(c, a);
   }
-  return commands.join("");
+  return pairs;
 }
+
+function meshVertexPath(points: Point[], radius: number, indices?: number[]): string {
+  const diameter = radius * 2;
+  const selected = indices ?? points.map((_, index) => index);
+  return selected.flatMap((index) => {
+    const point = points[index];
+    if (!point) return [];
+    return [`M${point.x - radius} ${point.y}a${radius} ${radius} 0 1 0 ${diameter} 0a${radius} ${radius} 0 1 0 ${-diameter} 0`];
+  }).join("");
+}
+
+const artMeshQualityCache = new WeakMap<LayerBinding["mesh"]["uvs"], { balanced: boolean; label: string }>();
 
 function artMeshQuality(layer: LayerBinding): { balanced: boolean; label: string } | undefined {
   const mesh = layer.mesh;
   if (mesh.topology !== "art" || !mesh.art || mesh.uvs.length !== mesh.points.length) return undefined;
+  const cached = artMeshQualityCache.get(mesh.uvs);
+  if (cached) return cached;
   const edges = new Map<string, number>();
   const addEdge = (left: number, right: number): void => {
     const key = left < right ? `${left},${right}` : `${right},${left}`;
@@ -104,12 +115,14 @@ function artMeshQuality(layer: LayerBinding): { balanced: boolean; label: string
   const shortEdges = [...edges.values()].filter((length) => length < shortThreshold).length;
   const shortRatio = edges.size > 0 ? shortEdges / edges.size : 0;
   const balanced = shortRatio <= 0.1 && worstAspect <= 12;
-  return {
+  const result = {
     balanced,
     label: balanced
       ? `均衡 · 最差边比 ${worstAspect.toFixed(1)}:1`
       : `需要重建 · ${shortEdges} 条过短边 · 最差边比 ${worstAspect.toFixed(1)}:1`
   };
+  artMeshQualityCache.set(mesh.uvs, result);
+  return result;
 }
 
 const semanticRoles: SemanticRole[] = [
@@ -155,21 +168,44 @@ function canUseAsParent(childId: string, candidate: LayerBinding, byId: Map<stri
   return true;
 }
 
-export function EditorLayerPanel({
-  project,
-  selectedLayerId,
-  onSelect,
-  onPatchLayer,
-  soloSelectedLayer,
-  onSolo
-}: {
+interface EditorLayerPanelProps {
   project: PuppetLoomProject;
   selectedLayerId: string;
   onSelect: (layerId: string) => void;
   onPatchLayer: (layerId: string, patch: LayerPatch) => void;
   soloSelectedLayer: boolean;
   onSolo: (layerId: string) => void;
-}): React.JSX.Element {
+}
+
+function sameLayerPanelProps(previous: EditorLayerPanelProps, next: EditorLayerPanelProps): boolean {
+  if (previous.selectedLayerId !== next.selectedLayerId || previous.soloSelectedLayer !== next.soloSelectedLayer) return false;
+  const previousLayers = previous.project.layers;
+  const nextLayers = next.project.layers;
+  if (previousLayers.length !== nextLayers.length) return false;
+  return previousLayers.every((layer, index) => {
+    const candidate = nextLayers[index];
+    return candidate !== undefined
+      && layer.id === candidate.id
+      && layer.sourceName === candidate.sourceName
+      && layer.role === candidate.role
+      && layer.side === candidate.side
+      && layer.order === candidate.order
+      && layer.visible === candidate.visible
+      && layer.locked === candidate.locked
+      && layer.deformerId === candidate.deformerId
+      && layer.parentGroup === candidate.parentGroup
+      && layer.parentLayerId === candidate.parentLayerId;
+  });
+}
+
+export const EditorLayerPanel = memo(function EditorLayerPanel({
+  project,
+  selectedLayerId,
+  onSelect,
+  onPatchLayer,
+  soloSelectedLayer,
+  onSolo
+}: EditorLayerPanelProps): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [orderMode, setOrderMode] = useState<"hierarchy" | "draw">("hierarchy");
   const byId = new Map(project.layers.map((layer) => [layer.id, layer]));
@@ -205,7 +241,7 @@ export function EditorLayerPanel({
       </div>
     </aside>
   );
-}
+}, sameLayerPanelProps);
 
 export function EditorViewportPanel({
   canvas,
@@ -267,6 +303,8 @@ export function EditorViewportPanel({
   const neutralMeshPoints = selectedLayer?.mesh.points ?? [];
   const [animatedMesh, setAnimatedMesh] = useState<{ layerId: string; points: Point[] }>();
   const [hoveredMeshVertex, setHoveredMeshVertex] = useState<number>();
+  const meshCanvas = useRef<HTMLCanvasElement>(null);
+  const meshInteractionPlane = useRef<SVGRectElement>(null);
   useEffect(() => {
     if (!animateMesh || !selectedLayer) {
       setAnimatedMesh(undefined);
@@ -309,11 +347,10 @@ export function EditorViewportPanel({
   }>();
   const screenPixel = 1 / Math.max(1, Math.sqrt(navigation.stageSize.width * navigation.stageSize.height) * navigation.transform.zoom);
   const meshVertexRadius = screenPixel * (meshPoints.length > 300 ? 1.15 : meshPoints.length > 120 ? 1.35 : 1.55);
-  // Keep the visible point Cubism-thin while retaining a practical 13 px hit
-  // target. A larger target makes neighbouring vertices overlap and steals
-  // ordinary canvas-pan gestures in dense meshes.
-  const meshHitRadius = screenPixel * 6.5;
-  const selectedSet = new Set(selectedVertices);
+  const meshEdges = useMemo(() => meshEdgePairs(meshTriangles), [meshTriangles]);
+  const selectedVertexCloud = useMemo(() => meshVertexPath(meshPoints, meshVertexRadius, selectedVertices), [meshPoints, meshVertexRadius, selectedVertices]);
+  const primarySelectedVertex = selectedVertex ?? selectedVertices.at(-1);
+  const primarySelectedPoint = primarySelectedVertex === undefined ? undefined : meshPoints[primarySelectedVertex];
   const selectedMeshBounds = selectedVertices.length > 1 ? (() => {
     const points = selectedVertices.map((index) => meshPoints[index]).filter((point): point is Point => Boolean(point));
     if (points.length < 2) return undefined;
@@ -324,7 +361,79 @@ export function EditorViewportPanel({
     const bottom = Math.min(1, Math.max(...points.map((point) => point.y)) + padding);
     return { x: left, y: top, width: right - left, height: bottom - top };
   })() : undefined;
+  const meshSignature = meshPoints.length === 0 ? "" : [meshPoints[0], meshPoints[Math.floor(meshPoints.length / 2)], meshPoints.at(-1)]
+    .filter((point): point is Point => Boolean(point)).map((point) => `${point.x.toFixed(5)},${point.y.toFixed(5)}`).join(";");
+  useLayoutEffect(() => {
+    const target = meshInteractionPlane.current as (SVGRectElement & { __puppetloomMeshSnapshot?: { points: Point[]; radius: number } }) | null;
+    if (!target) return;
+    target.__puppetloomMeshSnapshot = { points: meshPoints, radius: meshVertexRadius };
+    return () => { delete target.__puppetloomMeshSnapshot; };
+  }, [meshPoints, meshVertexRadius, mode, showOverlay]);
   const locked = selectedLayer?.locked === true;
+  useEffect(() => {
+    const target = meshCanvas.current;
+    if (!target || mode !== "mesh" || !showOverlay || meshPoints.length === 0) return;
+    const width = Math.max(1, Math.round(navigation.stageSize.width));
+    const height = Math.max(1, Math.round(navigation.stageSize.height));
+    const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    const pixelWidth = Math.round(width * ratio);
+    const pixelHeight = Math.round(height * ratio);
+    if (target.width !== pixelWidth || target.height !== pixelHeight) {
+      target.width = pixelWidth;
+      target.height = pixelHeight;
+    }
+    const context = target.getContext("2d");
+    if (!context) return;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, width, height);
+    const drawEdges = (points: Point[], color: string, alpha: number, dashed: boolean): void => {
+      context.beginPath();
+      for (const [left, right] of meshEdges) {
+        const a = points[left]; const b = points[right];
+        if (!a || !b) continue;
+        context.moveTo(a.x * width, a.y * height);
+        context.lineTo(b.x * width, b.y * height);
+      }
+      context.strokeStyle = color;
+      context.globalAlpha = alpha;
+      context.lineWidth = 0.3 / Math.max(0.01, navigation.transform.zoom);
+      context.setLineDash(dashed ? [4 / navigation.transform.zoom, 3 / navigation.transform.zoom] : []);
+      context.stroke();
+    };
+    const radius = meshVertexRadius * Math.min(width, height);
+    const denseMesh = meshPoints.length > 800;
+    if (!denseMesh) {
+      if (showNeutralMeshReference) drawEdges(neutralMeshPoints, "#c3c6cc", 0.22, true);
+      drawEdges(meshPoints, "#9da3ad", 0.52, false);
+      context.beginPath();
+      for (const point of meshPoints) {
+        context.moveTo(point.x * width + radius, point.y * height);
+        context.arc(point.x * width, point.y * height, radius, 0, Math.PI * 2);
+      }
+      context.fillStyle = "#f7fff9";
+      context.strokeStyle = "#173326";
+      context.globalAlpha = locked ? 0.72 : 1;
+      context.lineWidth = 0.6 / Math.max(0.01, navigation.transform.zoom);
+      context.fill();
+      context.stroke();
+    } else {
+      // At very high ArtMesh density, drawing every interior edge and
+      // tessellating thousands of circles obscures the artwork and dominates
+      // pointer latency. Compact square points retain every editable vertex;
+      // the hovered and selected vertices remain precise SVG circles above it.
+      const diameter = Math.max(1, radius * 1.65);
+      if (showNeutralMeshReference) {
+        context.fillStyle = "#c3c6cc";
+        context.globalAlpha = 0.28;
+        for (const point of neutralMeshPoints) context.fillRect(point.x * width - diameter / 2, point.y * height - diameter / 2, diameter, diameter);
+      }
+      context.fillStyle = "#f7fff9";
+      context.globalAlpha = locked ? 0.62 : 0.86;
+      for (const point of meshPoints) context.fillRect(point.x * width - diameter / 2, point.y * height - diameter / 2, diameter, diameter);
+    }
+    context.globalAlpha = 1;
+    context.setLineDash([]);
+  }, [locked, meshEdges, meshPoints, meshVertexRadius, mode, navigation.stageSize.height, navigation.stageSize.width, navigation.transform.zoom, neutralMeshPoints, showNeutralMeshReference, showOverlay]);
   const meshViewportRect = (): DOMRect | undefined => navigation.stageRef.current?.querySelector<SVGSVGElement>(".editor-overlay")?.getBoundingClientRect()
     ?? navigation.stageRef.current?.getBoundingClientRect();
   const normalizedMeshPoint = (clientX: number, clientY: number): Point | undefined => {
@@ -377,6 +486,9 @@ export function EditorViewportPanel({
       setMeshSelectionBox(gesture);
       return;
     }
+    const meshInteractionPlane = event.target instanceof Element && Boolean(event.target.closest(".mesh-interaction-plane"));
+    if (event.button === 0 && mode === "mesh" && !locked && !animateMesh && meshInteractionPlane
+      && nearestMeshVertexAt(event.clientX, event.clientY) !== undefined) return;
     navigation.viewportHandlers.onPointerDownCapture(event);
   };
   const moveViewportPointer = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -468,6 +580,7 @@ export function EditorViewportPanel({
           }}
         >
           <canvas ref={canvas} className="editor-canvas" />
+          {showOverlay && mode === "mesh" && <canvas ref={meshCanvas} className="editor-mesh-canvas mesh-deformed" data-mesh-signature={meshSignature} aria-hidden="true" />}
           {showOverlay && <svg className="editor-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" onPointerMove={moveOverlayPointer} onPointerLeave={() => setHoveredMeshVertex(undefined)} onPointerUp={onEndDrag} onPointerCancel={onCancelDrag}>
           {mode === "semantic" && cage && <>
             {[...cage.faceTriangles, ...cage.skullTriangles].flatMap((triangle, triangleIndex) => triangle.map((id, index) => {
@@ -498,16 +611,26 @@ export function EditorViewportPanel({
             </g>)}
           </>}
           {mode === "mesh" && selectedLayer && <>
-            {showNeutralMeshReference && <path d={meshEdgePath(neutralMeshPoints, meshTriangles)} className="mesh-line mesh-neutral-reference" />}
-            <path d={meshEdgePath(meshPoints, meshTriangles)} className="mesh-line mesh-deformed" />
+            <rect ref={meshInteractionPlane} x="0" y="0" width="1" height="1" className="mesh-interaction-plane" data-vertex-count={meshPoints.length} data-selected-count={selectedVertices.length} data-selected-indices={selectedVertices.join(",")} onPointerDown={locked || animateMesh ? undefined : (event) => {
+              const nearest = nearestMeshVertex(event);
+              if (nearest !== undefined) onBeginDrag(event, { kind: "mesh", index: nearest });
+            }} />
             {softSelectionEnabled && selectedVertex !== undefined && meshPoints[selectedVertex] && <circle cx={meshPoints[selectedVertex]!.x} cy={meshPoints[selectedVertex]!.y} r={softRadius} className="soft-radius" />}
-            {meshPoints.map((point, index) => <g key={index} className="mesh-vertex-target">
-              <circle cx={point.x} cy={point.y} r={meshHitRadius} className="handle-hit mesh-handle-hit" tabIndex={locked || animateMesh ? -1 : 0} role="slider" aria-disabled={locked || animateMesh} aria-label={`${selectedLayer.sourceName} 网格顶点 ${index}；按住 Shift 可多选`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={locked || animateMesh ? undefined : (event) => onNudge(event, { kind: "mesh", index })} onPointerDown={locked || animateMesh ? undefined : (event) => {
-                const nearest = nearestMeshVertex(event);
-                if (nearest !== undefined) onBeginDrag(event, { kind: "mesh", index: nearest });
-              }} />
-              <circle cx={point.x} cy={point.y} r={meshVertexRadius} className={`handle handle-visible mesh-handle ${selectedSet.has(index) ? "selected" : ""} ${hoveredMeshVertex === index ? "hovered" : ""} ${locked || animateMesh ? "locked" : ""}`} aria-hidden="true" />
-            </g>)}
+            {selectedVertexCloud && <path d={selectedVertexCloud} className="mesh-vertex-cloud selected" aria-hidden="true" />}
+            {hoveredMeshVertex !== undefined && meshPoints[hoveredMeshVertex] && <circle cx={meshPoints[hoveredMeshVertex]!.x} cy={meshPoints[hoveredMeshVertex]!.y} r={meshVertexRadius} className={`handle handle-visible mesh-handle hovered ${selectedVertices.includes(hoveredMeshVertex) ? "selected" : ""}`} aria-hidden="true" />}
+            {primarySelectedPoint && primarySelectedVertex !== undefined && <circle
+              cx={primarySelectedPoint.x}
+              cy={primarySelectedPoint.y}
+              r={meshVertexRadius}
+              className="handle mesh-handle selected mesh-primary-handle"
+              tabIndex={locked || animateMesh ? -1 : 0}
+              role="slider"
+              aria-disabled={locked || animateMesh}
+              aria-label={`${selectedLayer.sourceName} 网格顶点 ${primarySelectedVertex}；按住 Shift 可多选`}
+              aria-valuetext={`${primarySelectedPoint.x.toFixed(3)}, ${primarySelectedPoint.y.toFixed(3)}`}
+              onKeyDown={locked || animateMesh ? undefined : (event) => onNudge(event, { kind: "mesh", index: primarySelectedVertex })}
+              onPointerDown={locked || animateMesh ? undefined : (event) => onBeginDrag(event, { kind: "mesh", index: primarySelectedVertex })}
+            />}
             {selectedMeshBounds && !locked && !animateMesh && <rect
               {...selectedMeshBounds}
               className="handle-hit mesh-selection-move-area"
@@ -560,6 +683,8 @@ export function EditorInspectorPanel({
   label,
   hasPending,
   busy,
+  currentRevision,
+  canResetLayer,
   sessions,
   comparison,
   meshUpgrading,
@@ -592,6 +717,8 @@ export function EditorInspectorPanel({
   label: string;
   hasPending: boolean;
   busy: boolean;
+  currentRevision: number;
+  canResetLayer: boolean;
   sessions: CalibrationSessionSummary[];
   comparison: ComparisonImages | undefined;
   meshUpgrading: boolean;
@@ -629,7 +756,7 @@ export function EditorInspectorPanel({
           <dt>图层</dt><dd>{selectedLayer.sourceName}</dd>
           <dt>网格</dt><dd>{selectedLayer.mesh.topology === "art" ? "Alpha ArtMesh" : `${selectedLayer.mesh.rows} × ${selectedLayer.mesh.cols} 规则网格`}</dd>
           <dt>顶点 / 三角形</dt><dd>{selectedLayer.mesh.points.length} / {Math.floor(selectedLayer.mesh.triangles.length / 3)}</dd>
-          {selectedLayer.hairStrands && <><dt>头发房束</dt><dd>{selectedLayer.hairStrands.length} 条 · 平均置信度 {(selectedLayer.hairStrands.reduce((sum, strand) => sum + strand.confidence, 0) / selectedLayer.hairStrands.length).toFixed(2)}</dd></>}
+          {selectedLayer.hairStrands && <><dt>头发束</dt><dd>{selectedLayer.hairStrands.length} 条 · 平均置信度 {(selectedLayer.hairStrands.reduce((sum, strand) => sum + strand.confidence, 0) / selectedLayer.hairStrands.length).toFixed(2)}</dd></>}
           {meshQuality && <><dt>网格质量</dt><dd className={meshQuality.balanced ? "mesh-quality-good" : "mesh-quality-warning"}>{meshQuality.label}</dd></>}
         </dl>
         <label className="check-row"><input type="checkbox" checked={selectedLayer.visible !== false} onChange={(event) => onLayerProperty({ visible: event.target.checked })} />参与渲染</label>
@@ -669,11 +796,13 @@ export function EditorInspectorPanel({
                   : channel === "face" ? "脸部控制笼"
                     : channel === "skull" ? "头骨控制笼"
                       : channel === "physics" ? "次级运动"
-                        : `${channel} 顶点权重`;
+                        : channel === "head" ? "头部跟随"
+                          : channel === "body" ? "身体跟随"
+                            : "视线跟随";
             return <label className="range-row" key={channel}><span>{channelLabel} {value.toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.05" value={value} onChange={(event) => onVertexInfluence(channel, Number(event.target.value))} /></label>;
           })}
         </section>}
-        <button className="with-icon" onClick={onResetLayer} disabled={busy}><RotateCcw aria-hidden="true" />只恢复这个图层</button>
+        <button className="with-icon" onClick={onResetLayer} disabled={busy || hasPending || !canResetLayer} title={hasPending ? "请先保存或放弃当前草稿" : canResetLayer ? "只清除这个图层已保存的人工校准" : "这个图层当前使用的就是自动绑定"}><RotateCcw aria-hidden="true" />只恢复这个图层</button>
       </> : <p>从左侧选择图层。</p>}
       </div>
 
@@ -728,7 +857,7 @@ export function EditorInspectorPanel({
         <h3>校准历史</h3>{sessions.length === 0 && <p>还没有保存过校准。</p>}
         {sessions.map((session) => <article key={session.id} className={comparison?.result.toRevision === session.toRevision ? "active" : ""}>
           <strong>版本 {session.toRevision} · {session.label}</strong><small><time dateTime={session.createdAt}>{new Date(session.createdAt).toLocaleString("zh-CN")}</time> · {session.evidenceStatus === "accepted" ? "已确认" : session.evidenceStatus === "rejected" ? "已标记无效" : "待检查"}</small>
-          <div><button className="with-icon" onClick={() => onShowEvidence(session.id)}><Eye aria-hidden="true" />查看对比</button><button className="with-icon" onClick={() => onRestore(session.toRevision, `恢复到 ${session.label}`)}><RotateCcw aria-hidden="true" />恢复</button><button className="with-icon" onClick={() => onMarkEvidence(session.id, "accepted")}><Check aria-hidden="true" />确认</button><button className="with-icon" onClick={() => onMarkEvidence(session.id, "rejected")}><Ban aria-hidden="true" />无效</button></div>
+          <div><button disabled={busy} className="with-icon" onClick={() => onShowEvidence(session.id)}><Eye aria-hidden="true" />查看对比</button><button disabled={busy || session.toRevision === currentRevision} title={session.toRevision === currentRevision ? "当前已经是这个版本" : "把这个历史版本恢复为新的当前版本"} className="with-icon" onClick={() => onRestore(session.toRevision, `恢复到 ${session.label}`)}><RotateCcw aria-hidden="true" />恢复</button><button disabled={busy || session.evidenceStatus === "accepted"} className="with-icon" onClick={() => onMarkEvidence(session.id, "accepted")}><Check aria-hidden="true" />确认</button><button disabled={busy || session.evidenceStatus === "rejected"} className="with-icon" onClick={() => onMarkEvidence(session.id, "rejected")}><Ban aria-hidden="true" />无效</button></div>
         </article>)}
       </section>
       </div>

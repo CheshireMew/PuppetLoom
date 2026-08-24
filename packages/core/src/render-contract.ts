@@ -86,10 +86,23 @@ export interface AuthoredRenderFrame {
   authoringByLayerId: Map<string, EvaluatedLayerAuthoring>;
 }
 
+export interface AuthoredRenderFrameReuse {
+  project: PuppetLoomProject;
+  inputState: MotionState;
+  frame: AuthoredRenderFrame;
+}
+
 /** Resolves parameters and expensive authored geometry once for an entire render frame. */
-export function authoredRenderFrame(project: PuppetLoomProject, state: MotionState): AuthoredRenderFrame {
-  const resolved = featureGatedMotionState(project, state);
-  const authoringByLayerId = new Map(project.layers.map((layer) => [layer.id, evaluateLayerAuthoringResolved(project, layer, resolved)]));
+export function authoredRenderFrame(project: PuppetLoomProject, state: MotionState, previous?: AuthoredRenderFrameReuse): AuthoredRenderFrame {
+  const canReuse = previous?.inputState === state
+    && previous.project.model === project.model
+    && previous.project.runtime === project.runtime;
+  const resolved = canReuse ? previous.frame.state : featureGatedMotionState(project, state);
+  const previousLayers = canReuse ? new Map(previous.project.layers.map((layer) => [layer.id, layer])) : undefined;
+  const authoringByLayerId = new Map(project.layers.map((layer) => {
+    const reusable = previousLayers?.get(layer.id) === layer ? previous?.frame.authoringByLayerId.get(layer.id) : undefined;
+    return [layer.id, reusable ?? evaluateLayerAuthoringResolved(project, layer, resolved)];
+  }));
   const authoredOrder = (layer: LayerBinding): number => layer.order + (authoringByLayerId.get(layer.id)?.drawOrderOffset ?? 0);
   const face = project.layers.find((layer) => layer.role === "face");
   const faceOrder = face ? authoredOrder(face) : undefined;

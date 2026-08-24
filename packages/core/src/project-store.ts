@@ -118,7 +118,8 @@ export async function saveCalibrationDraft(
   label?: string
 ): Promise<CalibrationDraftDocument> {
   const root = resolve(projectDirectory);
-  const [{ hash }, calibration] = await Promise.all([readBaseProject(root), loadCalibration(root)]);
+  const { hash } = await readBaseProject(root);
+  const calibration = await readCalibrationDocument(root, hash);
   if (baseRevision !== calibration.revision) throw new PuppetLoomError("INVALID_PROJECT", "项目校准已更新，请重新打开编辑器后再继续。" );
   let overrides: CalibrationOverrides;
   try {
@@ -141,7 +142,8 @@ export async function saveCalibrationDraft(
 
 export async function clearCalibrationDraft(projectDirectory: string): Promise<void> {
   const root = resolve(projectDirectory);
-  const [{ hash }, calibration] = await Promise.all([readBaseProject(root), loadCalibration(root)]);
+  const { hash } = await readBaseProject(root);
+  const calibration = await readCalibrationDocument(root, hash);
   await mkdir(join(root, "calibration"), { recursive: true });
   await atomicJson(join(root, "calibration", "draft.json"), emptyCalibrationDraft(hash, calibration.revision));
 }

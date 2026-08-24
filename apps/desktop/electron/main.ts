@@ -1,8 +1,8 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadProject, loadProjectRevision, parseRuntimeControlRequest, parseRuntimeControlServiceRequest, parseRuntimeInputSession } from "@puppetloom/core";
+import { isModelBehaviorAvailable, isModelExpressionAvailable, parseRuntimeControlRequest, parseRuntimeControlServiceRequest, parseRuntimeInputSession } from "@puppetloom/core/browser";
 import type { PuppetLoomProject, RuntimeControlSetRequest, RuntimeInputSession, RuntimeViewerDescriptor } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, protocol, screen, session, shell } from "electron";
@@ -11,6 +11,9 @@ import { CalibrationIpcService } from "./calibration-ipc.js";
 import { ProjectIpcService } from "./project-ipc.js";
 import { PerformanceRecordingService } from "./performance-recording-service.js";
 import { RuntimeControlService } from "./runtime-control-service.js";
+import { RuntimeLogWriter } from "./runtime-log-writer.js";
+import { runProjectWorker } from "./project-worker-client.js";
+import { visibleWindowBounds, WindowPreferencesStore, type StoredWindowBounds, type ViewerWindowPreference } from "./window-preferences.js";
 
 const electronDirectory = dirname(fileURLToPath(import.meta.url));
 const preload = join(electronDirectory, "preload.cjs");
@@ -22,9 +25,11 @@ const viewerProjectSnapshots = new Map<number, PuppetLoomProject>();
 const viewerSourceLabels = new Map<number, string>();
 const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 const viewerAspectRatios = new Map<number, number>();
+const viewerWindowDrags = new Map<number, { cursor: { x: number; y: number }; bounds: StoredWindowBounds }>();
 let runtimeLogPath: string | undefined;
-let viewerMouseTrackingPreference: boolean | undefined;
+let runtimeLogWriter: RuntimeLogWriter | undefined;
 let runtimeControlService: RuntimeControlService | undefined;
+let windowPreferences: WindowPreferencesStore;
 const performanceRecordingService = new PerformanceRecordingService();
 const editorWindows = new Map<number, string>();
 const editorCloseReady = new Set<number>();
@@ -77,31 +82,7 @@ function registerRuntimeAssetProtocol(): void {
 }
 
 function runtimeLog(event: string, details: Record<string, unknown> = {}): void {
-  if (!runtimeLogPath) return;
-  try {
-    mkdirSync(dirname(runtimeLogPath), { recursive: true });
-    const policyPath = join(dirname(runtimeLogPath), "runtime-log-policy.json");
-    if (!existsSync(policyPath)) writeFileSync(policyPath, `${JSON.stringify({
-      version: 1,
-      owner: "PuppetLoom desktop runtime",
-      activeLog: runtimeLogPath,
-      rotateBytes: RUNTIME_LOG_ROTATE_BYTES,
-      maximumTotalBytes: RUNTIME_LOG_MAX_TOTAL_BYTES,
-      cleanup: "report-only"
-    }, null, 2)}\n`, "utf8");
-    const runtimeLogs = readdirSync(dirname(runtimeLogPath))
-      .filter((name) => /^runtime(?:-[\dT.Z-]+-\d+)?\.log$/.test(name))
-      .map((name) => join(dirname(runtimeLogPath!), name));
-    const totalBytes = runtimeLogs.reduce((sum, path) => sum + statSync(path).size, 0);
-    if (totalBytes >= RUNTIME_LOG_MAX_TOTAL_BYTES) return;
-    if (existsSync(runtimeLogPath) && statSync(runtimeLogPath).size >= RUNTIME_LOG_ROTATE_BYTES) {
-      const archived = join(dirname(runtimeLogPath), `runtime-${new Date().toISOString().replaceAll(":", "-")}-${process.pid}.log`);
-      renameSync(runtimeLogPath, archived);
-    }
-    appendFileSync(runtimeLogPath, `${JSON.stringify({ time: new Date().toISOString(), event, ...details })}\n`, "utf8");
-  } catch {
-    // Runtime diagnostics must never prevent the viewer from opening.
-  }
+  runtimeLogWriter?.log(event, details);
 }
 
 function queryProjectArgument(commandLine = process.argv): string | undefined {
@@ -131,6 +112,16 @@ function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+function recordingChunkBytes(value: unknown): Uint8Array | undefined {
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Object.prototype.toString.call(value) === "[object ArrayBuffer]") {
+    return new Uint8Array(value as ArrayBuffer);
+  }
+  return undefined;
+}
+
 function samePath(left: string, right: string): boolean {
   return resolve(left).toLocaleLowerCase() === resolve(right).toLocaleLowerCase();
 }
@@ -153,7 +144,7 @@ function launchFromAdditionalData(value: unknown): { project?: string; edit: boo
   return { ...(project ? { project } : {}), edit: data.edit === true, ...(revision !== undefined ? { revision } : {}) };
 }
 
-function ownerWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | undefined {
+function ownerWindow(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): BrowserWindow | undefined {
   return BrowserWindow.fromWebContents(event.sender) ?? undefined;
 }
 
@@ -178,58 +169,75 @@ function publishWindowShellState(window: BrowserWindow): void {
   window.webContents.send("window:shell-state", windowShellState(window));
 }
 
+function displayWorkAreas(): StoredWindowBounds[] {
+  return screen.getAllDisplays().map((display) => display.workArea);
+}
+
+function persistControlWindow(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.isMinimized() || window.isFullScreen()) return;
+  windowPreferences.updateControl({
+    bounds: window.isMaximized() ? window.getNormalBounds() : window.getBounds(),
+    maximized: window.isMaximized()
+  });
+}
+
 function registerControlWindowShell(window: BrowserWindow): void {
   const publish = () => publishWindowShellState(window);
+  let persistenceTimer: NodeJS.Timeout | undefined;
+  const schedulePersistence = () => {
+    if (persistenceTimer) clearTimeout(persistenceTimer);
+    persistenceTimer = setTimeout(() => {
+      persistenceTimer = undefined;
+      persistControlWindow(window);
+    }, 350);
+  };
   window.webContents.on("did-finish-load", publish);
-  window.on("maximize", publish);
-  window.on("unmaximize", publish);
+  window.on("maximize", () => { publish(); persistControlWindow(window); });
+  window.on("unmaximize", () => { publish(); schedulePersistence(); });
   window.on("minimize", publish);
   window.on("restore", publish);
   window.on("enter-full-screen", publish);
   window.on("leave-full-screen", publish);
   window.on("focus", publish);
   window.on("blur", publish);
-  window.on("resize", publish);
-  window.on("move", publish);
-}
-
-function preferredMouseTracking(): boolean {
-  if (viewerMouseTrackingPreference !== undefined) return viewerMouseTrackingPreference;
-  try {
-    const value = JSON.parse(readFileSync(join(applicationProfile, "viewer-preferences.json"), "utf8")) as Record<string, unknown>;
-    viewerMouseTrackingPreference = typeof value.mouseTracking === "boolean" ? value.mouseTracking : true;
-  } catch {
-    viewerMouseTrackingPreference = true;
-  }
-  return viewerMouseTrackingPreference;
-}
-
-function rememberMouseTracking(mouseTracking: boolean): void {
-  viewerMouseTrackingPreference = mouseTracking;
-  try {
-    mkdirSync(applicationProfile, { recursive: true });
-    writeFileSync(join(applicationProfile, "viewer-preferences.json"), `${JSON.stringify({
-      version: 1,
-      mouseTracking,
-      updatedAt: new Date().toISOString()
-    }, null, 2)}\n`, "utf8");
-  } catch (cause) {
-    runtimeLog("viewer-preference-write-failed", { preference: "mouseTracking", value: mouseTracking, error: errorMessage(cause) });
-  }
+  window.on("resize", () => { publish(); schedulePersistence(); });
+  window.on("move", () => { publish(); schedulePersistence(); });
+  window.on("close", () => {
+    if (persistenceTimer) clearTimeout(persistenceTimer);
+    persistControlWindow(window);
+  });
 }
 
 function stateFor(window: BrowserWindow): ViewerState {
   const existing = viewerStates.get(window.id);
   if (existing) return existing;
-  // First launch follows the pointer. Later windows reuse the user's last
-  // choice; the motion controller keeps an autonomous performance underneath.
-  const state = { paused: false, alwaysOnTop: true, clickThrough: false, mouseTracking: preferredMouseTracking(), scale: 1 };
+  const projectDirectory = viewerProjects.get(window.id);
+  const preference = projectDirectory ? windowPreferences.viewer(projectDirectory) : {};
+  const state = {
+    paused: false,
+    alwaysOnTop: preference.alwaysOnTop ?? window.isAlwaysOnTop(),
+    clickThrough: false,
+    mouseTracking: preference.mouseTracking ?? true,
+    scale: preference.scale ?? 1
+  };
   viewerStates.set(window.id, state);
   return state;
 }
 
 function publishState(window: BrowserWindow, next: ViewerState): ViewerState {
+  const previous = viewerStates.get(window.id);
   viewerStates.set(window.id, next);
+  const projectDirectory = viewerProjects.get(window.id);
+  if (projectDirectory && (!previous
+    || previous.alwaysOnTop !== next.alwaysOnTop
+    || previous.mouseTracking !== next.mouseTracking
+    || previous.scale !== next.scale)) {
+    windowPreferences.updateViewer(projectDirectory, {
+      alwaysOnTop: next.alwaysOnTop,
+      mouseTracking: next.mouseTracking,
+      scale: next.scale
+    });
+  }
   if (!window.isDestroyed()) window.webContents.send("viewer:state", next);
   return next;
 }
@@ -266,7 +274,6 @@ function controlViewer(window: BrowserWindow, action: string): ViewerState | nul
   }
   if (action === "pointer-tracking") {
     next = { ...current, mouseTracking: !current.mouseTracking };
-    rememberMouseTracking(next.mouseTracking);
   }
   if (action === "larger" || action === "smaller") {
     const factor = action === "larger" ? 1.1 : 1 / 1.1;
@@ -300,8 +307,8 @@ function runtimeDescriptor(windowId: number, projectDirectory: string, project: 
     projectName: project.name,
     ...(revision === undefined ? {} : { revision }),
     parameters: project.model.parameters.map(({ id, name, min, default: defaultValue, max, semantic }) => ({ id, name, min, default: defaultValue, max, ...(semantic ? { semantic } : {}) })),
-    expressions: project.model.expressions.map(({ id, name }) => ({ id, name })),
-    behaviors: project.model.behaviors.map(({ id, name, duration, loop }) => ({ id, name, duration, loop }))
+    expressions: project.model.expressions.filter((expression) => isModelExpressionAvailable(project, expression)).map(({ id, name }) => ({ id, name })),
+    behaviors: project.model.behaviors.filter((behavior) => isModelBehaviorAvailable(project, behavior)).map(({ id, name, duration, loop }) => ({ id, name, duration, loop }))
   };
 }
 
@@ -321,10 +328,36 @@ function rememberViewerProject(window: BrowserWindow, projectDirectory: string, 
   runtimeControlService?.registerViewer(runtimeDescriptor(window.id, projectDirectory, project, revision));
 }
 
+function registerViewerWindowPersistence(window: BrowserWindow, projectDirectory: string, capture: boolean): void {
+  if (capture) return;
+  let persistenceTimer: NodeJS.Timeout | undefined;
+  const persist = () => {
+    if (window.isDestroyed() || window.isMinimized() || window.isFullScreen()) return;
+    windowPreferences.updateViewer(projectDirectory, { bounds: window.getBounds() });
+  };
+  const schedule = () => {
+    if (persistenceTimer) clearTimeout(persistenceTimer);
+    persistenceTimer = setTimeout(() => {
+      persistenceTimer = undefined;
+      persist();
+    }, 350);
+  };
+  window.on("move", schedule);
+  window.on("resize", schedule);
+  window.on("close", () => {
+    if (persistenceTimer) clearTimeout(persistenceTimer);
+    persist();
+  });
+}
+
 async function createViewer(projectDirectory: string, revision?: number, capture = false, projectOverride?: PuppetLoomProject, sourceLabel?: string): Promise<BrowserWindow> {
   const resolvedProject = resolve(projectDirectory);
   runtimeLog("viewer-create-request", { project: resolvedProject, revision: revision ?? "current", capture });
-  const project = projectOverride ?? (revision === undefined ? await loadProject(resolvedProject) : await loadProjectRevision(resolvedProject, revision));
+  const project = projectOverride ?? await runProjectWorker<PuppetLoomProject>({
+    operation: "load-project",
+    directory: resolvedProject,
+    ...(revision === undefined ? {} : { revision })
+  });
   const resolvedSourceLabel = sourceLabel ?? (revision === undefined ? "已保存项目" : `历史 revision ${revision}`);
   for (const [id, directory] of viewerProjects) {
     const existing = BrowserWindow.fromId(id);
@@ -337,11 +370,14 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     }
   }
   runtimeLog("project-loaded", { project: resolvedProject, revision: revision ?? "current", name: project.name, layers: project.layers.length });
-  const height = 720;
-  const width = Math.max(300, Math.round(height * project.canvas.width / project.canvas.height));
+  const defaultHeight = 720;
+  const defaultWidth = Math.max(300, Math.round(defaultHeight * project.canvas.width / project.canvas.height));
+  const aspectRatio = project.canvas.width / project.canvas.height;
+  const preference: ViewerWindowPreference = capture ? {} : windowPreferences.viewer(resolvedProject);
+  const bounds = visibleWindowBounds(preference.bounds, displayWorkAreas(), { width: defaultWidth, height: defaultHeight }, { width: 220, height: 220 }, aspectRatio);
+  const alwaysOnTop = preference.alwaysOnTop ?? true;
   const window = new BrowserWindow({
-    width,
-    height,
+    ...bounds,
     minWidth: 220,
     minHeight: 220,
     transparent: true,
@@ -349,7 +385,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     frame: false,
     hasShadow: false,
     resizable: true,
-    alwaysOnTop: true,
+    alwaysOnTop,
     skipTaskbar: capture,
     show: !capture,
     title: project.name,
@@ -358,12 +394,24 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     // render loop into intermittent 30/15 FPS motion when another app is used.
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
   });
-  stateFor(window);
   rememberViewerProject(window, resolvedProject, project, revision, resolvedSourceLabel);
-  runtimeLog("viewer-window-created", { id: window.id, width, height });
+  viewerStates.set(window.id, {
+    paused: false,
+    alwaysOnTop,
+    clickThrough: false,
+    mouseTracking: preference.mouseTracking ?? true,
+    scale: preference.scale ?? 1
+  });
+  registerViewerWindowPersistence(window, resolvedProject, capture);
+  runtimeLog("viewer-window-created", { id: window.id, ...bounds, restored: Boolean(preference.bounds) });
   window.once("ready-to-show", () => runtimeLog("viewer-ready-to-show", { id: window.id }));
   window.webContents.on("did-finish-load", () => {
-    runtimeLog("viewer-page-loaded", { id: window.id });
+    // Windows can revise a transparent frameless window while Chromium creates
+    // its native surface. Reapply the validated project bounds after loading so
+    // the final visible window, rather than only the constructor request, is
+    // what the user previously chose.
+    if (preference.bounds) window.setBounds(bounds, false);
+    runtimeLog("viewer-page-loaded", { id: window.id, ...window.getBounds(), restored: Boolean(preference.bounds) });
     publishState(window, stateFor(window));
   });
   window.webContents.on("render-process-gone", (_event, details) => runtimeLog("renderer-gone", { id: window.id, reason: details.reason, exitCode: details.exitCode }));
@@ -378,6 +426,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     viewerSourceLabels.delete(window.id);
     viewerLookOrigins.delete(window.id);
     viewerAspectRatios.delete(window.id);
+    viewerWindowDrags.delete(window.id);
     runtimeControlService?.unregisterViewer(window.id);
   });
   try {
@@ -403,9 +452,15 @@ async function createViewer(projectDirectory: string, revision?: number, capture
 }
 
 function createControlWindow(projectDirectory?: string, editor = false): BrowserWindow {
+  const preference = windowPreferences.control();
+  const bounds = visibleWindowBounds(
+    preference.bounds,
+    displayWorkAreas(),
+    { width: CONTROL_WINDOW_WIDTH, height: CONTROL_WINDOW_HEIGHT },
+    { width: CONTROL_WINDOW_MIN_WIDTH, height: CONTROL_WINDOW_MIN_HEIGHT }
+  );
   const window = new BrowserWindow({
-    width: CONTROL_WINDOW_WIDTH,
-    height: CONTROL_WINDOW_HEIGHT,
+    ...bounds,
     minWidth: CONTROL_WINDOW_MIN_WIDTH,
     minHeight: CONTROL_WINDOW_MIN_HEIGHT,
     frame: CONTROL_WINDOW_SHELL.frame,
@@ -418,8 +473,10 @@ function createControlWindow(projectDirectory?: string, editor = false): Browser
     title: editor ? "PuppetLoom 编辑器" : "PuppetLoom",
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
   });
+  runtimeLog("control-window-created", { id: window.id, ...bounds, restored: Boolean(preference.bounds), maximized: Boolean(preference.maximized) });
   const query = editor && projectDirectory ? { editor: "1", project: resolve(projectDirectory) } : undefined;
   registerControlWindowShell(window);
+  if (preference.maximized) window.maximize();
   if (editor && projectDirectory) editorWindows.set(window.id, resolve(projectDirectory));
   window.on("close", (event) => {
     if (!editorWindows.has(window.id) || editorCloseReady.has(window.id) || window.webContents.isDestroyed()) return;
@@ -445,6 +502,14 @@ const applicationProfile = process.env.PUPPETLOOM_E2E_USER_DATA
     ? join("D:\\Tools", "PuppetLoom", "e2e", `electron-${process.pid}`)
     : join("D:\\Tools", "PuppetLoom", "user-data");
 runtimeLogPath = initialProject ? join(initialProject, "reports", "runtime.log") : join(applicationProfile, "runtime.log");
+runtimeLogWriter = new RuntimeLogWriter({
+  path: runtimeLogPath,
+  rotateBytes: RUNTIME_LOG_ROTATE_BYTES,
+  maximumTotalBytes: RUNTIME_LOG_MAX_TOTAL_BYTES
+});
+windowPreferences = new WindowPreferencesStore(join(applicationProfile, "viewer-preferences.json"), (cause) => {
+  runtimeLog("window-preference-write-failed", { error: errorMessage(cause) });
+});
 app.setPath("userData", applicationProfile);
 app.setPath("cache", join(applicationProfile, "cache"));
 const allowMultipleInstances = process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || (Number.isFinite(automatedExit) && automatedExit > 0);
@@ -553,7 +618,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:launch", async (_event, directory: string, options?: ViewerLaunchOptions) => {
     const projectDirectory = resolve(directory);
-    const project = options?.project ?? await loadProject(projectDirectory);
+    const project = options?.project ?? await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: projectDirectory });
     await projectIpc.rememberProject(projectDirectory, project);
     const window = await createViewer(projectDirectory, undefined, false, project, options?.sourceLabel);
     return { id: window.id, state: stateFor(window) };
@@ -581,6 +646,28 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("viewer:self-control", (event, action: string) => {
     const window = ownerWindow(event);
     return window ? controlViewer(window, action) : null;
+  });
+  ipcMain.on("viewer:drag", (event, action: "start" | "move" | "end", point?: { x?: unknown; y?: unknown }) => {
+    const window = ownerWindow(event);
+    if (!window || !viewerProjects.has(window.id)) return;
+    if (action === "end") {
+      viewerWindowDrags.delete(window.id);
+      return;
+    }
+    const cursor = typeof point?.x === "number" && Number.isFinite(point.x) && typeof point.y === "number" && Number.isFinite(point.y)
+      ? { x: point.x, y: point.y }
+      : screen.getCursorScreenPoint();
+    if (action === "start") {
+      viewerWindowDrags.set(window.id, { cursor, bounds: window.getBounds() });
+      return;
+    }
+    if (action !== "move") return;
+    const drag = viewerWindowDrags.get(window.id);
+    if (!drag) return;
+    const x = Math.round(drag.bounds.x + cursor.x - drag.cursor.x);
+    const y = Math.round(drag.bounds.y + cursor.y - drag.cursor.y);
+    const current = window.getBounds();
+    if (x !== current.x || y !== current.y) window.setPosition(x, y, false);
   });
   ipcMain.handle("viewer:pointer-target", (event) => {
     const window = ownerWindow(event);
@@ -670,10 +757,35 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     runtimeLog("performance-recording-start", { viewerId: window.id, id: result.id, output: result.output });
     return result;
   });
-  ipcMain.handle("viewer:performance-recording-append", (event, id: string, bytes: Uint8Array) => {
+  ipcMain.on("viewer:performance-recording-open-stream", (event, payload: { id: string }) => {
     const window = ownerWindow(event);
-    if (!window) throw new Error("找不到录制窗口。" );
-    return performanceRecordingService.append(window.id, id, bytes);
+    const port = event.ports[0];
+    if (!window || !port) return;
+    port.on("message", (message) => {
+      const data = message.data as { sequence?: unknown; buffer?: unknown; position?: unknown } | null;
+      const sequence = data?.sequence;
+      const bytes = recordingChunkBytes(data?.buffer);
+      const position = data?.position;
+      const validPosition = position === undefined || Number.isSafeInteger(position) && (position as number) >= 0;
+      if (!data || !Number.isInteger(sequence) || !bytes || !validPosition) {
+        runtimeLog("performance-recording-stream-message-rejected", {
+          viewerId: window.id,
+          id: payload.id,
+          reason: data === null ? "empty-message" : "invalid-envelope",
+          envelopeKeys: data && typeof data === "object" ? Object.keys(data) : [],
+          bufferType: Object.prototype.toString.call(data?.buffer)
+        });
+        if (Number.isInteger(sequence)) port.postMessage({ sequence, error: "录制分块格式无效。" });
+        return;
+      }
+      try {
+        const result = performanceRecordingService.append(window.id, payload.id, bytes, position as number | undefined);
+        port.postMessage({ sequence, result });
+      } catch (cause) {
+        port.postMessage({ sequence, error: errorMessage(cause) });
+      }
+    });
+    port.start();
   });
   ipcMain.handle("viewer:performance-recording-stop", (event, id: string, durationMs: number, inputSession?: import("./performance-recording-service.js").PerformanceRecordingInputSession) => {
     const window = ownerWindow(event);
@@ -757,12 +869,25 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => runtimeLog("app-before-quit"));
-app.on("will-quit", () => {
-  runtimeLog("app-will-quit");
+let quitPreparationStarted = false;
+let quitPreparationComplete = false;
+app.on("before-quit", (event) => {
+  if (quitPreparationComplete) return;
+  event.preventDefault();
+  if (quitPreparationStarted) return;
+  quitPreparationStarted = true;
+  runtimeLog("app-before-quit");
   performanceRecordingService.interruptAll("PuppetLoom 在录制结束前退出。" );
+  void (async () => {
+    await runtimeControlService?.stop();
+    runtimeLog("app-will-quit");
+    await runtimeLogWriter?.close();
+    quitPreparationComplete = true;
+    app.quit();
+  })();
+});
+app.on("will-quit", () => {
   globalShortcut.unregisterAll();
-  void runtimeControlService?.stop();
 });
 app.on("window-all-closed", () => {
   runtimeLog("window-all-closed");

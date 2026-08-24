@@ -13,6 +13,10 @@
     "./browser": {
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"
+    },
+    "./desktop": {
+      "types": "./dist/desktop.d.ts",
+      "import": "./dist/desktop.js"
     }
   },
   "scripts": {

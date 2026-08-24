@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { applyCalibrationOverrides, mergeCalibrationOverrides } from "../src/calibration.js";
+import {
+  applyCalibrationOverrides,
+  applyCalibrationOverridesForInteractivePreview,
+  applyCalibrationOverridesForPreview,
+  mergeCalibrationOverrides,
+  mergeCalibrationOverridesForPreview,
+  rebaseCalibrationOverridesForPreview
+} from "../src/calibration.js";
 import { buildArtMesh } from "../src/art-mesh.js";
 import { makeGridMesh } from "../src/rig.js";
 import type { LayerBinding, PuppetLoomProject } from "../src/types.js";
@@ -44,6 +51,35 @@ function project(): PuppetLoomProject {
 }
 
 describe("calibration override contract", () => {
+  it("keeps the interactive structural result equal to the persistence result", () => {
+    const current = applyCalibrationOverrides(project(), {});
+    const overrides = {
+      anchors: { nose: { x: 0.51, y: 0.48 } },
+      layers: { child: { pivot: { x: 0.43, y: 0.39 }, meshPointDeltas: { "4": { x: 0.002, y: -0.003 } } } },
+      runtime: { motionTuning: { response: 0.8 } }
+    };
+    const preview = applyCalibrationOverridesForPreview(current, overrides);
+    const persisted = applyCalibrationOverrides(current, overrides);
+    expect(preview).toEqual(persisted);
+    expect(preview.layers[0]).toBe(current.layers[0]);
+    expect(preview.layers[1]).not.toBe(current.layers[1]);
+  });
+
+  it("rebases final point deltas onto an already calibrated project without double-applying them", () => {
+    const saved = { layers: { child: { meshPointDeltas: { "4": { x: 0.01, y: -0.02 } } } } };
+    const patch = { layers: { child: { meshPointDeltas: { "4": { x: 0.014, y: -0.017 } } } } };
+    const current = applyCalibrationOverrides(project(), saved);
+    const effective = mergeCalibrationOverridesForPreview(saved, patch);
+    const rebased = rebaseCalibrationOverridesForPreview(saved, patch);
+    const interactive = applyCalibrationOverridesForInteractivePreview(current, rebased);
+    const persisted = applyCalibrationOverrides(project(), effective);
+    expect(rebased.layers?.child.meshPointDeltas?.["4"]?.x).toBeCloseTo(0.004);
+    expect(rebased.layers?.child.meshPointDeltas?.["4"]?.y).toBeCloseTo(0.003);
+    expect(interactive.layers.find((entry) => entry.id === "child")!.mesh.points[4]).toEqual(
+      persisted.layers.find((entry) => entry.id === "child")!.mesh.points[4]
+    );
+  });
+
   it("applies hierarchy, drawing, visibility, lock and a resampled mesh as runtime data", () => {
     const applied = applyCalibrationOverrides(project(), {
       layers: {

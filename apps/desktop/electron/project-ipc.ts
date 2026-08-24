@@ -3,12 +3,12 @@ import { randomUUID } from "node:crypto";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
-import { createProject, inspectPsd, loadProject, loadProjectRevision, verifyProject } from "@puppetloom/core";
 import { BrowserWindow, dialog, ipcMain, protocol } from "electron";
 import type { PuppetLoomProject } from "@puppetloom/core";
 import type { DesktopCreateRequest } from "./global.js";
 import { parseByteRange } from "./media-range.js";
 import { recentProjectDisplayName, usableRecentProjects } from "./recent-projects.js";
+import { runProjectWorker, startProjectWorker, type ProjectWorkerCreateResult, type ProjectWorkerOperation } from "./project-worker-client.js";
 
 export interface RecentProject {
   directory: string;
@@ -30,7 +30,7 @@ function isWithin(root: string, target: string): boolean {
 }
 
 export class ProjectIpcService {
-  private readonly createControllers = new Map<string, AbortController>();
+  private readonly createOperations = new Map<string, ProjectWorkerOperation<ProjectWorkerCreateResult>>();
   private readonly mediaFiles = new Map<string, string>();
   constructor(private readonly applicationProfile: string) {}
 
@@ -45,7 +45,7 @@ export class ProjectIpcService {
 
   async rememberProject(projectDirectory: string, loadedProject?: PuppetLoomProject): Promise<RecentProject[]> {
     const directory = resolve(projectDirectory);
-    const project = loadedProject ?? await loadProject(directory);
+    const project = loadedProject ?? await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory });
     const current = (await this.recentProjects()).filter((entry) => !samePath(entry.directory, directory));
     const next = [{ directory, name: recentProjectDisplayName(project.name, directory), openedAt: new Date().toISOString() }, ...current].slice(0, 12);
     mkdirSync(this.applicationProfile, { recursive: true });
@@ -107,39 +107,41 @@ export class ProjectIpcService {
       const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
-    ipcMain.handle("project:inspect", (_event, input: string, alphaCleanup: DesktopCreateRequest["alphaCleanup"] = "automatic") => inspectPsd(resolve(input), { alphaCleanup }));
+    ipcMain.handle("project:inspect", (_event, input: string, alphaCleanup: DesktopCreateRequest["alphaCleanup"] = "automatic") => {
+      return runProjectWorker({ operation: "inspect", input: resolve(input), alphaCleanup });
+    });
     ipcMain.handle("project:create", async (event, request: DesktopCreateRequest) => {
       const operationId = request.operationId ?? randomUUID();
-      if (this.createControllers.has(operationId)) throw new Error("同一个创建操作已经在运行。");
-      const controller = new AbortController();
-      this.createControllers.set(operationId, controller);
+      if (this.createOperations.has(operationId)) throw new Error("同一个创建操作已经在运行。");
+      const normalizedRequest: DesktopCreateRequest = {
+        ...request,
+        input: resolve(request.input),
+        output: resolve(request.output),
+        ...(request.reference ? { reference: resolve(request.reference) } : {})
+      };
+      const operation = startProjectWorker<ProjectWorkerCreateResult>(
+        { operation: "create", request: normalizedRequest },
+        (phase) => { if (!event.sender.isDestroyed()) event.sender.send("project:create-progress", { operationId, phase }); }
+      );
+      this.createOperations.set(operationId, operation);
       try {
-        const result = await createProject({
-          input: resolve(request.input),
-          output: resolve(request.output),
-          seed: request.seed ?? 42,
-          alphaCleanup: request.alphaCleanup ?? "automatic",
-          signal: controller.signal,
-          onProgress: (phase) => { if (!event.sender.isDestroyed()) event.sender.send("project:create-progress", { operationId, phase }); },
-          ...(request.reference ? { reference: resolve(request.reference) } : {}),
-          ...(request.name ? { name: request.name } : {})
-        });
-        await this.rememberProject(result.outputDirectory);
-        return { outputDirectory: result.outputDirectory, report: result.report, verify: await verifyProject(result.outputDirectory) };
+        const result = await operation.promise;
+        await this.rememberProject(result.outputDirectory, result.project);
+        return { outputDirectory: result.outputDirectory, report: result.report, verify: result.verify };
       } finally {
-        this.createControllers.delete(operationId);
+        this.createOperations.delete(operationId);
       }
     });
     ipcMain.handle("project:create-cancel", (_event, operationId: string) => {
-      const controller = this.createControllers.get(operationId);
-      if (!controller) return false;
-      controller.abort(new Error("用户已停止创建；最终项目目录没有被发布。"));
+      const operation = this.createOperations.get(operationId);
+      if (!operation) return false;
+      operation.cancel();
       return true;
     });
     ipcMain.handle("project:recent", () => this.recentProjects());
     ipcMain.handle("project:read", async (_event, directory: string, revision?: number) => {
       const projectDirectory = resolve(directory);
-      const project = revision === undefined ? await loadProject(projectDirectory) : await loadProjectRevision(projectDirectory, revision);
+      const project = await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: projectDirectory, ...(revision === undefined ? {} : { revision }) });
       await this.rememberProject(projectDirectory, project);
       return project;
     });

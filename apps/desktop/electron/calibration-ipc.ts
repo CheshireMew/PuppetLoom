@@ -2,22 +2,16 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   clearCalibrationDraft,
-  artMeshDetailForRole,
-  compareProjectRevisions,
   listCalibrationSessions,
   loadCalibrationWorkspace,
-  loadProjectTextureSources,
-  loadProject,
-  makeAdaptiveMesh,
-  remeshArtMesh,
-  reprojectMeshInfluences,
   restoreCalibrationRevision,
   saveCalibrationDraft,
   saveCalibrationPatch,
   setCalibrationEvidenceStatus
-} from "@puppetloom/core";
+} from "@puppetloom/core/desktop";
 import type { CalibrationOverrides, CalibrationPatch, MeshBinding, PuppetLoomProject, RevisionComparisonResult } from "@puppetloom/core";
 import { ipcMain } from "electron";
+import { runProjectWorker } from "./project-worker-client.js";
 
 export class CalibrationIpcService {
   private readonly draftWrites = new Map<string, Promise<unknown>>();
@@ -46,6 +40,7 @@ export class CalibrationIpcService {
     try {
       return JSON.parse(await readFile(join(output, "comparison.json"), "utf8")) as RevisionComparisonResult;
     } catch {
+      const { compareProjectRevisions } = await import("@puppetloom/core");
       return compareProjectRevisions(root, session.fromRevision, session.toRevision, output);
     }
   }
@@ -53,7 +48,7 @@ export class CalibrationIpcService {
   register(): void {
     ipcMain.handle("editor:read", async (_event, directory: string) => {
       const projectDirectory = resolve(directory);
-      const workspace = await loadCalibrationWorkspace(projectDirectory);
+      const workspace = await runProjectWorker<Awaited<ReturnType<typeof loadCalibrationWorkspace>>>({ operation: "load-workspace", directory: projectDirectory });
       await this.rememberProject(projectDirectory, workspace.project);
       return {
         projectDirectory,
@@ -62,12 +57,19 @@ export class CalibrationIpcService {
     });
     ipcMain.handle("editor:generate-art-meshes", async (_event, directory: string, layerIds: string[]) => {
       const projectDirectory = resolve(directory);
-      const project = await loadProject(projectDirectory);
+      const project = await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: projectDirectory });
       if (!Array.isArray(layerIds) || layerIds.length !== 1) throw new Error("每次必须且只能选择一个图层重建网格。");
       const requested = new Set(layerIds);
       const known = new Set(project.layers.map((layer) => layer.id));
       const unknown = [...requested].filter((layerId) => !known.has(layerId));
       if (unknown.length > 0) throw new Error(`找不到要重建网格的图层：${unknown.join("、")}`);
+      const {
+        artMeshDetailForRole,
+        loadProjectTextureSources,
+        makeAdaptiveMesh,
+        remeshArtMesh,
+        reprojectMeshInfluences
+      } = await import("@puppetloom/core");
       const sources = await loadProjectTextureSources(projectDirectory, project);
       const replacements: Record<string, MeshBinding> = {};
       for (const layer of project.layers) {

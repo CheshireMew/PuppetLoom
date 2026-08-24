@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { executeManagedRun } from "./lib/managed-run.mjs";
 
@@ -7,6 +7,13 @@ await executeManagedRun({ category: "launcher-smoke", producer: "scripts/run-lau
 const profile = artifactRun.path("profile");
 const runtimeLog = resolve(profile, "runtime.log");
 await mkdir(profile, { recursive: true });
+await writeFile(resolve(profile, "viewer-preferences.json"), JSON.stringify({
+  version: 2,
+  control: { bounds: { x: 96, y: 88, width: 1000, height: 700 }, maximized: false },
+  viewerDefaults: { mouseTracking: true },
+  viewers: {},
+  updatedAt: new Date().toISOString()
+}, null, 2) + "\n", "utf8");
 
 const launched = spawnSync(
   "powershell.exe",
@@ -25,6 +32,11 @@ const launched = spawnSync(
 if (launched.status !== 0) {
   throw new Error(`Windows 启动脚本失败（exit ${launched.status}）：${launched.stderr || launched.stdout}`);
 }
+if (!launched.stdout.includes("正在检查 PuppetLoom 运行文件")
+  || !/运行文件已是最新|正在重新构建/.test(launched.stdout)
+  || !launched.stdout.includes("正在打开 PuppetLoom")) {
+  throw new Error(`Windows 启动脚本没有向用户显示真实启动阶段：${launched.stdout}`);
+}
 
 const deadline = Date.now() + 20_000;
 let log = "";
@@ -40,5 +52,9 @@ while (Date.now() < deadline) {
 
 if (!log.includes('"event":"app-ready"')) throw new Error(`Windows 启动脚本没有抵达 app-ready：${runtimeLog}`);
 if (!log.includes('"event":"app-will-quit"')) throw new Error(`Windows 启动脚本启动的进程没有按测试约定退出：${runtimeLog}`);
+const controlWindowEvent = log.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).find((event) => event.event === "control-window-created");
+if (!controlWindowEvent?.restored || controlWindowEvent.width < 900 || controlWindowEvent.height < 640 || !Number.isFinite(controlWindowEvent.x) || !Number.isFinite(controlWindowEvent.y)) {
+  throw new Error(`Windows 冷启动没有恢复并校正已保存的主窗口位置：${JSON.stringify(controlWindowEvent)}`);
+}
 process.stdout.write(`${JSON.stringify({ ok: true, profile, runtimeLog }, null, 2)}\n`);
 });

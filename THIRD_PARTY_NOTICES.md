@@ -36,6 +36,15 @@ PuppetLoom does not vendor, embed, or redistribute See-Through source code or mo
 
 PuppetLoom uses the published JavaScript/Wasm package and downloads the official Face Landmarker task model to `D:\Tools\PuppetLoom\runtime-assets\mediapipe` with a pinned SHA-256 check. The model is not committed to this repository. Camera frames stay in the local renderer and are converted to short-lived motion values; PuppetLoom does not upload or save video frames. MediaPipe remains under Apache License 2.0; its published package also links its license and privacy notice at <https://goo.gle/mediapipe-privacy>.
 
+## Mediabunny
+
+- Project: `Vanilagy/mediabunny` — <https://github.com/Vanilagy/mediabunny>
+- Version: `1.55.2`
+- Use: WebCodecs-backed, incrementally streamed WebM video and Opus audio recording in the desktop character window
+- License: Mozilla Public License 2.0 — <https://www.mozilla.org/MPL/2.0/>
+
+PuppetLoom consumes the published npm package without modifying its source files. The desktop build includes the modules used by the recording path. The corresponding source code is available from the upstream repository and the versioned npm package at <https://www.npmjs.com/package/mediabunny/v/1.55.2>; those files remain licensed under MPL-2.0 and are not relicensed by PuppetLoom's AGPL-3.0-or-later license.
+
 ## ag-psd
 
 - Project: `Agamnentzar/ag-psd`
