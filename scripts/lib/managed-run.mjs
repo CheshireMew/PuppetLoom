@@ -117,7 +117,15 @@ async function inventoryUnder(directory, manifestPath) {
   for (const path of await filesUnder(directory)) {
     if (resolve(path) === resolve(manifestPath)) continue;
     const ownedPath = relative(directory, path);
-    inventory.push({ path: ownedPath, class: artifactClass(ownedPath), bytes: (await stat(path)).size, sha256: await sha256File(path) });
+    try {
+      const fileStat = await stat(path);
+      inventory.push({ path: ownedPath, class: artifactClass(ownedPath), bytes: fileStat.size, sha256: await sha256File(path) });
+    } catch (cause) {
+      // Electron profile databases remove transient WAL files during shutdown.
+      // A file that disappears after enumeration no longer belongs in the
+      // completed inventory; all other read failures remain actionable.
+      if (cause?.code !== "ENOENT") throw cause;
+    }
   }
   return inventory;
 }

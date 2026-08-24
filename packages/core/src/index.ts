@@ -40,6 +40,7 @@ export * from "./rig.js";
 export * from "./rig-extension-defaults.js";
 export * from "./rig-extension-upgrade.js";
 export * from "./runtime-control.js";
+export * from "./runtime-capabilities.js";
 export * from "./safety.js";
 export * from "./semantic-cage.js";
 export * from "./secondary-part-agent.js";

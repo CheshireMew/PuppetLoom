@@ -1,3 +1,5 @@
+import type { CanvasSource as MediaCanvasSource, MediaStreamAudioTrackSource as MediaAudioSource, Output as MediaOutput, StreamTarget as MediaStreamTarget, StreamTargetChunk, WebMOutputFormat as MediaWebMOutputFormat } from "mediabunny";
+
 export interface PerformanceRecordingResult {
   id: string;
   output: string;
@@ -28,103 +30,124 @@ export interface PerformanceRecorder {
   stop(inputSession?: PerformanceRecordingInputSession): Promise<PerformanceRecordingResult>;
 }
 
-function supportedMimeType(): string {
-  const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp9", "video/webm;codecs=vp8,opus", "video/webm;codecs=vp8", "video/webm"];
-  const selected = candidates.find((value) => MediaRecorder.isTypeSupported(value));
-  if (!selected) throw new Error("当前 Chromium 运行时不支持 WebM MediaRecorder。" );
-  return selected;
+export interface PerformanceRecordingSurface {
+  setOutputOverride(output: Pick<PerformanceRecordingOptions, "width" | "height" | "background"> | undefined): void;
 }
 
 /** Streams canvas recording chunks to Electron main so long sessions stay bounded in memory. */
 export async function startPerformanceRecording(
   sourceCanvas: HTMLCanvasElement,
   options: PerformanceRecordingOptions,
-  audioStream?: MediaStream,
+  audioStream: MediaStream | undefined,
+  outputSurface: PerformanceRecordingSurface,
 ): Promise<PerformanceRecorder> {
-  const recordingCanvas = document.createElement("canvas");
-  recordingCanvas.width = options.width;
-  recordingCanvas.height = options.height;
-  const context = recordingCanvas.getContext("2d", { alpha: options.background.mode === "transparent" });
-  if (!context) throw new Error("无法创建 WebM 录制画布。" );
-  let drawRequest = 0;
+  const sourceWidth = sourceCanvas.width;
+  const sourceHeight = sourceCanvas.height;
+  const recordingCanvas = sourceCanvas;
   let stopped = false;
-  const frameInterval = 1000 / Math.max(1, options.fps);
-  let nextDrawAt = performance.now();
-  const draw = (now: number) => {
-    if (now + 0.5 >= nextDrawAt) {
-      if (options.background.mode === "solid") {
-        context.fillStyle = options.background.color;
-        context.fillRect(0, 0, recordingCanvas.width, recordingCanvas.height);
-      } else context.clearRect(0, 0, recordingCanvas.width, recordingCanvas.height);
-      const scale = Math.min(recordingCanvas.width / sourceCanvas.width, recordingCanvas.height / sourceCanvas.height);
-      const width = sourceCanvas.width * scale;
-      const height = sourceCanvas.height * scale;
-      context.drawImage(sourceCanvas, (recordingCanvas.width - width) / 2, (recordingCanvas.height - height) / 2, width, height);
-      nextDrawAt += Math.max(1, Math.floor((now - nextDrawAt) / frameInterval) + 1) * frameInterval;
-    }
-    if (!stopped) drawRequest = window.requestAnimationFrame(draw);
-  };
-  draw(performance.now());
-  const canvasStream = recordingCanvas.captureStream(options.fps);
+  outputSurface.setOutputOverride({ width: options.width, height: options.height, background: options.background });
   const audioTracks = audioStream?.getAudioTracks() ?? [];
-  const stream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
   const startedAtMs = Date.now();
   let sessionId: string | undefined;
+  let output: MediaOutput<MediaWebMOutputFormat, MediaStreamTarget> | undefined;
+  let frameRequest = 0;
+  let frameWrite = Promise.resolve();
+  let frameError: Error | undefined;
+  let videoSource: MediaCanvasSource | undefined;
+  let audioSource: MediaAudioSource | undefined;
   try {
-    const mimeType = supportedMimeType();
+    const { CanvasSource, MediaStreamAudioTrackSource, Output, Quality, StreamTarget, WebMOutputFormat } = await import("./recording-codecs.js");
+    const codec = "vp8" as const;
+    const mimeType = `video/webm;codecs=${codec}${audioTracks.length > 0 ? ",opus" : ""}`;
     const session = await window.puppetloom.startPerformanceRecording({
       mimeType,
       fps: options.fps,
       width: recordingCanvas.width,
       height: recordingCanvas.height,
-      sourceWidth: sourceCanvas.width,
-      sourceHeight: sourceCanvas.height,
+      sourceWidth,
+      sourceHeight,
       hasAudio: audioTracks.length > 0,
       background: options.background,
       ...(options.targetDurationMs === undefined ? {} : { targetDurationMs: options.targetDurationMs }),
       startedAt: new Date(startedAtMs).toISOString()
     });
     sessionId = session.id;
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000, ...(audioTracks.length > 0 ? { audioBitsPerSecond: 128_000 } : {}) });
-    let writes = Promise.resolve();
-    let recorderError: Error | undefined;
-    recorder.addEventListener("dataavailable", (event) => {
-      if (event.data.size <= 0) return;
-      writes = writes.then(async () => {
-        const bytes = new Uint8Array(await event.data.arrayBuffer());
-        await window.puppetloom.appendPerformanceRecording(session.id, bytes);
+    const writable = new WritableStream<StreamTargetChunk>({
+      write(chunk) {
+        return window.puppetloom.appendPerformanceRecording(session.id, chunk.data, chunk.position).then(() => undefined);
+      }
+    });
+    output = new Output({
+      format: new WebMOutputFormat(),
+      target: new StreamTarget(writable, { chunked: true, chunkSize: 1024 * 1024 })
+    });
+    const videoBitsPerSecond = Math.max(2_000_000, Math.min(20_000_000, Math.round(options.width * options.height * options.fps * 0.12)));
+    videoSource = new CanvasSource(recordingCanvas, {
+      codec,
+      quality: new Quality({ bitrate: videoBitsPerSecond }),
+      alpha: options.background.mode === "transparent" ? "keep" : "discard",
+      latencyMode: "realtime",
+      contentHint: "detail"
+    });
+    output.addVideoTrack(videoSource, { frameRate: options.fps });
+    if (audioTracks[0]) {
+      audioSource = new MediaStreamAudioTrackSource(audioTracks[0], { codec: "opus", quality: new Quality({ bitrate: 128_000 }) });
+      audioSource.errorPromise.catch((cause) => {
+        frameError = cause instanceof Error ? cause : new Error(String(cause));
       });
-    });
-    recorder.addEventListener("error", (event) => {
-      recorderError = new Error(`WebM 录制失败：${event.error.message}`);
-    });
-    recorder.start(1000);
+      output.addAudioTrack(audioSource);
+    }
+    await output.start();
+    const activeOutput = output;
+    const activeVideoSource = videoSource;
+    const activeAudioSource = audioSource;
+    const frameIntervalMs = 1000 / Math.max(1, options.fps);
+    const frameDurationSeconds = 1 / Math.max(1, options.fps);
+    const captureStartedAt = performance.now();
+    let nextFrameAt = captureStartedAt;
+    let lastTimestamp = -frameDurationSeconds;
+    let framePending = false;
+    const capture = (now: number) => {
+      if (stopped || !videoSource) return;
+      if (!framePending && now + 0.5 >= nextFrameAt) {
+        framePending = true;
+        lastTimestamp = Math.max(lastTimestamp + frameDurationSeconds, (now - captureStartedAt) / 1000);
+        frameWrite = videoSource.add(lastTimestamp, frameDurationSeconds)
+          .catch((cause) => { frameError = cause instanceof Error ? cause : new Error(String(cause)); })
+          .finally(() => { framePending = false; });
+        nextFrameAt += Math.max(1, Math.floor((now - nextFrameAt) / frameIntervalMs) + 1) * frameIntervalMs;
+      }
+      frameRequest = window.requestAnimationFrame(capture);
+    };
+    frameRequest = window.requestAnimationFrame(capture);
     return {
       async stop(inputSession) {
+        if (stopped) throw new Error("表演录制已经停止。" );
+        stopped = true;
+        if (frameRequest) window.cancelAnimationFrame(frameRequest);
         try {
-          if (recorder.state !== "inactive") {
-            await new Promise<void>((resolveStop) => {
-              recorder.addEventListener("stop", () => resolveStop(), { once: true });
-              recorder.stop();
-            });
-          }
-          await writes;
-          if (recorderError) throw recorderError;
+          await frameWrite;
+          if (frameError) throw frameError;
+          const finalTimestamp = Math.max(lastTimestamp + frameDurationSeconds, (performance.now() - captureStartedAt) / 1000);
+          await activeVideoSource.add(finalTimestamp, frameDurationSeconds);
+          activeVideoSource.close();
+          activeAudioSource?.close();
+          await activeOutput.finalize();
           return await window.puppetloom.stopPerformanceRecording(session.id, Date.now() - startedAtMs, inputSession);
         } catch (cause) {
+          await activeOutput.cancel().catch(() => undefined);
           await window.puppetloom.failPerformanceRecording(session.id, cause instanceof Error ? cause.message : String(cause)).catch(() => undefined);
           throw cause;
         } finally {
-          stopped = true;
-          if (drawRequest) window.cancelAnimationFrame(drawRequest);
-          canvasStream.getTracks().forEach((track) => track.stop());
+          outputSurface.setOutputOverride(undefined);
         }
       }
     };
   } catch (cause) {
     stopped = true;
-    if (drawRequest) window.cancelAnimationFrame(drawRequest);
-    canvasStream.getTracks().forEach((track) => track.stop());
+    if (frameRequest) window.cancelAnimationFrame(frameRequest);
+    await output?.cancel().catch(() => undefined);
+    outputSurface.setOutputOverride(undefined);
     if (sessionId) await window.puppetloom.failPerformanceRecording(sessionId, cause instanceof Error ? cause.message : String(cause)).catch(() => undefined);
     throw cause;
   }

@@ -12,24 +12,25 @@ import type {
   TorsoVolumeProfile
 } from "@puppetloom/core";
 import {
-  applyCalibrationOverrides,
+  applyCalibrationOverridesForPreview,
   defaultTorsoVolumeProfile,
-  deformedPoints,
+  deformedPointsForPreview,
   evaluateLayerAuthoring,
   invertDeformedPoint,
-  mergeCalibrationOverrides,
+  mergeCalibrationOverridesForPreview,
   meshGeodesicDistances,
   neutralMotionState,
   poseCorrectionPointDeltas,
   reprojectLayerPoseCorrections,
   reprojectSparsePointDeltas,
   setPoseCorrectionPointDeltas,
-  validateProjectPoses
+  isModelBehaviorAvailable
 } from "@puppetloom/core/browser";
 import type { EditorWorkspace as EditorWorkspaceData } from "../../electron/global.js";
 import type { DragTarget, EditMode, MeshSelectionMode } from "./EditorPresentation.js";
 import type { StudioSection } from "./EditorStudioPanels.js";
 import { clone, editorPoses, layerOverride, messageOf, smoothstep } from "./EditorWorkspaceModel.js";
+import { validateEditorProject } from "./useEditorValidation.js";
 
 interface MeshDragSnapshot {
   selected: number[];
@@ -73,6 +74,7 @@ interface EditorEditingToolsOptions {
   setNotice: Dispatch<SetStateAction<string>>;
   setError: Dispatch<SetStateAction<string>>;
   setMeshUpgrading: Dispatch<SetStateAction<boolean>>;
+  posedMeshPoints: Point[];
 }
 
 export function useEditorEditingTools({
@@ -103,7 +105,8 @@ export function useEditorEditingTools({
   setEditorOverlayVisible,
   setNotice,
   setError,
-  setMeshUpgrading
+  setMeshUpgrading,
+  posedMeshPoints
 }: EditorEditingToolsOptions) {
   const drag = useRef<{ target: DragTarget; before: CalibrationOverrides; mesh?: MeshDragSnapshot } | undefined>(undefined);
   const [selectedVertex, setSelectedVertex] = useState<number>();
@@ -112,15 +115,12 @@ export function useEditorEditingTools({
   const [softRadius, setSoftRadius] = useState(0.035);
   const [secondaryPart, setSecondaryPart] = useState<SecondaryMotionPart>("frontHair");
 
-  function meshBaseline(layerId: string): LayerBinding | undefined {
-    if (!workspace) return undefined;
-    const overrides = clone(effectiveOverrides);
-    const layer = overrides.layers?.[layerId];
-    if (layer) {
-      delete layer.meshPointDeltas;
-      delete layer.vertexInfluences;
-    }
-    return applyCalibrationOverrides(workspace.baseProject, overrides).layers.find((candidate) => candidate.id === layerId);
+  function meshBaselinePoints(layer: LayerBinding): Point[] {
+    const deltas = effectiveOverrides.layers?.[layer.id]?.meshPointDeltas;
+    return layer.mesh.points.map((point, index) => {
+      const delta = deltas?.[String(index)];
+      return delta ? { x: point.x - delta.x, y: point.y - delta.y } : point;
+    });
   }
 
   function pointFromPointer(event: React.PointerEvent<SVGElement>): Point {
@@ -160,13 +160,15 @@ export function useEditorEditingTools({
     event.currentTarget.setPointerCapture(event.pointerId);
     const active: { target: DragTarget; before: CalibrationOverrides; mesh?: MeshDragSnapshot } = { target, before: clone(pending) };
     if (meshTarget && selectedLayer && project) {
-      const baseline = meshBaseline(selectedLayer.id);
       const selected = target.kind === "mesh"
         ? (selectedVertices.includes(target.index) ? selectedVertices : [target.index])
         : selectedVertices;
-      const displayedPoints = deformedPoints(project, selectedLayer, previewState);
+      const displayedPoints = posedMeshPoints.length === selectedLayer.mesh.points.length
+        ? posedMeshPoints
+        : deformedPointsForPreview(project, selectedLayer, previewState);
       const authoredPoints = evaluateLayerAuthoring(project, selectedLayer, previewState).points;
-      if (!baseline || selected.length === 0 || baseline.mesh.points.length !== selectedLayer.mesh.points.length) return;
+      const basePoints = meshBaselinePoints(selectedLayer);
+      if (selected.length === 0 || basePoints.length !== selectedLayer.mesh.points.length) return;
       const selectedPoints = selected.map((index) => displayedPoints[index]).filter((point): point is Point => Boolean(point));
       if (selectedPoints.length !== selected.length) return;
       const minX = Math.min(...selectedPoints.map((point) => point.x));
@@ -181,7 +183,7 @@ export function useEditorEditingTools({
         center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
         displayedPoints: clone(displayedPoints),
         authoredPoints: clone(authoredPoints),
-        basePoints: clone(baseline.mesh.points),
+        basePoints,
         correctionDeltas: poseCorrectionPointDeltas(project.model, selectedLayer.id, previewState.headYaw, previewState.headPitch),
         model: clone(project.model),
         pins: clone(selectedLayer.mesh.influences?.pin ?? Array(selectedLayer.mesh.points.length).fill(0)),
@@ -253,12 +255,19 @@ export function useEditorEditingTools({
           } else {
             const previous = active.mesh.correctionDeltas[String(index)] ?? { x: 0, y: 0 };
             const initial = active.mesh.authoredPoints[index]!;
-            poseDeltas[String(index)] = { x: previous.x + authored.x - initial.x, y: previous.y + authored.y - initial.y };
+            const authoredStart = invertDeformedPoint(project, selectedLayer, start, previewState, index, initial);
+            // Pose corrections are incremental edits on top of the visible pose.
+            // Subtracting the inverted start point prevents procedural pose motion
+            // from being recorded again when render and inverse baselines differ.
+            poseDeltas[String(index)] = {
+              x: previous.x + authored.x - authoredStart.x,
+              y: previous.y + authored.y - authoredStart.y
+            };
           }
         }
         next = poseId === "neutral"
           ? layerOverride(next, selectedLayer.id, { meshPointDeltas: deltas })
-          : mergeCalibrationOverrides(next, { model: setPoseCorrectionPointDeltas(active.mesh.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
+          : mergeCalibrationOverridesForPreview(next, { model: setPoseCorrectionPointDeltas(active.mesh.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
       }
       pendingRef.current = next;
       return next;
@@ -318,9 +327,11 @@ export function useEditorEditingTools({
       setSelectedVertex(target.index);
       setSelectedVertices([target.index]);
       if ((selectedLayer.mesh.influences?.pin?.[target.index] ?? 0) >= 1) return;
-      const baseline = meshBaseline(selectedLayer.id);
-      const point = deformedPoints(project!, selectedLayer, previewState)[target.index];
-      const basePoint = baseline?.mesh.points[target.index];
+      const displayedPoints = posedMeshPoints.length === selectedLayer.mesh.points.length
+        ? posedMeshPoints
+        : deformedPointsForPreview(project!, selectedLayer, previewState);
+      const point = displayedPoints[target.index];
+      const basePoint = meshBaselinePoints(selectedLayer)[target.index];
       if (!point || !basePoint) return;
       const position = shifted(point);
       const authoredPoints = evaluateLayerAuthoring(project!, selectedLayer, previewState).points;
@@ -331,8 +342,12 @@ export function useEditorEditingTools({
         const poseDeltas = poseCorrectionPointDeltas(project!.model, selectedLayer.id, previewState.headYaw, previewState.headPitch);
         const previous = poseDeltas[String(target.index)] ?? { x: 0, y: 0 };
         const initial = authoredPoints[target.index]!;
-        poseDeltas[String(target.index)] = { x: previous.x + authored.x - initial.x, y: previous.y + authored.y - initial.y };
-        next = mergeCalibrationOverrides(next, { model: setPoseCorrectionPointDeltas(project!.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
+        const authoredStart = invertDeformedPoint(project!, selectedLayer, point, previewState, target.index, initial);
+        poseDeltas[String(target.index)] = {
+          x: previous.x + authored.x - authoredStart.x,
+          y: previous.y + authored.y - authoredStart.y
+        };
+        next = mergeCalibrationOverridesForPreview(next, { model: setPoseCorrectionPointDeltas(project!.model, selectedLayer.id, previewState.headYaw, previewState.headPitch, poseDeltas) });
       }
     }
     const targetKey = target.kind === "semantic" || target.kind === "anchor" || target.kind === "secondary" ? String(target.key) : target.kind === "mesh" ? String(target.index) : target.kind;
@@ -343,7 +358,7 @@ export function useEditorEditingTools({
     const detail = patch.weights ? `weights:${Object.keys(patch.weights).sort().join(",")}`
       : patch.vertexInfluences ? `influences:${Object.keys(patch.vertexInfluences).sort().join(",")}`
         : Object.keys(patch).sort().join(",");
-    commit(layerOverride(pending, layerId, patch), `layer:${layerId}:${detail}`);
+    commit(layerOverride(pendingRef.current, layerId, patch), `layer:${layerId}:${detail}`);
   }
 
   function setLayerProperty(patch: NonNullable<CalibrationOverrides["layers"]>[string]): void {
@@ -354,17 +369,17 @@ export function useEditorEditingTools({
 
   function setRuntimeTuning(kind: "motionTuning" | "envelope", key: string, value: number): void {
     const runtimePatch = kind === "motionTuning" ? { motionTuning: { [key]: value } } : { envelope: { [key]: value } };
-    commit(mergeCalibrationOverrides(pending, { runtime: runtimePatch } as CalibrationOverrides), `runtime:${kind}:${key}`);
+    commit(mergeCalibrationOverridesForPreview(pendingRef.current, { runtime: runtimePatch } as CalibrationOverrides), `runtime:${kind}:${key}`);
   }
 
   function setSecondaryTuning(part: SecondaryMotionPart, key: "amplitude" | "response" | "stability", value: number): void {
-    commit(mergeCalibrationOverrides(pending, { runtime: { secondaryMotionTuning: { [part]: { [key]: value } } } }), `secondary:${part}:${key}`);
+    commit(mergeCalibrationOverridesForPreview(pendingRef.current, { runtime: { secondaryMotionTuning: { [part]: { [key]: value } } } }), `secondary:${part}:${key}`);
   }
 
   function setFaceDepth(landmark: FaceDepthLandmark, depth: number): void {
     const profile = project?.runtime.poseField?.faceDepthProfile;
     if (!profile) return;
-    commit(mergeCalibrationOverrides(pending, {
+    commit(mergeCalibrationOverridesForPreview(pendingRef.current, {
       runtime: {
         poseField: {
           faceDepthProfile: {
@@ -380,7 +395,7 @@ export function useEditorEditingTools({
     const profile: TorsoVolumeProfile = clone(project?.runtime.torsoVolumeProfile ?? defaultTorsoVolumeProfile(1));
     if (landmark === "strength") profile.strength = value;
     else profile.points = profile.points.map((point) => point.id === landmark ? { ...point, depth: value } : point);
-    commit(mergeCalibrationOverrides(pending, { runtime: { torsoVolumeProfile: profile } }), `torso:${landmark}`);
+    commit(mergeCalibrationOverridesForPreview(pendingRef.current, { runtime: { torsoVolumeProfile: profile } }), `torso:${landmark}`);
   }
 
   function setVertexInfluence(channel: "face" | "skull" | "head" | "body" | "gaze" | "physics" | "pin" | "headAttachment" | "physicsRelease", value: number): void {
@@ -449,41 +464,45 @@ export function useEditorEditingTools({
     const index = model.physics.findIndex((physics) => physics.id === physicsId);
     if (index < 0) return;
     model.physics[index] = { ...model.physics[index]!, ...patch };
-    commit(mergeCalibrationOverrides(pending, { model }), `physics:${physicsId}:${Object.keys(patch).sort().join(",")}`);
+    commit(mergeCalibrationOverridesForPreview(pendingRef.current, { model }), `physics:${physicsId}:${Object.keys(patch).sort().join(",")}`);
   }
 
   function createStarterDynamics(): void {
     if (!project) return;
     const model = clone(project.model);
     const bySemantic = new Map(model.parameters.flatMap((parameter) => parameter.semantic ? [[parameter.semantic, parameter.id]] : []));
-    const blink = bySemantic.get("blink");
-    const mouth = bySemantic.get("mouth-open");
+    const blink = project.runtime.features.blink ? bySemantic.get("blink") : undefined;
+    const mouth = project.runtime.features.mouthMotion ? bySemantic.get("mouth-open") : undefined;
     const pitch = bySemantic.get("head-pitch");
     const yaw = bySemantic.get("head-yaw");
     const breath = bySemantic.get("breath");
-    if (model.expressions.length === 0) {
-      if (blink) model.expressions.push({ id: "expression-closed-eyes", name: "闭眼", parameters: { [blink]: 1 } });
-      if (mouth) model.expressions.push({ id: "expression-speaking", name: "开口", parameters: { [mouth]: 1 } });
-      const surprised = Object.fromEntries([[pitch, -0.2], [blink, 0], [mouth, 0.82]].filter((entry): entry is [string, number] => Boolean(entry[0])));
-      if (Object.keys(surprised).length > 0) model.expressions.push({ id: "expression-surprised", name: "惊讶", parameters: surprised });
+    const expressionIds = new Set(model.expressions.map((expression) => expression.id));
+    if (blink && !expressionIds.has("expression-closed-eyes")) model.expressions.push({ id: "expression-closed-eyes", name: "闭眼", parameters: { [blink]: 1 } });
+    if (mouth && !expressionIds.has("expression-speaking")) model.expressions.push({ id: "expression-speaking", name: "开口", parameters: { [mouth]: 1 } });
+    const surprised = Object.fromEntries([[pitch, -0.2], [mouth, 0.82]].filter((entry): entry is [string, number] => Boolean(entry[0])));
+    if (!expressionIds.has("expression-surprised") && Object.keys(surprised).length > 0) model.expressions.push({ id: "expression-surprised", name: "惊讶", parameters: surprised });
+
+    const idleTracks = [
+      yaw ? { target: { kind: "parameter" as const, id: yaw }, keyframes: [{ time: 0, value: 0 }, { time: 1.5, value: 0.14 }, { time: 3, value: 0 }, { time: 4.5, value: -0.12 }, { time: 6, value: 0 }] } : undefined,
+      pitch ? { target: { kind: "parameter" as const, id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 2, value: -0.06 }, { time: 4, value: 0.05 }, { time: 6, value: 0 }] } : undefined,
+      breath ? { target: { kind: "parameter" as const, id: breath }, keyframes: [{ time: 0, value: -0.7 }, { time: 3, value: 0.7 }, { time: 6, value: -0.7 }] } : undefined,
+      blink ? { target: { kind: "parameter" as const, id: blink }, keyframes: [{ time: 0, value: 0 }, { time: 1.8, value: 0 }, { time: 1.92, value: 1, easing: "smoothstep" as const }, { time: 2.04, value: 0, easing: "smoothstep" as const }, { time: 6, value: 0 }] } : undefined
+    ].filter((track): track is NonNullable<typeof track> => Boolean(track));
+    const behaviorIds = new Set(model.behaviors.map((behavior) => behavior.id));
+    if (!behaviorIds.has("behavior-idle") && idleTracks.length > 0) model.behaviors.push({ id: "behavior-idle", name: "自然待机", duration: 6, loop: true, autoplay: true, tracks: idleTracks });
+    if (!behaviorIds.has("behavior-nod") && pitch) model.behaviors.push({
+      id: "behavior-nod", name: "点头", duration: 1.6, loop: false,
+      tracks: [{ target: { kind: "parameter", id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 0.48, value: 0.62 }, { time: 0.92, value: -0.16 }, { time: 1.6, value: 0 }] }]
+    });
+    const next = mergeCalibrationOverridesForPreview(pendingRef.current, { model });
+    if (JSON.stringify(next) === JSON.stringify(pendingRef.current)) {
+      setNotice("当前素材支持的基础表情和行为已经齐全。" );
+      return;
     }
-    if (model.behaviors.length === 0) {
-      const idleTracks = [
-        yaw ? { target: { kind: "parameter" as const, id: yaw }, keyframes: [{ time: 0, value: 0 }, { time: 1.5, value: 0.14 }, { time: 3, value: 0 }, { time: 4.5, value: -0.12 }, { time: 6, value: 0 }] } : undefined,
-        pitch ? { target: { kind: "parameter" as const, id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 2, value: -0.06 }, { time: 4, value: 0.05 }, { time: 6, value: 0 }] } : undefined,
-        breath ? { target: { kind: "parameter" as const, id: breath }, keyframes: [{ time: 0, value: -0.7 }, { time: 3, value: 0.7 }, { time: 6, value: -0.7 }] } : undefined,
-        blink ? { target: { kind: "parameter" as const, id: blink }, keyframes: [{ time: 0, value: 0 }, { time: 1.8, value: 0 }, { time: 1.92, value: 1, easing: "smoothstep" as const }, { time: 2.04, value: 0, easing: "smoothstep" as const }, { time: 6, value: 0 }] } : undefined
-      ].filter((track): track is NonNullable<typeof track> => Boolean(track));
-      if (idleTracks.length > 0) model.behaviors.push({ id: "behavior-idle", name: "自然待机", duration: 6, loop: true, autoplay: true, tracks: idleTracks });
-      if (pitch) model.behaviors.push({
-        id: "behavior-nod", name: "点头", duration: 1.6, loop: false,
-        tracks: [{ target: { kind: "parameter", id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 0.48, value: 0.62 }, { time: 0.92, value: -0.16 }, { time: 1.6, value: 0 }] }]
-      });
-    }
-    commit(mergeCalibrationOverrides(pending, { model }));
-    setSelectedBehaviorId(model.behaviors[0]?.id ?? "");
+    commit(next);
+    setSelectedBehaviorId(model.behaviors.find((behavior) => isModelBehaviorAvailable(project, behavior))?.id ?? "");
     setBehaviorTime(0);
-    setNotice("已生成基础表情和行为预览；确认效果后保存更改。" );
+    setNotice("已生成当前素材支持的基础表情和行为；确认效果后保存更改。" );
   }
 
   async function upgradeSelectedMesh(): Promise<void> {
@@ -503,12 +522,12 @@ export function useEditorEditingTools({
       }
       const neutralDeltas = reprojectSparsePointDeltas(selectedLayer.mesh, mesh, effectiveOverrides.layers?.[selectedLayer.id]?.meshPointDeltas);
       const model = reprojectLayerPoseCorrections(project!.model, selectedLayer.id, selectedLayer.mesh, mesh);
-      const next = mergeCalibrationOverrides(pending, {
+      const next = mergeCalibrationOverridesForPreview(pendingRef.current, {
         model,
         layers: { [selectedLayer.id]: { mesh, ...(neutralDeltas ? { meshPointDeltas: neutralDeltas } : {}) } }
       });
-      const candidate = applyCalibrationOverrides(workspace!.baseProject, mergeCalibrationOverrides(workspace!.calibration.overrides, next));
-      const failed = validateProjectPoses(candidate).filter((check) => !check.passed);
+      const candidate = applyCalibrationOverridesForPreview(workspace!.baseProject, mergeCalibrationOverridesForPreview(workspace!.calibration.overrides, next));
+      const failed = (await validateEditorProject(candidate)).draftSafetyChecks.filter((check) => !check.passed);
       if (failed.length > 0) {
         throw new Error(`网格重建结果未通过全姿态质量门：${failed[0]!.issues[0]?.message ?? failed[0]!.id}。原网格和当前草稿均未改动。`);
       }

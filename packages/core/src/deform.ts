@@ -9,7 +9,7 @@ import {
   skirtHemFlutterRelease,
   skirtSupportPivot
 } from "./clothing-geometry.js";
-import type { HairStrandSpec, LayerBinding, MeshInfluenceChannel, MotionChainState, MotionState, Point, PuppetLoomProject, TorsoVolumeProfile } from "./types.js";
+import type { HairStrandSpec, LayerBinding, MeshBinding, MeshInfluenceChannel, MotionChainState, MotionState, Point, PuppetLoomProject, TorsoVolumeProfile } from "./types.js";
 
 function rotate(point: Point, pivot: Point, radians: number): Point {
   if (Math.abs(radians) < 1e-8) return point;
@@ -320,7 +320,7 @@ export function createDeformationFrameContext(project: PuppetLoomProject, resolv
   };
 }
 
-function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, frame: DeformationFrameContext, vertexIndex?: number): Point {
+export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, frame: DeformationFrameContext, vertexIndex?: number): Point {
   const { state, envelope, faceWidth, faceHeight, headPivot, bodyPivot, yaw, pitch, headRoll, bodyRoll } = frame;
   const release = 1 - vertexInfluence(layer, "pin", vertexIndex, 0);
   const bodyLayerWeight = layer.weights.body * vertexInfluence(layer, "body", vertexIndex, 1) * release;
@@ -579,9 +579,95 @@ export function deformedPoints(project: PuppetLoomProject, layer: LayerBinding, 
   return authored.points.map((point, index) => deformResolvedPoint(project, layer, point, frame, index));
 }
 
+interface DeformedPointCacheEntry {
+  project: PuppetLoomProject;
+  layer: LayerBinding;
+  authoredPoints: Point[];
+  points: Point[];
+  hasSeparateEarLayers: boolean;
+}
+
+const previewDeformedPointCache = new WeakMap<MotionState, Map<string, DeformedPointCacheEntry>>();
+const resolvedDeformedPointCache = new WeakMap<MotionState, Map<string, DeformedPointCacheEntry>>();
+
+/** Incremental deformation for a stable editor pose and immutable layer drafts. */
+export function deformedPointsForPreview(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): Point[] {
+  const resolvedState = resolveMotionState(project, state);
+  const authored = evaluateLayerAuthoring(project, layer, resolvedState);
+  const frame = createDeformationFrameContext(project, resolvedState);
+  return deformedPointsWithCache(project, layer, authored.points, resolvedState, frame, state, previewDeformedPointCache);
+}
+
+function sameInfluenceArrays(left: MeshBinding["influences"], right: MeshBinding["influences"]): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)] as MeshInfluenceChannel[]);
+  return [...keys].every((key) => left[key] === right[key]);
+}
+
+function sameLayerDeformationInputs(left: LayerBinding, right: LayerBinding): boolean {
+  return left.id === right.id
+    && left.role === right.role
+    && left.side === right.side
+    && left.bounds === right.bounds
+    && left.pivot === right.pivot
+    && left.weights === right.weights
+    && left.parentGroup === right.parentGroup
+    && left.parentLayerId === right.parentLayerId
+    && left.deformerId === right.deformerId
+    && left.garmentStructure === right.garmentStructure
+    && left.garmentFlexibility === right.garmentFlexibility
+    && left.secondaryAnchors === right.secondaryAnchors
+    && left.hairStrands === right.hairStrands
+    && left.mesh.points.length === right.mesh.points.length
+    && sameInfluenceArrays(left.mesh.influences, right.mesh.influences);
+}
+
+function deformedPointsWithCache(
+  project: PuppetLoomProject,
+  layer: LayerBinding,
+  authoredPoints: Point[],
+  resolvedState: MotionState,
+  frame: DeformationFrameContext,
+  cacheState: MotionState,
+  cache: WeakMap<MotionState, Map<string, DeformedPointCacheEntry>>
+): Point[] {
+  let byLayer = cache.get(cacheState);
+  if (!byLayer) {
+    byLayer = new Map();
+    cache.set(cacheState, byLayer);
+  }
+  const previous = byLayer.get(layer.id);
+  const hasSeparateEarLayers = project.layers.some((candidate) => candidate.visible !== false && candidate.role === "ear");
+  const reusable = previous
+    && previous.project.runtime === project.runtime
+    && previous.project.anchors === project.anchors
+    && previous.hasSeparateEarLayers === hasSeparateEarLayers
+    && sameLayerDeformationInputs(previous.layer, layer)
+    && previous.authoredPoints.length === authoredPoints.length;
+  let points: Point[];
+  if (reusable) {
+    points = [...previous.points];
+    for (let index = 0; index < authoredPoints.length; index += 1) {
+      const current = authoredPoints[index]!;
+      const before = previous.authoredPoints[index]!;
+      if (current.x !== before.x || current.y !== before.y) points[index] = deformResolvedPoint(project, layer, current, frame, index);
+    }
+  } else {
+    points = authoredPoints.map((point, index) => deformResolvedPoint(project, layer, point, frame, index));
+  }
+  byLayer.set(layer.id, { project, layer, authoredPoints, points, hasSeparateEarLayers });
+  return points;
+}
+
 /** Deforms one cached authoring result with a state already returned by resolveMotionState. */
 export function deformedAuthoredPoints(project: PuppetLoomProject, layer: LayerBinding, authoredPoints: Point[], resolvedState: MotionState, frame = createDeformationFrameContext(project, resolvedState)): Point[] {
   return authoredPoints.map((point, index) => deformResolvedPoint(project, layer, point, frame, index));
+}
+
+/** Incremental authored deformation used by paused editor renderers. */
+export function deformedAuthoredPointsForPreview(project: PuppetLoomProject, layer: LayerBinding, authoredPoints: Point[], resolvedState: MotionState, frame = createDeformationFrameContext(project, resolvedState)): Point[] {
+  return deformedPointsWithCache(project, layer, authoredPoints, resolvedState, frame, resolvedState, resolvedDeformedPointCache);
 }
 
 export const neutralMotionState: MotionState = {

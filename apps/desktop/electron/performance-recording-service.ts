@@ -101,7 +101,7 @@ function validateInputSession(value: PerformanceRecordingInputSession | undefine
   return { ...value };
 }
 
-/** Owns append-only WebM files. Interrupted recordings remain recoverable as .partial.webm. */
+/** Owns streamed WebM files. Interrupted recordings remain recoverable as .partial.webm. */
 export class PerformanceRecordingService {
   private readonly active = new Map<string, ActiveRecording>();
   private readonly activeByViewer = new Map<number, string>();
@@ -147,13 +147,15 @@ export class PerformanceRecordingService {
     };
   }
 
-  append(viewerId: number, id: string, chunk: Uint8Array): { id: string; bytes: number } {
+  append(viewerId: number, id: string, chunk: Uint8Array, position?: number): { id: string; bytes: number } {
     const active = this.owned(viewerId, id);
     if (!(chunk instanceof Uint8Array) || chunk.byteLength < 1 || chunk.byteLength > MAX_CHUNK_BYTES) throw new Error("WebM 分块为空或超过 64 MiB 限制。" );
+    if (position !== undefined && (!Number.isInteger(position) || position < 0 || !Number.isSafeInteger(position + chunk.byteLength))) throw new Error("WebM 分块写入位置无效。" );
     const buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    const writePosition = position ?? active.bytes;
     let offset = 0;
-    while (offset < buffer.byteLength) offset += writeSync(active.descriptor, buffer, offset, buffer.byteLength - offset);
-    active.bytes += buffer.byteLength;
+    while (offset < buffer.byteLength) offset += writeSync(active.descriptor, buffer, offset, buffer.byteLength - offset, writePosition + offset);
+    active.bytes = Math.max(active.bytes, writePosition + buffer.byteLength);
     return { id, bytes: active.bytes };
   }
 
@@ -162,7 +164,7 @@ export class PerformanceRecordingService {
     if (!Number.isFinite(durationMs) || durationMs < 0) throw new Error("录制时长无效。" );
     const linkedInput = validateInputSession(inputSession);
     if (active.bytes < 1) {
-      this.finish(active, "failed", { durationMs, error: "MediaRecorder 没有产生视频数据。" });
+      this.finish(active, "failed", { durationMs, error: "视频编码器没有产生数据。" });
       throw new Error("录制没有产生视频数据，已保留空的 partial 文件和失败报告。" );
     }
     closeSync(active.descriptor);

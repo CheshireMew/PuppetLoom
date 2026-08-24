@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { BuildReport, InspectionReport, PuppetLoomProject, RuntimeViewerDescriptor } from "@puppetloom/core";
 import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
 import { Activity, Camera, CameraOff, ChevronRight, ClipboardCopy, ExternalLink, FileImage, FileJson2, FileUp, FolderKanban, FolderOpen, FolderOutput, Image as ImageIcon, Mic, MicOff, Minus, MousePointer2, MousePointerClick, Pause, Pin, Play, Plus, PointerOff, Repeat2, ScanSearch, Smile, Sparkles, Square, Video, WandSparkles, X } from "lucide-react";
 import type { DesktopCreatePhase, DesktopCreateRequest, RecentProject, ViewerCapabilities, ViewerState } from "../electron/global.js";
-import { EditorWorkspace } from "./EditorWorkspace.js";
 import { WindowTitleBar } from "./WindowTitleBar.js";
 import { startFaceInput, startMicrophoneInput, type InputAdapterStatus, type RuntimeInputAdapter } from "./runtime-input.js";
 import { startPerformanceRecording, type PerformanceRecorder, type PerformanceRecordingInputSession, type PerformanceRecordingOptions } from "./performance-recorder.js";
+
+const EditorWorkspace = lazy(() => import("./EditorWorkspace.js").then((module) => ({ default: module.EditorWorkspace })));
 
 type ViewerAction = "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close";
 
@@ -48,6 +49,19 @@ const featureLabels: Record<string, string> = {
   headTurn: "头部转动", bodyFollow: "身体跟随", gaze: "视线跟随", hairPhysics: "头发物理", blink: "眨眼", mouthMotion: "口型"
 };
 
+function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+}
+
+const viewerInteractionSelector = "button, input, select, textarea, summary, video, a, .viewer-controls, .action-panel, .recording-panel, .recording-preview, .viewer-status-stack";
+
+function isViewerMoveOrZoomSurface(target: EventTarget | null): boolean {
+  return target instanceof Element && !target.closest(viewerInteractionSelector);
+}
+
 function Viewer({ projectDirectory, revision }: { projectDirectory: string; revision?: number }): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
@@ -60,19 +74,45 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
   const [microphoneStatus, setMicrophoneStatus] = useState<InputAdapterStatus>({ state: "stopped", message: "麦克风口型未启用" });
   const [recordingInput, setRecordingInput] = useState(false);
   const [recordingPerformance, setRecordingPerformance] = useState(false);
+  const [recordingFinalizing, setRecordingFinalizing] = useState(false);
   const [replayingInput, setReplayingInput] = useState(false);
   const [sessionMessage, setSessionMessage] = useState<{ text: string; path?: string }>();
+  const [transientMessage, setTransientMessage] = useState("");
+  const [recordingClock, setRecordingClock] = useState<{ kind: "video" | "input"; startedAt: number; targetDurationMs?: number }>();
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [runtimeDescriptor, setRuntimeDescriptor] = useState<RuntimeViewerDescriptor>();
   const [showActions, setShowActions] = useState(false);
   const [showRecordingSettings, setShowRecordingSettings] = useState(false);
   const [recordingSettings, setRecordingSettings] = useState<ViewerRecordingSettings>({ background: "transparent", backgroundColor: "#00ff00", width: 1080, height: 1080, fps: 30, durationSeconds: 0, includeAudio: true, includeMotionData: false });
-  const [recordingPreview, setRecordingPreview] = useState<{ url: string; output: string }>();
+  const [recordingPreview, setRecordingPreview] = useState<{ url: string; output: string; note?: string }>();
   const cameraInput = useRef<RuntimeInputAdapter | undefined>(undefined);
   const microphoneInput = useRef<RuntimeInputAdapter | undefined>(undefined);
   const performanceRecorder = useRef<PerformanceRecorder | undefined>(undefined);
   const performanceOwnsInput = useRef(false);
   const performanceStopTimer = useRef<number | undefined>(undefined);
   const finishingPerformance = useRef(false);
+  const viewerDragPointer = useRef<number | undefined>(undefined);
+  const wheelDelta = useRef(0);
+  const queuedWheelAction = useRef<"larger" | "smaller" | undefined>(undefined);
+  const wheelActionRunning = useRef(false);
+  const [draggingWindow, setDraggingWindow] = useState(false);
+
+  useEffect(() => {
+    if (!transientMessage) return;
+    const timer = window.setTimeout(() => setTransientMessage(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [transientMessage]);
+
+  useEffect(() => {
+    if (!recordingClock) {
+      setRecordingElapsedMs(0);
+      return;
+    }
+    const update = () => setRecordingElapsedMs(Date.now() - recordingClock.startedAt);
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [recordingClock]);
 
   useEffect(() => window.puppetloom.onViewerState((next) => {
     setState(next);
@@ -95,8 +135,8 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
   useEffect(() => window.puppetloom.onInputReplayState((next) => {
     setReplayingInput(next.replaying);
     if (next.reason === "started") renderer.current?.restartMotion();
-    if (next.reason === "finished") setSessionMessage({ text: "动作数据回放已完成" });
-    if (next.reason === "stopped") setSessionMessage({ text: "动作数据回放已停止" });
+    if (next.reason === "finished") setTransientMessage("动作数据回放已完成");
+    if (next.reason === "stopped") setTransientMessage("动作数据回放已停止");
   }), []);
 
   useEffect(() => () => {
@@ -199,6 +239,53 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     }
   }
 
+  async function flushWheelAction(): Promise<void> {
+    if (wheelActionRunning.current) return;
+    wheelActionRunning.current = true;
+    try {
+      while (queuedWheelAction.current) {
+        const action = queuedWheelAction.current;
+        queuedWheelAction.current = undefined;
+        await act(action);
+      }
+    } finally {
+      wheelActionRunning.current = false;
+    }
+  }
+
+  function zoomViewerWithWheel(event: React.WheelEvent<HTMLElement>): void {
+    if (state.clickThrough || !isViewerMoveOrZoomSurface(event.target) || event.deltaY === 0) return;
+    event.preventDefault();
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? window.innerHeight : 1;
+    wheelDelta.current += event.deltaY * unit;
+    if (Math.abs(wheelDelta.current) < 40) return;
+    queuedWheelAction.current = wheelDelta.current < 0 ? "larger" : "smaller";
+    wheelDelta.current = 0;
+    void flushWheelAction();
+  }
+
+  function beginViewerDrag(event: React.PointerEvent<HTMLElement>): void {
+    if (event.button !== 0 || state.clickThrough || !isViewerMoveOrZoomSurface(event.target)) return;
+    viewerDragPointer.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    window.puppetloom.viewerDrag("start", { x: event.screenX, y: event.screenY });
+    setDraggingWindow(true);
+    event.preventDefault();
+  }
+
+  function moveViewerDrag(event: React.PointerEvent<HTMLElement>): void {
+    if (viewerDragPointer.current !== event.pointerId) return;
+    window.puppetloom.viewerDrag("move", { x: event.screenX, y: event.screenY });
+  }
+
+  function endViewerDrag(event: React.PointerEvent<HTMLElement>): void {
+    if (viewerDragPointer.current !== event.pointerId) return;
+    viewerDragPointer.current = undefined;
+    window.puppetloom.viewerDrag("end");
+    setDraggingWindow(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
   async function toggleCamera(): Promise<void> {
     if (cameraInput.current) {
       const input = cameraInput.current;
@@ -247,13 +334,17 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         renderer.current?.restartMotion();
         await window.puppetloom.inputRecording("start");
         setRecordingInput(true);
-        setSessionMessage({ text: "正在录制动作数据" });
+        setSessionMessage(undefined);
+        setRecordingClock({ kind: "input", startedAt: Date.now() });
       } else {
         const result = await window.puppetloom.inputRecording("stop");
         setRecordingInput(false);
+        setRecordingClock(undefined);
         setSessionMessage({ text: "动作数据已保存", ...(result.output ? { path: result.output } : {}) });
       }
     } catch (cause) {
+      setRecordingInput(false);
+      setRecordingClock(undefined);
       setSessionMessage({ text: `动作数据录制失败：${messageOf(cause)}` });
     }
   }
@@ -263,13 +354,14 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       if (replayingInput) {
         await window.puppetloom.inputReplay("stop");
         setReplayingInput(false);
-        setSessionMessage({ text: "动作数据回放已停止" });
+        setTransientMessage("动作数据回放已停止");
       } else {
         if (recordingInput) throw new Error("请先停止动作数据录制。" );
         const result = await window.puppetloom.inputReplay("start");
         if (result.canceled) return;
         setReplayingInput(true);
-        setSessionMessage({ text: "正在回放动作数据；实时输入已暂时隔离", ...(result.input ? { path: result.input } : {}) });
+        setSessionMessage(undefined);
+        setTransientMessage("正在回放动作数据；实时输入已暂时隔离");
       }
     } catch (cause) {
       setReplayingInput(false);
@@ -299,9 +391,11 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     try {
       if (performanceRecorder.current || finishingPerformance.current) throw new Error("当前表演录制尚未结束。" );
       if (!canvas.current) throw new Error("角色画布尚未准备好。" );
+      if (!renderer.current) throw new Error("角色渲染器尚未准备好。" );
       if (recordingInput) throw new Error("请先结束单独的动作数据录制。" );
       if (replayingInput) throw new Error("请先停止动作数据回放。" );
       const options = recordingOptions();
+      setRecordingPreview(undefined);
       if (recordingSettings.includeMotionData) {
         renderer.current?.restartMotion();
         await window.puppetloom.inputRecording("start");
@@ -312,7 +406,8 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         performanceRecorder.current = await startPerformanceRecording(
           canvas.current,
           options,
-          recordingSettings.includeAudio ? microphoneInput.current?.mediaStream : undefined
+          recordingSettings.includeAudio ? microphoneInput.current?.mediaStream : undefined,
+          renderer.current
         );
       } catch (cause) {
         const input = performanceOwnsInput.current ? await window.puppetloom.inputRecording("stop").catch(() => undefined) : undefined;
@@ -322,15 +417,16 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         throw cause;
       }
       setRecordingPerformance(true);
+      setRecordingFinalizing(false);
+      setRecordingClock({ kind: "video", startedAt: Date.now(), ...(options.targetDurationMs === undefined ? {} : { targetDurationMs: options.targetDurationMs }) });
       setShowRecordingSettings(false);
-      const statusParts = ["正在录制视频"];
-      if (recordingSettings.includeMotionData) statusParts.push("同步保存动作数据");
-      if (microphoneInput.current?.mediaStream && recordingSettings.includeAudio) statusParts.push("包含麦克风音轨");
-      setSessionMessage({ text: statusParts.join("；") });
+      setShowActions(false);
+      setSessionMessage(undefined);
       if (options.targetDurationMs !== undefined) performanceStopTimer.current = window.setTimeout(() => void finishPerformanceRecording(), options.targetDurationMs);
     } catch (cause) {
       if (!performanceRecorder.current) {
         setRecordingPerformance(false);
+        setRecordingClock(undefined);
         setSessionMessage((current) => current?.path ? current : { text: `视频录制失败：${messageOf(cause)}` });
       }
     }
@@ -341,6 +437,9 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     if (!activeRecorder || finishingPerformance.current) return;
     finishingPerformance.current = true;
     performanceRecorder.current = undefined;
+    setRecordingPerformance(false);
+    setRecordingFinalizing(true);
+    setRecordingClock(undefined);
     if (performanceStopTimer.current !== undefined) window.clearTimeout(performanceStopTimer.current);
     performanceStopTimer.current = undefined;
     let inputSession: PerformanceRecordingInputSession | undefined;
@@ -359,25 +458,37 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         }
       }
       const result = await activeRecorder.stop(inputSession);
-      setRecordingPerformance(false);
+      let previewFailure = "";
       try {
         const url = await window.puppetloom.projectMediaUrl(projectDirectory, result.relativeOutput);
-        setRecordingPreview({ url, output: result.output });
+        setRecordingPreview({
+          url,
+          output: result.output,
+          ...(inputError ? { note: "视频已保存；动作数据未能完整保存：" + inputError } : inputSession ? { note: "视频和动作数据均已保存。" } : {})
+        });
+        setSessionMessage(undefined);
       } catch (cause) {
-        inputError = [inputError, `预览读取失败：${messageOf(cause)}`].filter(Boolean).join("；");
+        previewFailure = messageOf(cause);
+        setSessionMessage({
+          text: [inputError ? "视频已保存，但动作数据未能完整保存：" + inputError : "视频已保存", "预览读取失败：" + previewFailure].join("；"),
+          path: result.output
+        });
       }
-      setSessionMessage({ text: inputError ? `视频已保存，但动作数据保存失败：${inputError}` : inputSession ? "视频和动作数据已保存" : "视频已保存", path: result.output });
     } catch (cause) {
-      setRecordingPerformance(false);
       setSessionMessage({ text: `视频录制失败：${messageOf(cause)}` });
     } finally {
       finishingPerformance.current = false;
+      setRecordingFinalizing(false);
     }
   }
 
   async function togglePerformanceRecording(): Promise<void> {
     if (performanceRecorder.current) await finishPerformanceRecording();
-    else setShowRecordingSettings((value) => !value);
+    else if (!recordingFinalizing) {
+      setShowActions(false);
+      if (!showRecordingSettings) setRecordingPreview(undefined);
+      setShowRecordingSettings(!showRecordingSettings);
+    }
   }
 
   async function triggerTarget(target: { behaviorId?: string; expressionId?: string }): Promise<void> {
@@ -386,16 +497,42 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       const selected = target.behaviorId
         ? runtimeDescriptor?.behaviors.find((value) => value.id === target.behaviorId)?.name
         : runtimeDescriptor?.expressions.find((value) => value.id === target.expressionId)?.name;
-      setSessionMessage({ text: `已触发：${selected ?? target.behaviorId ?? target.expressionId}` });
+      setTransientMessage(`已触发：${selected ?? target.behaviorId ?? target.expressionId}`);
     } catch (cause) {
       setSessionMessage({ text: `触发失败：${messageOf(cause)}` });
     }
   }
 
+  async function dismissInputStatus(kind: "camera" | "microphone"): Promise<void> {
+    if (kind === "camera") {
+      const input = cameraInput.current;
+      cameraInput.current = undefined;
+      await input?.stop().catch(() => undefined);
+      await window.puppetloom.releaseRuntimeSource("camera").catch(() => undefined);
+      setCameraStatus({ state: "stopped", message: "摄像头面捕未启用" });
+    } else {
+      const input = microphoneInput.current;
+      microphoneInput.current = undefined;
+      await input?.stop().catch(() => undefined);
+      await window.puppetloom.releaseRuntimeSource("microphone").catch(() => undefined);
+      setMicrophoneStatus({ state: "stopped", message: "麦克风口型未启用" });
+    }
+  }
+
   return (
-    <main className="viewer" data-testid="viewer" aria-label={project?.name ?? "PuppetLoom viewer"}>
+    <main
+      className={`viewer ${draggingWindow ? "is-window-dragging" : ""}`}
+      data-testid="viewer"
+      aria-label={project?.name ?? "PuppetLoom viewer"}
+      onWheel={zoomViewerWithWheel}
+      onPointerDown={beginViewerDrag}
+      onPointerMove={moveViewerDrag}
+      onPointerUp={endViewerDrag}
+      onPointerCancel={endViewerDrag}
+      onLostPointerCapture={endViewerDrag}
+    >
       <canvas ref={canvas} className="puppet-canvas" />
-      <div className="drag-strip" title={`拖动角色窗口 · ${sourceLabel}`}><span>{project?.name ?? "加载中"}</span><small>{sourceLabel}</small></div>
+      <div className="drag-strip" title={`按住拖动角色窗口 · 滚轮缩放 · ${sourceLabel}`}><span>{project?.name ?? "加载中"}</span><small>{sourceLabel}</small></div>
       {showActions && runtimeDescriptor && <aside className="action-panel" aria-label="表情与动作">
         <div className="action-group"><strong>表情</strong>{runtimeDescriptor.expressions.map((expression, index) => { const key = `CommandOrControl+Shift+${index + 1}`; return <button className="with-icon" key={expression.id} onClick={() => void triggerTarget({ expressionId: expression.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 1}` : "系统快捷键不可用，请点击触发" : expression.id}><Smile aria-hidden="true" />{expression.name}</button>; })}</div>
         <div className="action-group"><strong>动作</strong>{runtimeDescriptor.behaviors.map((behavior, index) => { const key = `CommandOrControl+Shift+${index + 5}`; return <button className="with-icon" key={behavior.id} onClick={() => void triggerTarget({ behaviorId: behavior.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 5}` : "系统快捷键不可用，请点击触发" : behavior.id}><Activity aria-hidden="true" />{behavior.name}</button>; })}</div>
@@ -424,7 +561,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
           </div>
         </details>
       </aside>}
-      {recordingPreview && <aside className="recording-preview" aria-label="视频录制预览"><div><strong>刚刚保存的视频</strong><button aria-label="关闭视频录制预览" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="视频录制预览" controls src={recordingPreview.url} /><button className="with-icon" onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}><FolderOpen aria-hidden="true" />在文件夹中显示</button></aside>}
+      {recordingPreview && <aside className="recording-preview" aria-label="视频录制预览"><div><strong>刚刚保存的视频</strong><button aria-label="关闭视频录制预览" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="视频录制预览" controls src={recordingPreview.url} />{recordingPreview.note && <p>{recordingPreview.note}</p>}<button className="with-icon" onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}><FolderOpen aria-hidden="true" />在文件夹中显示</button></aside>}
       <nav className="viewer-controls" aria-label="角色窗口控制">
         <button className="icon-only" aria-label="缩小角色窗口" onClick={() => act("smaller")} title="缩小角色窗口"><Minus aria-hidden="true" /></button>
         <button className="icon-only" aria-label="放大角色窗口" onClick={() => act("larger")} title="放大角色窗口"><Plus aria-hidden="true" /></button>
@@ -433,38 +570,48 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         <button className={`icon-only ${state.mouseTracking ? "is-active" : ""}`} aria-label={state.mouseTracking ? "切换为自主观察" : "切换为鼠标跟随"} aria-pressed={state.mouseTracking} onClick={() => act("pointer-tracking")} title={state.mouseTracking ? "当前跟随鼠标；点击切换为自主观察" : "当前自主观察；点击切换为鼠标跟随"}>{state.mouseTracking ? <MousePointer2 aria-hidden="true" /> : <Sparkles aria-hidden="true" />}</button>
         <button className={`icon-only ${cameraInput.current ? "is-active" : ""}`} aria-label={cameraInput.current ? "关闭摄像头面捕" : "开启摄像头面捕"} aria-pressed={Boolean(cameraInput.current)} onClick={() => void toggleCamera()} title={cameraStatus.message}>{cameraInput.current ? <Camera aria-hidden="true" /> : <CameraOff aria-hidden="true" />}</button>
         <button className={`icon-only ${microphoneInput.current ? "is-active" : ""}`} aria-label={microphoneInput.current ? "关闭麦克风口型" : "开启麦克风口型"} aria-pressed={Boolean(microphoneInput.current)} onClick={() => void toggleMicrophone()} title={microphoneStatus.message}>{microphoneInput.current ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}</button>
-        <button className={`icon-only ${recordingPerformance || recordingInput ? "is-recording" : showRecordingSettings || replayingInput ? "is-active" : ""}`} aria-label={recordingPerformance ? "停止并保存视频" : "录制视频"} aria-pressed={recordingPerformance} onClick={() => void togglePerformanceRecording()} title={recordingPerformance ? "停止并保存当前角色视频" : recordingInput ? "动作数据正在录制；点击打开录制面板" : replayingInput ? "动作数据正在回放；点击打开录制面板" : "设置背景、分辨率、帧率、时长、音轨与可选动作数据"}>{recordingPerformance ? <Square aria-hidden="true" /> : <Video aria-hidden="true" />}</button>
-        <button className={`icon-only ${showActions ? "is-active" : ""}`} aria-label={showActions ? "关闭表情动作面板" : "打开表情动作面板"} aria-pressed={showActions} onClick={() => setShowActions((value) => !value)} title={Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) ? "表情与动作；快捷键被占用时请点击面板按钮" : "表情与动作；Ctrl+Shift+1…8 可快捷触发"}><WandSparkles aria-hidden="true" /></button>
+        <button disabled={recordingFinalizing} className={`icon-only ${recordingPerformance || recordingInput ? "is-recording" : showRecordingSettings || replayingInput || recordingFinalizing ? "is-active" : ""}`} aria-label={recordingFinalizing ? "正在完成视频文件" : recordingPerformance ? "停止并保存视频" : "录制视频"} aria-pressed={recordingPerformance} onClick={() => void togglePerformanceRecording()} title={recordingFinalizing ? "正在完成视频文件，请稍候" : recordingPerformance ? "停止并保存当前角色视频" : recordingInput ? "动作数据正在录制；点击打开录制面板" : replayingInput ? "动作数据正在回放；点击打开录制面板" : "设置背景、分辨率、帧率、时长、音轨与可选动作数据"}>{recordingPerformance ? <Square aria-hidden="true" /> : <Video aria-hidden="true" />}</button>
+        <button className={`icon-only ${showActions ? "is-active" : ""}`} aria-label={showActions ? "关闭表情动作面板" : "打开表情动作面板"} aria-pressed={showActions} onClick={() => { setShowRecordingSettings(false); setShowActions((value) => !value); }} title={Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) ? "表情与动作；快捷键被占用时请点击面板按钮" : "表情与动作；Ctrl+Shift+1…8 可快捷触发"}><WandSparkles aria-hidden="true" /></button>
         <button className={`icon-only ${state.clickThrough ? "is-active" : ""}`} disabled={!state.clickThrough && capabilities.hotkeys["CommandOrControl+Shift+P"] === false} aria-label={state.clickThrough ? "关闭鼠标穿透" : "开启鼠标穿透"} aria-pressed={state.clickThrough} onClick={() => act("click-through")} title={state.clickThrough ? "关闭鼠标穿透" : capabilities.hotkeys["CommandOrControl+Shift+P"] ? "开启鼠标穿透；按 Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被其它软件占用，因此已停用鼠标穿透"}>{state.clickThrough ? <PointerOff aria-hidden="true" /> : <MousePointerClick aria-hidden="true" />}</button>
         <button className="icon-only viewer-close" aria-label="关闭角色窗口" onClick={() => act("close")} title="关闭角色窗口"><X aria-hidden="true" /></button>
       </nav>
       {state.clickThrough && <div className="shortcut-hint">{capabilities.hotkeys["CommandOrControl+Shift+P"] ? "Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被占用；请从创建页的远程控制关闭鼠标穿透"}</div>}
-      {(cameraStatus.state === "starting" || cameraStatus.state === "calibrating" || cameraStatus.state === "lost" || cameraStatus.state === "error" || microphoneStatus.state === "starting" || microphoneStatus.state === "error") && <div className="input-status">{cameraStatus.state !== "stopped" && cameraStatus.message}{cameraStatus.state !== "stopped" && microphoneStatus.state !== "stopped" ? " · " : ""}{microphoneStatus.state !== "stopped" && microphoneStatus.message}</div>}
+      <div className="viewer-status-stack">
+      {recordingClock && <div className="recording-operation" role="timer" aria-live="off"><span className="recording-dot" aria-hidden="true" /><strong>{recordingClock.kind === "video" ? "视频录制中" : "动作数据录制中"}</strong><time>{formatDuration(recordingElapsedMs)}</time>{recordingClock.targetDurationMs !== undefined && <small>剩余 {formatDuration(Math.max(0, recordingClock.targetDurationMs - recordingElapsedMs))}</small>}</div>}
+      {recordingFinalizing && <div className="recording-operation is-finalizing" role="status"><strong>正在完成视频文件…</strong><small>正在写入最后的数据并准备预览，请勿关闭窗口。</small></div>}
+      {replayingInput && <div className="replay-operation" role="status"><Repeat2 aria-hidden="true" /><strong>正在回放动作数据</strong><small>实时输入已暂时隔离</small></div>}
+      {(cameraStatus.state === "starting" || cameraStatus.state === "calibrating" || cameraStatus.state === "lost" || cameraStatus.state === "error") && <div className={`input-status ${cameraStatus.state === "error" || cameraStatus.state === "lost" ? "is-error" : ""}`}><span>{cameraStatus.message}</span>{(cameraStatus.state === "error" || cameraStatus.state === "lost") && <button className="icon-only" aria-label="关闭摄像头提示" title="关闭摄像头提示" onClick={() => void dismissInputStatus("camera")}><X aria-hidden="true" /></button>}</div>}
+      {(microphoneStatus.state === "starting" || microphoneStatus.state === "error") && <div className={`input-status microphone-status ${microphoneStatus.state === "error" ? "is-error" : ""}`}><span>{microphoneStatus.message}</span>{microphoneStatus.state === "error" && <button className="icon-only" aria-label="关闭麦克风提示" title="关闭麦克风提示" onClick={() => void dismissInputStatus("microphone")}><X aria-hidden="true" /></button>}</div>}
+      {transientMessage && <div className="viewer-toast" role="status">{transientMessage}</div>}
       {sessionMessage && <div className="session-status" role="status"><strong>{sessionMessage.text}</strong>{sessionMessage.path && <code title={sessionMessage.path}>{sessionMessage.path}</code>}<span>{sessionMessage.path && <><button className="with-icon" onClick={() => void window.puppetloom.revealPath(sessionMessage.path!)}><FolderOpen aria-hidden="true" />在文件夹中显示</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(sessionMessage.path!)}><ClipboardCopy aria-hidden="true" />复制路径</button></>}<button className="icon-only" aria-label="关闭提示" title="关闭提示" onClick={() => setSessionMessage(undefined)}><X aria-hidden="true" /></button></span></div>}
+      </div>
       {error && <div className="viewer-error">{error}</div>}
     </main>
   );
 }
 
-function DropField({ label, value, accept, optional, icon, onPick, onDrop, onReject }: {
+function DropField({ label, value, accept, optional, icon, disabled, onPick, onDrop, onClear, onReject }: {
   label: string;
   value: string;
   accept: string;
   optional?: boolean;
   icon: React.ReactNode;
+  disabled?: boolean;
   onPick: () => Promise<void>;
   onDrop: (path: string) => void;
+  onClear?: () => void;
   onReject?: (message: string) => void;
 }): React.JSX.Element {
   const [dragging, setDragging] = useState(false);
   return (
     <section
       className={`drop-field ${dragging ? "is-dragging" : ""}`}
-      onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragOver={(event) => { event.preventDefault(); if (!disabled) setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={(event) => {
         event.preventDefault();
         setDragging(false);
+        if (disabled) return;
         const file = event.dataTransfer.files[0];
         if (!file) return;
         if (!file.name.toLowerCase().match(accept)) { onReject?.(`不支持 ${file.name}。`); return; }
@@ -472,7 +619,7 @@ function DropField({ label, value, accept, optional, icon, onPick, onDrop, onRej
       }}
     >
       <div className="drop-field-identity"><span className="field-icon" aria-hidden="true">{icon}</span><span><strong>{label}</strong>{optional && <span className="optional">可选</span>}<small>{value || "拖到这里，或从本机选择"}</small></span></div>
-      <button className="with-icon" onClick={() => void onPick()}><FileUp aria-hidden="true" />选择文件</button>
+      <span className="drop-field-actions">{value && onClear && <button disabled={disabled} className="with-icon clear-file" onClick={onClear}><X aria-hidden="true" />清除</button>}<button disabled={disabled} className="with-icon" onClick={() => void onPick()}><FileUp aria-hidden="true" />选择文件</button></span>
     </section>
   );
 }
@@ -525,6 +672,13 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
   }), []);
 
   useEffect(() => {
+    setReport(undefined);
+    setProjectDirectory("");
+    setViewerId(undefined);
+    setError("");
+  }, [input, reference, output, name, alphaCleanup]);
+
+  useEffect(() => {
     const generation = ++inspectionGeneration.current;
     setInspection(undefined);
     setError("");
@@ -550,6 +704,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
   }, [busy]);
 
   const ready = useMemo(() => Boolean(input && output && !busy), [input, output, busy]);
+  const readinessMessage = busy ? "正在创建，请等待当前操作完成。" : !input ? "请选择分层 PSD。" : !output ? "请选择项目输出目录。" : "素材和输出目录已就绪。";
 
   async function choose(kind: "psd" | "reference" | "output"): Promise<void> {
     const result = kind === "psd" ? await window.puppetloom.choosePsd() : kind === "reference" ? await window.puppetloom.chooseReference() : await window.puppetloom.chooseOutput();
@@ -564,7 +719,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
     const operationId = crypto.randomUUID();
     createOperationId.current = operationId;
     setCreatePhase("importing");
-    setBusy(true); setError(""); setReport(undefined);
+    setBusy(true); setError(""); setReport(undefined); setProjectDirectory(""); setViewerId(undefined);
     try {
       const result = await window.puppetloom.create({ operationId, input, output, ...(reference ? { reference } : {}), ...(name.trim() ? { name: name.trim() } : {}), alphaCleanup, seed: 42 });
       setReport(result.report);
@@ -626,15 +781,16 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
       <div className="workflow">
         <section className="inputs">
           <div className="section-title"><FileImage aria-hidden="true" /><div><h2>角色素材</h2><p>选择源文件并指定项目位置</p></div></div>
-          <DropField label="分层 PSD" value={input} accept="\\.psd$" icon={<FileImage />} onPick={() => choose("psd")} onDrop={setInput} onReject={() => setError("这里只能放入 .psd 文件。 ")} />
-          <DropField label="原始角色图" value={reference} accept="\\.(png|jpe?g|webp)$" icon={<ImageIcon />} optional onPick={() => choose("reference")} onDrop={setReference} onReject={() => setError("参考图仅支持 PNG、JPG 或 WebP。 ")} />
-          <label className="text-field"><span>项目名称 <small>可选</small></span><input value={name} maxLength={80} placeholder="留空时使用 PSD 文件名" onChange={(event) => setName(event.target.value)} /></label>
+          <DropField label="分层 PSD" value={input} accept="\\.psd$" icon={<FileImage />} disabled={busy} onPick={() => choose("psd")} onDrop={setInput} onClear={() => setInput("")} onReject={() => setError("这里只能放入 .psd 文件。 ")} />
+          <DropField label="原始角色图" value={reference} accept="\\.(png|jpe?g|webp)$" icon={<ImageIcon />} optional disabled={busy} onPick={() => choose("reference")} onDrop={setReference} onClear={() => setReference("")} onReject={() => setError("参考图仅支持 PNG、JPG 或 WebP。 ")} />
+          <label className="text-field"><span>项目名称 <small>可选</small></span><input disabled={busy} value={name} maxLength={80} placeholder="留空时使用 PSD 文件名" onChange={(event) => setName(event.target.value)} /></label>
           <section className="output-field">
             <div className="drop-field-identity"><span className="field-icon" aria-hidden="true"><FolderOutput /></span><span><strong>项目输出目录</strong><small>{output || "请选择一个新目录或空目录"}</small></span></div>
-            <button className="with-icon" onClick={() => void choose("output")}><FolderOutput aria-hidden="true" />选择目录</button>
+            <button disabled={busy} className="with-icon" onClick={() => void choose("output")}><FolderOutput aria-hidden="true" />选择目录</button>
           </section>
-          <fieldset className="alpha-policy"><legend>透明像素处理</legend><div className="alpha-default"><strong>自动清理确认噪点</strong><small>始终分析 Alpha；默认只移除极小、淡色、孤立的高置信度噪点，疑似高光、细发丝和装饰继续保留。</small></div><details><summary><ChevronRight aria-hidden="true" />高级选项</summary><label><input type="checkbox" name="preserve-alpha-noise" checked={alphaCleanup === "preserve-all"} onChange={(event) => setAlphaCleanup(event.target.checked ? "preserve-all" : "automatic")} /><span><strong>保留所有高置信度噪点</strong><small>仅用于排查误判。源 PSD 无论是否开启都不会被修改。</small></span></label></details></fieldset>
+          <fieldset disabled={busy} className="alpha-policy"><legend>透明像素处理</legend><div className="alpha-default"><strong>自动清理确认噪点</strong><small>始终分析 Alpha；默认只移除极小、淡色、孤立的高置信度噪点，疑似高光、细发丝和装饰继续保留。</small></div><details><summary><ChevronRight aria-hidden="true" />高级选项</summary><label><input type="checkbox" name="preserve-alpha-noise" checked={alphaCleanup === "preserve-all"} onChange={(event) => setAlphaCleanup(event.target.checked ? "preserve-all" : "automatic")} /><span><strong>保留所有高置信度噪点</strong><small>仅用于排查误判。源 PSD 无论是否开启都不会被修改。</small></span></label></details></fieldset>
           <button className="primary with-icon" disabled={!ready} onClick={() => void create()}><Sparkles aria-hidden="true" />{busy ? `${createPhase === "importing" ? "正在读取 PSD" : createPhase === "rigging" ? "正在生成绑定" : createPhase === "writing" ? "正在写入纹理与项目" : createPhase === "validating" ? "正在验证全部输出" : "正在发布最终项目"}${busySeconds ? ` · ${busySeconds} 秒` : ""}` : "创建角色项目"}</button>
+          <p className={"creation-readiness" + (ready ? " is-ready" : "")} role="status">{readinessMessage}</p>
           {busy && <button className="cancel-create with-icon" onClick={() => void cancelCreate()}><Square aria-hidden="true" />安全停止创建</button>}
           <p className="policy">缺少三态嘴形时嘴部保持不动；接入后只偶发一次缓慢开合，不连续无声说话。缺少闭眼素材不会阻塞创建。</p>
         </section>
@@ -706,7 +862,7 @@ export function App(): React.JSX.Element {
       <WindowTitleBar title={editing ? "PuppetLoom · 绑定与校准编辑器" : "PuppetLoom"} />
       <div className="desktop-window-body">
         {editorProject
-          ? <EditorWorkspace projectDirectory={editorProject} onBack={() => setEditorProject("")} />
+          ? <Suspense fallback={<main className="editor-loading"><p>正在加载编辑器…</p></main>}><EditorWorkspace projectDirectory={editorProject} onBack={() => setEditorProject("")} /></Suspense>
           : <Creator onEdit={setEditorProject} />}
       </div>
     </div>

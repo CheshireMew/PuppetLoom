@@ -157,6 +157,7 @@ export interface PuppetLoomDesktopApi {
   copyText(text: string): Promise<boolean>;
   controlViewer(id: number, action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   viewerAction(action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
+  viewerDrag(action: "start" | "move" | "end", point?: { x: number; y: number }): void;
   pointerTarget(): Promise<PointerLookTarget>;
   runtimeControl(): Promise<RuntimeControlSnapshot>;
   runtimeDescriptor(): Promise<RuntimeViewerDescriptor>;
@@ -170,7 +171,7 @@ export interface PuppetLoomDesktopApi {
   onViewerProject(listener: (payload: { project: PuppetLoomProject; sourceLabel: string }) => void): () => void;
   onInputReplayState(listener: (state: { replaying: boolean; reason: "started" | "finished" | "stopped" }) => void): () => void;
   startPerformanceRecording(metadata: PerformanceRecordingMetadata): Promise<{ id: string; viewerId: number; output: string; report: string; relativeOutput: string; relativeReport: string }>;
-  appendPerformanceRecording(id: string, bytes: Uint8Array): Promise<{ id: string; bytes: number }>;
+  appendPerformanceRecording(id: string, bytes: Uint8Array, position?: number): Promise<{ id: string; bytes: number }>;
   stopPerformanceRecording(id: string, durationMs: number, inputSession?: PerformanceRecordingInputSession): Promise<PerformanceRecordingResult>;
   failPerformanceRecording(id: string, error: string): Promise<boolean>;
   onViewerState(listener: (state: ViewerState) => void): () => void;

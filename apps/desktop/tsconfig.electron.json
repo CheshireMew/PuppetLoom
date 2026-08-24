@@ -5,5 +5,5 @@
     "rootDir": "electron",
     "lib": ["ES2022"]
   },
-  "include": ["electron/main.ts", "electron/preload.cts", "electron/global.d.ts", "electron/runtime-control-service.ts", "electron/performance-recording-service.ts"]
+  "include": ["electron/**/*.ts", "electron/**/*.cts"]
 }

@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "npm@11.12.1",
   "description": "Turn a layered character PSD into a safe, autonomous 2D puppet.",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-or-later",
   "workspaces": [
     "packages/*",
     "apps/*"

@@ -12,5 +12,6 @@ export * from "./pose-occlusion.js";
 export * from "./performance-actions.js";
 export * from "./render-contract.js";
 export * from "./runtime-control.js";
+export * from "./runtime-capabilities.js";
 export * from "./safety.js";
 export type * from "./types.js";

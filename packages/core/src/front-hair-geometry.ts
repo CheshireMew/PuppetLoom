@@ -26,6 +26,22 @@ export interface FrontHairSideGeometry {
   totalRelease: number;
 }
 
+interface FrontHairLayerGeometry {
+  width: number;
+  height: number;
+  commonRootY: number;
+  leftRoot: Point;
+  rightRoot: Point;
+  leftTip: Point;
+  rightTip: Point;
+  bangRootY: number;
+  bangTipY: number;
+}
+
+const frontHairLayerGeometryCache = new WeakMap<LayerBinding, FrontHairLayerGeometry>();
+const frontHairSideGeometryCache = new WeakMap<LayerBinding, WeakMap<Point, FrontHairSideGeometry>>();
+const ahogeHingeWeightCache = new WeakMap<LayerBinding, WeakMap<Point, number>>();
+
 function normalizedU(layer: LayerBinding, point: Point): number {
   return clamp((point.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width));
 }
@@ -49,23 +65,56 @@ function centralBangTipY(layer: LayerBinding, fallbackRootY: number): number {
 }
 
 /**
+ * Front-hair geometry is authored per layer and does not change during a
+ * render frame. Resolve the contour scan and fallback anchors once for the
+ * immutable project layer instead of repeating the full mesh scan per vertex.
+ */
+function layerGeometry(layer: LayerBinding): FrontHairLayerGeometry {
+  const cached = frontHairLayerGeometryCache.get(layer);
+  if (cached) return cached;
+  const width = Math.max(1e-6, layer.bounds.width);
+  const height = Math.max(1e-6, layer.bounds.height);
+  const commonRootY = layer.secondaryAnchors?.frontHairRoot?.y ?? layer.bounds.y + height * 0.52;
+  const bangRootY = clamp(
+    commonRootY - height * 0.14,
+    layer.bounds.y + height * 0.26,
+    layer.bounds.y + height * 0.44
+  );
+  const geometry: FrontHairLayerGeometry = {
+    width,
+    height,
+    commonRootY,
+    leftRoot: layer.secondaryAnchors?.frontHairRootLeft ?? { x: layer.bounds.x + width * 0.18, y: commonRootY },
+    rightRoot: layer.secondaryAnchors?.frontHairRootRight ?? { x: layer.bounds.x + width * 0.82, y: commonRootY },
+    leftTip: layer.secondaryAnchors?.frontHairTipLeft ?? { x: layer.bounds.x + width * 0.1, y: layer.bounds.y + height },
+    rightTip: layer.secondaryAnchors?.frontHairTipRight ?? { x: layer.bounds.x + width * 0.9, y: layer.bounds.y + height },
+    bangRootY,
+    bangTipY: centralBangTipY(layer, bangRootY)
+  };
+  frontHairLayerGeometryCache.set(layer, geometry);
+  return geometry;
+}
+
+/**
  * Resolves the two face-framing strands against their own roots. Keeping this
  * geometry shared prevents authoring keyforms and runtime physics from bending
  * a side strand around the centre of the complete front-hair bitmap.
  */
 export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontHairSideGeometry {
-  const width = Math.max(1e-6, layer.bounds.width);
-  const height = Math.max(1e-6, layer.bounds.height);
+  let byPoint = frontHairSideGeometryCache.get(layer);
+  if (!byPoint) {
+    byPoint = new WeakMap();
+    frontHairSideGeometryCache.set(layer, byPoint);
+  }
+  const cached = byPoint.get(point);
+  if (cached) return cached;
+  const geometry = layerGeometry(layer);
+  const { width, height, commonRootY, bangRootY, bangTipY } = geometry;
   const u = normalizedU(layer, point);
   const v = clamp((point.y - layer.bounds.y) / height);
   const screenSide: -1 | 1 = u < 0.5 ? -1 : 1;
-  const commonRootY = layer.secondaryAnchors?.frontHairRoot?.y ?? layer.bounds.y + height * 0.52;
-  const root = screenSide < 0
-    ? layer.secondaryAnchors?.frontHairRootLeft ?? { x: layer.bounds.x + width * 0.18, y: commonRootY }
-    : layer.secondaryAnchors?.frontHairRootRight ?? { x: layer.bounds.x + width * 0.82, y: commonRootY };
-  const tip = screenSide < 0
-    ? layer.secondaryAnchors?.frontHairTipLeft ?? { x: layer.bounds.x + width * 0.1, y: layer.bounds.y + height }
-    : layer.secondaryAnchors?.frontHairTipRight ?? { x: layer.bounds.x + width * 0.9, y: layer.bounds.y + height };
+  const root = screenSide < 0 ? geometry.leftRoot : geometry.rightRoot;
+  const tip = screenSide < 0 ? geometry.leftTip : geometry.rightTip;
   const length = Math.max(height * 0.28, tip.y - root.y);
   const progress = clamp((point.y - root.y) / length);
   const expectedX = root.x + (tip.x - root.x) * progress;
@@ -76,12 +125,6 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
   // Central bangs start above the side-lock roots and often finish much
   // earlier than the complete bitmap. Detect their own lower contour, then
   // release each short strand over that local length.
-  const bangRootY = clamp(
-    commonRootY - height * 0.14,
-    layer.bounds.y + height * 0.26,
-    layer.bounds.y + height * 0.44
-  );
-  const bangTipY = centralBangTipY(layer, bangRootY);
   const bangProgress = clamp((point.y - bangRootY) / Math.max(height * 0.12, bangTipY - bangRootY));
   const bangHorizontal = 1 - smoothstep((Math.abs(u - 0.5) - 0.17) / 0.15);
   // Long side locks can cross the central horizontal band below the short
@@ -96,7 +139,7 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
   // precedence while retaining a smooth overlap at its boundary.
   const sideOwnership = 1 - bangMask * 0.9;
   const sideRelease = smoothstep(progress) ** 1.3 * strandMask * sideOwnership;
-  return {
+  const resolved: FrontHairSideGeometry = {
     u,
     v,
     screenSide,
@@ -112,6 +155,8 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
     bangRelease,
     totalRelease: Math.max(sideRelease, bangRelease)
   };
+  byPoint.set(point, resolved);
+  return resolved;
 }
 
 /**
@@ -123,11 +168,24 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
  */
 export function ahogeHingeWeight(layer: LayerBinding, point: Point): number {
   if (layer.role !== "frontHair") return 0;
+  let byPoint = ahogeHingeWeightCache.get(layer);
+  if (!byPoint) {
+    byPoint = new WeakMap();
+    ahogeHingeWeightCache.set(layer, byPoint);
+  }
+  const cached = byPoint.get(point);
+  if (cached !== undefined) return cached;
   const root = layer.secondaryAnchors?.ahogeRoot;
-  if (!root) return 0;
+  if (!root) {
+    byPoint.set(point, 0);
+    return 0;
+  }
   const height = Math.max(1e-6, layer.bounds.height);
   const aboveRoot = (root.y - point.y) / height;
-  if (aboveRoot <= 0.004) return 0;
+  if (aboveRoot <= 0.004) {
+    byPoint.set(point, 0);
+    return 0;
+  }
   const rootRelease = smoothstep((aboveRoot - 0.004) / 0.052);
   // Measure the hinge corridor against the strand's height, not the complete
   // front-hair bitmap width. A narrow crop otherwise creates an abrupt weight
@@ -138,9 +196,14 @@ export function ahogeHingeWeight(layer: LayerBinding, point: Point): number {
   const heightProgress = clamp(aboveRoot / 0.28);
   const corridorHalfWidth = 0.06 + heightProgress ** 1.5 * 0.31;
   const corridorSoftness = 0.1 + heightProgress * 0.1;
-  if (horizontalDistance >= corridorHalfWidth + corridorSoftness) return 0;
+  if (horizontalDistance >= corridorHalfWidth + corridorSoftness) {
+    byPoint.set(point, 0);
+    return 0;
+  }
   const corridor = 1 - smoothstep((horizontalDistance - corridorHalfWidth) / corridorSoftness);
-  return clamp(rootRelease * corridor);
+  const weight = clamp(rootRelease * corridor);
+  byPoint.set(point, weight);
+  return weight;
 }
 
 export function ahogeMembership(layer: LayerBinding, point: Point): 0 | 1 {

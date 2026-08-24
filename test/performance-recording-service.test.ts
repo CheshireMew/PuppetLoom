@@ -54,6 +54,16 @@ describe("performance recording service", () => {
     expect(existsSync(report.output)).toBe(true);
   });
 
+  it("supports bounded positional rewrites required by streamed WebM metadata", () => {
+    const service = new PerformanceRecordingService();
+    const session = service.start({ viewerId: 11, projectDirectory: projectDirectory("positional"), projectName: "Test", metadata });
+    expect(service.append(11, session.id, Uint8Array.from([1, 2, 3, 4]), 0).bytes).toBe(4);
+    expect(service.append(11, session.id, Uint8Array.from([9, 8]), 1).bytes).toBe(4);
+    expect(service.append(11, session.id, Uint8Array.from([5]), 4).bytes).toBe(5);
+    const result = service.stop(11, session.id, 100);
+    expect([...readFileSync(result.output)]).toEqual([1, 9, 8, 4, 5]);
+  });
+
   it("rejects invalid formats and cross-window appends", () => {
     const service = new PerformanceRecordingService();
     expect(() => service.start({ viewerId: 9, projectDirectory: projectDirectory("invalid"), projectName: "Test", metadata: { ...metadata, mimeType: "video/mp4" } })).toThrow(/WebM/);

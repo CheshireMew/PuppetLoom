@@ -57,14 +57,14 @@ function mergeLayerOverride(base: LayerCalibrationOverride | undefined, patch: L
   } as LayerCalibrationOverride;
 }
 
-export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: CalibrationOverrides): CalibrationOverrides {
+function mergeParsedCalibrationOverrides(base: CalibrationOverrides, patch: CalibrationOverrides): CalibrationOverrides {
   const layerIds = new Set([...Object.keys(base.layers ?? {}), ...Object.keys(patch.layers ?? {})]);
   const layers = Object.fromEntries([...layerIds].map((id) => {
     const next = patch.layers?.[id];
     return [id, next ? mergeLayerOverride(base.layers?.[id], next) : base.layers![id]!];
   }));
-  return calibrationOverridesSchema.parse({
-    ...(patch.model ? { model: clone(patch.model) } : base.model ? { model: clone(base.model) } : {}),
+  return {
+    ...(patch.model ? { model: patch.model } : base.model ? { model: base.model } : {}),
     ...(base.anchors || patch.anchors ? { anchors: { ...(base.anchors ?? {}), ...(patch.anchors ?? {}) } } : {}),
     ...(base.semanticPoints || patch.semanticPoints ? {
       semanticPoints: { ...(base.semanticPoints ?? {}), ...(patch.semanticPoints ?? {}) }
@@ -97,7 +97,41 @@ export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: Cal
         } : {})
       }
     } : {})
-  }) as CalibrationOverrides;
+  } as CalibrationOverrides;
+}
+
+export function mergeCalibrationOverrides(base: CalibrationOverrides, patch: CalibrationOverrides): CalibrationOverrides {
+  return calibrationOverridesSchema.parse(mergeParsedCalibrationOverrides(base, patch)) as CalibrationOverrides;
+}
+
+/**
+ * Merges calibration objects already admitted through a schema boundary.
+ * The editor uses this while composing its in-memory draft; draft persistence
+ * and save transactions still parse and validate the complete result.
+ */
+export function mergeCalibrationOverridesForPreview(base: CalibrationOverrides, patch: CalibrationOverrides): CalibrationOverrides {
+  return mergeParsedCalibrationOverrides(base, patch);
+}
+
+/**
+ * Converts a revision patch into the equivalent patch for a project that
+ * already contains the saved calibration. Point deltas are the only additive
+ * override; all other fields are absolute replacements.
+ */
+export function rebaseCalibrationOverridesForPreview(saved: CalibrationOverrides, patch: CalibrationOverrides): CalibrationOverrides {
+  if (!patch.layers) return patch;
+  const layers = Object.fromEntries(Object.entries(patch.layers).map(([layerId, layerPatch]) => {
+    if (!layerPatch.meshPointDeltas || layerPatch.mesh || layerPatch.meshDensity || layerPatch.meshDetail !== undefined) return [layerId, layerPatch];
+    const savedDeltas = saved.layers?.[layerId]?.meshPointDeltas;
+    return [layerId, {
+      ...layerPatch,
+      meshPointDeltas: Object.fromEntries(Object.entries(layerPatch.meshPointDeltas).map(([index, delta]) => {
+        const previous = savedDeltas?.[index] ?? { x: 0, y: 0 };
+        return [index, { x: delta.x - previous.x, y: delta.y - previous.y }];
+      }))
+    }];
+  })) as NonNullable<CalibrationOverrides["layers"]>;
+  return { ...patch, layers };
 }
 
 export function clearCalibrationOverrides(base: CalibrationOverrides, clear: CalibrationPatch["clear"]): CalibrationOverrides {
@@ -119,15 +153,44 @@ function assertNormalized(point: Point, label: string): void {
   if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) throw new Error(`${label} 必须位于项目画布的 0..1 范围内。`);
 }
 
-function meshAtDensity(layer: LayerBinding, rows: number, cols: number): MeshBinding {
-  if (layer.mesh.topology !== "grid") throw new Error(`${layer.sourceName} 使用 Alpha ArtMesh，不能按行列重建。`);
-  const rebuilt = makeGridMesh(layer.bounds, rows, cols);
-  rebuilt.influences = reprojectMeshInfluences(layer.mesh, rebuilt);
-  return rebuilt;
+const interactiveMeshTransformCache = new WeakMap<MeshBinding, Map<string, MeshBinding>>();
+
+function cachedInteractiveMesh(source: MeshBinding, key: string, create: () => MeshBinding): MeshBinding {
+  let entries = interactiveMeshTransformCache.get(source);
+  if (!entries) {
+    entries = new Map();
+    interactiveMeshTransformCache.set(source, entries);
+  }
+  const cached = entries.get(key);
+  if (cached) return cached;
+  const created = create();
+  entries.set(key, created);
+  return created;
 }
 
-function reprojectHairStrands(previous: MeshBinding, next: MeshBinding, strands: HairStrandSpec[]): HairStrandSpec[] {
-  return strands.map((strand) => ({
+function meshAtDensity(layer: LayerBinding, rows: number, cols: number, interactive = false): MeshBinding {
+  if (layer.mesh.topology !== "grid") throw new Error(`${layer.sourceName} 使用 Alpha ArtMesh，不能按行列重建。`);
+  const create = (): MeshBinding => {
+    const rebuilt = makeGridMesh(layer.bounds, rows, cols);
+    rebuilt.influences = reprojectMeshInfluences(layer.mesh, rebuilt);
+    return rebuilt;
+  };
+  const key = `grid:${layer.bounds.x}:${layer.bounds.y}:${layer.bounds.width}:${layer.bounds.height}:${rows}:${cols}`;
+  return interactive ? cachedInteractiveMesh(layer.mesh, key, create) : create();
+}
+
+function meshAtDetail(mesh: MeshBinding, bounds: LayerBinding["bounds"], detail: number, interactive: boolean): MeshBinding {
+  const create = () => remeshArtMesh(mesh, bounds, detail);
+  const key = `art:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}:${detail}`;
+  return interactive ? cachedInteractiveMesh(mesh, key, create) : create();
+}
+
+const interactiveHairReprojectionCache = new WeakMap<MeshBinding, WeakMap<HairStrandSpec[], HairStrandSpec[]>>();
+
+function reprojectHairStrands(previous: MeshBinding, next: MeshBinding, strands: HairStrandSpec[], interactive = false): HairStrandSpec[] {
+  const cached = interactive ? interactiveHairReprojectionCache.get(next)?.get(strands) : undefined;
+  if (cached) return cached;
+  const reprojected = strands.map((strand) => ({
     ...strand,
     weights: next.points.map((point) => {
       let nearest = 0;
@@ -156,13 +219,32 @@ function reprojectHairStrands(previous: MeshBinding, next: MeshBinding, strands:
       return strand.release[nearest] ?? 0;
     })
   }));
+  if (interactive) {
+    let byStrands = interactiveHairReprojectionCache.get(next);
+    if (!byStrands) {
+      byStrands = new WeakMap();
+      interactiveHairReprojectionCache.set(next, byStrands);
+    }
+    byStrands.set(strands, reprojected);
+  }
+  return reprojected;
 }
 
-function applyHairStrandInfluences(layer: LayerBinding): void {
+const interactiveHairInfluenceCache = new WeakMap<MeshBinding, WeakMap<HairStrandSpec[], {
+  headAttachment: number[];
+  physicsRelease: number[];
+  physics: number[];
+}>>();
+
+function applyHairStrandInfluences(layer: LayerBinding, interactiveMesh?: MeshBinding): void {
   if (!layer.hairStrands || layer.hairStrands.length < 2) return;
+  const cached = layer.role !== "frontHair" ? interactiveHairInfluenceCache.get(interactiveMesh ?? layer.mesh)?.get(layer.hairStrands) : undefined;
+  if (cached) {
+    layer.mesh.influences = { ...(layer.mesh.influences ?? {}), ...cached };
+    return;
+  }
   const attachment = hairAttachmentInfluences(layer, layer.hairStrands);
-  layer.mesh.influences = {
-    ...(layer.mesh.influences ?? {}),
+  const derived = {
     headAttachment: attachment.headAttachment,
     physicsRelease: attachment.physicsRelease,
     physics: layer.mesh.points.map((point, index) => Math.max(
@@ -171,10 +253,19 @@ function applyHairStrandInfluences(layer: LayerBinding): void {
       layer.role === "frontHair" ? frontHairPhysicsMask(layer, point) : 0
     ))
   };
+  layer.mesh.influences = { ...(layer.mesh.influences ?? {}), ...derived };
+  if (interactiveMesh && layer.role !== "frontHair") {
+    let byStrands = interactiveHairInfluenceCache.get(interactiveMesh);
+    if (!byStrands) {
+      byStrands = new WeakMap();
+      interactiveHairInfluenceCache.set(interactiveMesh, byStrands);
+    }
+    byStrands.set(layer.hairStrands, derived);
+  }
 }
 
-function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverride): LayerBinding {
-  const next = clone(layer);
+function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverride, interactive = false): LayerBinding {
+  const next = interactive ? { ...layer } : clone(layer);
   const previousMesh = next.mesh;
   if (override.role) next.role = override.role;
   if (override.side) next.side = override.side;
@@ -197,17 +288,31 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
     next.secondaryAnchors = { ...(next.secondaryAnchors ?? {}), ...clone(override.secondaryAnchors) };
   }
   if (override.weights) next.weights = { ...next.weights, ...override.weights };
-  if (override.mesh) next.mesh = clone(override.mesh);
-  if (override.meshDensity) next.mesh = meshAtDensity(next, override.meshDensity.rows, override.meshDensity.cols);
+  if (override.mesh) next.mesh = interactive ? override.mesh : clone(override.mesh);
+  if (override.meshDensity) next.mesh = meshAtDensity(next, override.meshDensity.rows, override.meshDensity.cols, interactive);
   if (override.meshDetail !== undefined) {
-    next.mesh = remeshArtMesh(next.mesh, next.bounds, override.meshDetail);
+    next.mesh = meshAtDetail(next.mesh, next.bounds, override.meshDetail, interactive);
+  }
+  const interactiveStructuralMesh = interactive ? next.mesh : undefined;
+  if (interactive && next.mesh !== previousMesh) {
+    next.mesh = {
+      ...next.mesh,
+      points: [...next.mesh.points],
+      ...(next.mesh.influences ? { influences: { ...next.mesh.influences } } : {})
+    };
+  }
+  if (override.meshDetail !== undefined) {
     if (next.role === "frontHair" && next.mesh.influences) {
       next.mesh.influences.physics = next.mesh.points.map((point) => frontHairPhysicsMask(next, point));
     }
   }
   if (override.hairStrands) next.hairStrands = clone(override.hairStrands);
-  else if (next.mesh !== previousMesh && next.hairStrands) next.hairStrands = reprojectHairStrands(previousMesh, next.mesh, next.hairStrands);
-  for (const [rawIndex, delta] of Object.entries(override.meshPointDeltas ?? {})) {
+  else if (next.mesh !== previousMesh && next.hairStrands) next.hairStrands = reprojectHairStrands(previousMesh, interactiveStructuralMesh ?? next.mesh, next.hairStrands, interactive);
+  const pointDeltas = Object.entries(override.meshPointDeltas ?? {});
+  if (interactive && pointDeltas.length > 0 && next.mesh === previousMesh) {
+    next.mesh = { ...next.mesh, points: [...next.mesh.points] };
+  }
+  for (const [rawIndex, delta] of pointDeltas) {
     const index = Number(rawIndex);
     const base = next.mesh.points[index];
     if (!Number.isInteger(index) || !base) throw new Error(`${layer.sourceName} 不存在网格顶点 ${rawIndex}。`);
@@ -215,8 +320,15 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
     assertNormalized(point, `${layer.sourceName} 的网格顶点 ${rawIndex}`);
     next.mesh.points[index] = point;
   }
-  applyHairStrandInfluences(next);
-  for (const [channel, values] of Object.entries(override.vertexInfluences ?? {}) as Array<[MeshInfluenceChannel, Record<string, number>]>) {
+  const derivedHairChanged = !interactive || override.mesh !== undefined || override.meshDensity !== undefined
+    || override.meshDetail !== undefined || override.hairStrands !== undefined || override.role !== undefined;
+  if (derivedHairChanged) {
+    if (interactive && next.mesh === previousMesh) next.mesh = clone(next.mesh);
+    applyHairStrandInfluences(next, interactiveStructuralMesh);
+  }
+  const vertexInfluenceEntries = Object.entries(override.vertexInfluences ?? {}) as Array<[MeshInfluenceChannel, Record<string, number>]>;
+  if (interactive && vertexInfluenceEntries.length > 0 && next.mesh === previousMesh) next.mesh = { ...next.mesh };
+  for (const [channel, values] of vertexInfluenceEntries) {
     const fallback = channel === "pin" || channel === "physicsRelease" ? 0 : 1;
     const target = [...(next.mesh.influences?.[channel] ?? Array(next.mesh.points.length).fill(fallback))];
     if (target.length !== next.mesh.points.length) throw new Error(`${layer.sourceName} 的 ${channel} 权重数量与网格不一致。`);
@@ -230,10 +342,15 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
   return next;
 }
 
-export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrides: CalibrationOverrides): PuppetLoomProject {
-  const overrides = calibrationOverridesSchema.parse(rawOverrides) as CalibrationOverrides;
-  const next = clone(parsePuppetLoomProject(project));
-  next.version = PUPPETLOOM_PROJECT_VERSION;
+function applyParsedCalibrationOverrides(project: PuppetLoomProject, overrides: CalibrationOverrides, interactive = false): PuppetLoomProject {
+  const next: PuppetLoomProject = {
+    ...project,
+    version: PUPPETLOOM_PROJECT_VERSION,
+    ...(overrides.model ? { model: clone(overrides.model) } : {}),
+    ...(overrides.anchors ? { anchors: { ...project.anchors } } : {}),
+    ...(overrides.layers ? { layers: [...project.layers] } : {}),
+    ...(overrides.semanticPoints || overrides.runtime ? { runtime: { ...project.runtime } } : {})
+  };
   if (overrides.model) next.model = clone(overrides.model);
   if (overrides.anchors) {
     for (const [name, point] of Object.entries(overrides.anchors)) if (point) assertNormalized(point, `锚点 ${name}`);
@@ -241,6 +358,10 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
   }
   if (overrides.semanticPoints) {
     if (!next.runtime.semanticCage) throw new Error("当前项目没有可校准的语义控制笼。" );
+    next.runtime.semanticCage = {
+      ...next.runtime.semanticCage,
+      points: { ...next.runtime.semanticCage.points }
+    };
     for (const [id, position] of Object.entries(overrides.semanticPoints)) {
       if (!position || !(id in next.runtime.semanticCage.points)) throw new Error(`未知语义控制点：${id}`);
       assertNormalized(position, `语义控制点 ${id}`);
@@ -256,7 +377,7 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
   if (overrides.layers) {
     const known = new Set(next.layers.map((layer) => layer.id));
     for (const id of Object.keys(overrides.layers)) if (!known.has(id)) throw new Error(`未知图层：${id}`);
-    next.layers = next.layers.map((layer) => overrides.layers?.[layer.id] ? applyLayerOverride(layer, overrides.layers[layer.id]!) : layer);
+    next.layers = next.layers.map((layer) => overrides.layers?.[layer.id] ? applyLayerOverride(layer, overrides.layers[layer.id]!, interactive) : layer);
     const ids = new Set(next.layers.map((layer) => layer.id));
     for (const layer of next.layers) {
       if (layer.parentLayerId === layer.id) throw new Error(`${layer.sourceName} 不能把自己设为父图层。`);
@@ -310,5 +431,29 @@ export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrid
       ...(overrides.runtime?.secondaryMotionTuning?.[part as keyof typeof overrides.runtime.secondaryMotionTuning] ?? {})
     }]));
   }
-  return parsePuppetLoomProject(next);
+  return next;
+}
+
+/**
+ * Applies schema-checked overrides without reparsing the complete project.
+ * This is the interactive editor boundary: every touched branch is copied,
+ * while unchanged project data keeps its identity for renderer caches.
+ */
+export function applyCalibrationOverridesForPreview(project: PuppetLoomProject, rawOverrides: CalibrationOverrides): PuppetLoomProject {
+  const overrides = calibrationOverridesSchema.parse(rawOverrides) as CalibrationOverrides;
+  return applyParsedCalibrationOverrides(project, overrides, true);
+}
+
+/** Applies an already parsed in-memory draft without repeating deep schema work. */
+export function applyCalibrationOverridesForInteractivePreview(project: PuppetLoomProject, overrides: CalibrationOverrides): PuppetLoomProject {
+  return applyParsedCalibrationOverrides(project, overrides, true);
+}
+
+/** Applies overrides at a persistence boundary and validates the final project once. */
+export function applyCalibrationOverrides(project: PuppetLoomProject, rawOverrides: CalibrationOverrides): PuppetLoomProject {
+  const overrides = calibrationOverridesSchema.parse(rawOverrides) as CalibrationOverrides;
+  const normalizedProject = project.version === PUPPETLOOM_PROJECT_VERSION
+    ? project
+    : parsePuppetLoomProject(project);
+  return parsePuppetLoomProject(applyParsedCalibrationOverrides(normalizedProject, overrides));
 }

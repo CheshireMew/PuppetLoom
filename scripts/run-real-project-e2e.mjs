@@ -63,9 +63,9 @@ try {
   await meshButton.click();
   const deformedMesh = editor.locator(".mesh-deformed");
   await deformedMesh.waitFor();
-  const staticMeshPath = await deformedMesh.getAttribute("d");
+  const staticMeshSignature = await deformedMesh.getAttribute("data-mesh-signature");
   await editor.getByRole("button", { name: "自主预览" }).click();
-  await editor.waitForFunction((before) => document.querySelector(".mesh-deformed")?.getAttribute("d") !== before, staticMeshPath, { timeout: 10_000 });
+  await editor.waitForFunction((before) => document.querySelector(".mesh-deformed")?.getAttribute("data-mesh-signature") !== before, staticMeshSignature, { timeout: 10_000 });
   await editor.getByRole("button", { name: "暂停动作" }).click();
   await meshButton.click();
   if (await editor.locator(".editor-overlay").count()) throw new Error("真实项目再次点击网格与权重后没有隐藏网格。" );
