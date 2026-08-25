@@ -162,7 +162,7 @@ export function planStandardPerformanceActions(project: PuppetLoomProject, baseR
       continue;
     }
     limbLayers.push(...layers.map((layer) => ({ id: layer.id, name: layer.sourceName, role: layer.role, side: layer.side })));
-    const raise = parameter(`param-performance-arm-${side}`, `表演 · ${side === "left" ? "左" : "右"}臂抬起`, 0, 1);
+    const raise = parameter(`param-performance-arm-${side}`, `表演 · ${side === "left" ? "左" : "右"}臂抬起`, 0, 1, `arm-${side}`);
     const wave = parameter(`param-performance-wave-${side}`, `表演 · ${side === "left" ? "左" : "右"}臂摆动`, -1, 1);
     pushIfChanged(operations, project, { op: "upsert-parameter", parameter: raise });
     pushIfChanged(operations, project, { op: "upsert-parameter", parameter: wave });
@@ -170,6 +170,17 @@ export function planStandardPerformanceActions(project: PuppetLoomProject, baseR
     for (const layer of layers) {
       pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-arm-${side}-${layer.id}`, raise.id, layer, [{ value: 0 }, { value: 1, rotation: direction * 52, y: -0.008 }]) });
       pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-wave-${side}-${layer.id}`, wave.id, layer, [{ value: -1, rotation: -direction * 9 }, { value: 0 }, { value: 1, rotation: direction * 9 }]) });
+    }
+    const handLayers = layers.filter((layer) => layer.role === "hand");
+    if (handLayers.length > 0) {
+      const handX = parameter(`param-tracking-hand-${side}-x`, `追踪 · ${side === "left" ? "左" : "右"}手横向`, -1, 1, `hand-${side}-x`);
+      const handY = parameter(`param-tracking-hand-${side}-y`, `追踪 · ${side === "left" ? "左" : "右"}手纵向`, -1, 1, `hand-${side}-y`);
+      pushIfChanged(operations, project, { op: "upsert-parameter", parameter: handX });
+      pushIfChanged(operations, project, { op: "upsert-parameter", parameter: handY });
+      for (const layer of handLayers) {
+        pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-tracking-hand-${side}-x-${layer.id}`, handX.id, layer, [{ value: -1, x: -0.035 }, { value: 0 }, { value: 1, x: 0.035 }]) });
+        pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-tracking-hand-${side}-y-${layer.id}`, handY.id, layer, [{ value: -1, y: -0.045 }, { value: 0 }, { value: 1, y: 0.045 }]) });
+      }
     }
     behaviors.push(behavior(`action-wave-${side}`, `动作 · ${side === "left" ? "左" : "右"}手挥手`, 2.4, [
       track(raise.id, [[0, 0], [0.34, 1], [2.08, 1, "hold"], [2.4, 0]]),

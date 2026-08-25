@@ -1,9 +1,14 @@
 import { PuppetLoomError } from "./errors.js";
+import type { CharacterProductionConfig, CharacterStateSelection } from "./types.js";
 
 export const runtimeMotionInputKeys = [
   "headYaw", "headPitch", "headRoll",
   "bodySway", "bodyPitch", "bodyRoll",
   "gazeX", "gazeY", "breath", "blink", "mouthOpen",
+  "blinkLeft", "blinkRight", "browLeft", "browRight", "smile", "cheekPuff",
+  "mouthA", "mouthI", "mouthU", "mouthE", "mouthO",
+  "armLeft", "armRight", "handLeftX", "handLeftY", "handRightX", "handRightY",
+  "handLeftOpen", "handRightOpen",
   "lookTargetX", "lookTargetY", "lookTargetStrength"
 ] as const;
 
@@ -25,6 +30,7 @@ export interface RuntimeControlSource {
   parameters?: Record<string, number>;
   expressions?: Record<string, number>;
   behavior?: RuntimeBehaviorControl;
+  characterState?: CharacterStateSelection;
 }
 
 export interface RuntimeControlSnapshot {
@@ -42,6 +48,7 @@ export interface RuntimeViewerDescriptor {
   parameters: Array<{ id: string; name: string; min: number; default: number; max: number; semantic?: string }>;
   expressions: Array<{ id: string; name: string }>;
   behaviors: Array<{ id: string; name: string; duration: number; loop: boolean }>;
+  production?: CharacterProductionConfig;
 }
 
 export interface RuntimeControlInspectRequest {
@@ -63,6 +70,7 @@ export interface RuntimeControlSetRequest {
     motion?: RuntimeMotionInput;
     parameters?: Record<string, number>;
     expressions?: Record<string, number>;
+    characterState?: CharacterStateSelection;
   };
 }
 
@@ -191,6 +199,24 @@ function viewerId(value: unknown): number {
   return Number(value);
 }
 
+function characterState(value: unknown): CharacterStateSelection | undefined {
+  if (value === undefined) return undefined;
+  const input = record(value, "source.characterState");
+  const presetId = input.presetId === undefined ? undefined : requiredId(input.presetId, "source.characterState.presetId");
+  let variants: Record<string, string> | undefined;
+  if (input.variants !== undefined) {
+    const raw = record(input.variants, "source.characterState.variants");
+    variants = Object.fromEntries(Object.entries(raw).map(([group, option]) => [requiredId(group, "换装组 ID"), requiredId(option, `source.characterState.variants.${group}`)]));
+  }
+  let props: string[] | undefined;
+  if (input.props !== undefined) {
+    if (!Array.isArray(input.props) || input.props.length > 128) throw new PuppetLoomError("INVALID_INPUT", "source.characterState.props 必须是不超过 128 项的数组。");
+    props = [...new Set(input.props.map((id, index) => requiredId(id, `source.characterState.props[${index}]`)))];
+  }
+  if (!presetId && !variants && !props) throw new PuppetLoomError("INVALID_INPUT", "characterState 至少要提供 presetId、variants 或 props。");
+  return { ...(presetId ? { presetId } : {}), ...(variants ? { variants } : {}), ...(props ? { props } : {}) };
+}
+
 /** Strict transport-boundary parser shared by the desktop service and external clients. */
 export function parseRuntimeControlRequest(value: unknown): RuntimeControlRequest {
   const input = record(value, "运行时控制请求");
@@ -217,7 +243,8 @@ export function parseRuntimeControlRequest(value: unknown): RuntimeControlReques
     };
     const parameters = optionalNumbers(source.parameters, "source.parameters");
     const expressions = optionalNumbers(source.expressions, "source.expressions");
-    if (!motion && !parameters && !expressions) throw new PuppetLoomError("INVALID_INPUT", "set 至少要提供 motion、parameters 或 expressions。" );
+    const selectedCharacterState = characterState(source.characterState);
+    if (!motion && !parameters && !expressions && !selectedCharacterState) throw new PuppetLoomError("INVALID_INPUT", "set 至少要提供 motion、parameters、expressions 或 characterState。" );
     return {
       version: 1,
       requestId,
@@ -231,6 +258,7 @@ export function parseRuntimeControlRequest(value: unknown): RuntimeControlReques
         ...(motion ? { motion } : {}),
         ...(parameters ? { parameters } : {}),
         ...(expressions ? { expressions } : {})
+        , ...(selectedCharacterState ? { characterState: selectedCharacterState } : {})
       }
     };
   }
@@ -338,7 +366,8 @@ function cloneDescriptor(descriptor: RuntimeViewerDescriptor): RuntimeViewerDesc
     ...descriptor,
     parameters: descriptor.parameters.map((parameter) => ({ ...parameter })),
     expressions: descriptor.expressions.map((expression) => ({ ...expression })),
-    behaviors: descriptor.behaviors.map((behavior) => ({ ...behavior }))
+    behaviors: descriptor.behaviors.map((behavior) => ({ ...behavior })),
+    ...(descriptor.production ? { production: structuredClone(descriptor.production) } : {})
   };
 }
 
@@ -349,6 +378,7 @@ function cloneSource(source: RuntimeControlSource): RuntimeControlSource {
     ...(source.parameters ? { parameters: { ...source.parameters } } : {}),
     ...(source.expressions ? { expressions: { ...source.expressions } } : {}),
     ...(source.behavior ? { behavior: { ...source.behavior } } : {})
+    , ...(source.characterState ? { characterState: { ...source.characterState, ...(source.characterState.variants ? { variants: { ...source.characterState.variants } } : {}), ...(source.characterState.props ? { props: [...source.characterState.props] } : {}) } } : {})
   };
 }
 
@@ -394,6 +424,7 @@ export class RuntimeControlStore {
     }
     if (request.op === "set") {
       this.validateValues(viewer, request.source.parameters, request.source.expressions);
+      this.validateCharacterState(viewer, request.source.characterState);
       const existing = entries.get(request.source.id);
       const source: RuntimeControlSource = {
         id: request.source.id,
@@ -404,6 +435,7 @@ export class RuntimeControlStore {
         ...(request.source.motion ? { motion: { ...request.source.motion } } : {}),
         ...(request.source.parameters ? { parameters: { ...request.source.parameters } } : {}),
         ...(request.source.expressions ? { expressions: { ...request.source.expressions } } : {})
+        , ...(request.source.characterState ? { characterState: { ...request.source.characterState, ...(request.source.characterState.variants ? { variants: { ...request.source.characterState.variants } } : {}), ...(request.source.characterState.props ? { props: [...request.source.characterState.props] } : {}) } } : {})
       };
       entries.set(source.id, source);
       return { viewerId: viewer.id, source: cloneSource(source), snapshot: this.snapshot(viewer.id, nowMs) };
@@ -454,5 +486,18 @@ export class RuntimeControlStore {
       if (!viewer.expressions.some((candidate) => candidate.id === id)) throw new PuppetLoomError("INVALID_INPUT", `角色 ${viewer.id} 不存在表情：${id}`);
       if (value < 0 || value > 1) throw new PuppetLoomError("INVALID_INPUT", `表情 ${id} 的强度必须在 0 到 1 之间。`);
     }
+  }
+
+  private validateCharacterState(viewer: RuntimeViewerDescriptor, state?: CharacterStateSelection): void {
+    if (!state) return;
+    const production = viewer.production;
+    if (!production) throw new PuppetLoomError("INVALID_INPUT", `角色 ${viewer.id} 没有配置换装、道具或状态预设。`);
+    if (state.presetId && !production.presets.some((preset) => preset.id === state.presetId)) throw new PuppetLoomError("INVALID_INPUT", `角色 ${viewer.id} 不存在状态预设：${state.presetId}`);
+    for (const [groupId, optionId] of Object.entries(state.variants ?? {})) {
+      const group = production.variants.find((candidate) => candidate.id === groupId);
+      if (!group) throw new PuppetLoomError("INVALID_INPUT", `角色 ${viewer.id} 不存在换装组：${groupId}`);
+      if (!group.options.some((option) => option.id === optionId)) throw new PuppetLoomError("INVALID_INPUT", `换装组 ${groupId} 不存在选项：${optionId}`);
+    }
+    for (const propId of state.props ?? []) if (!production.props.some((prop) => prop.id === propId)) throw new PuppetLoomError("INVALID_INPUT", `角色 ${viewer.id} 不存在道具：${propId}`);
   }
 }

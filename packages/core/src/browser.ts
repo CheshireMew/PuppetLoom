@@ -2,6 +2,8 @@ export * from "./deform.js";
 export * from "./rig-extension-defaults.js";
 export * from "./hair-strands.js";
 export * from "./authoring.js";
+export * from "./character-state.js";
+export * from "./collision-constraints.js";
 export * from "./calibration.js";
 export * from "./math.js";
 export * from "./mesh.js";

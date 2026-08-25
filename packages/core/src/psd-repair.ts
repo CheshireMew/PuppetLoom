@@ -24,6 +24,8 @@ const boundsSchema = z.tuple([
   z.number().int().positive()
 ]).refine(([left, top, right, bottom]) => right > left && bottom > top, "bounds 必须满足 right > left 且 bottom > top");
 
+const canvasPolicySchema = z.enum(["require-match", "fit-full-canvas"]).default("require-match");
+
 const operationSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("delete-layer"), layer: layerSelectorSchema }).strict(),
   z.object({ op: z.literal("rename-layer"), layer: layerSelectorSchema, name: z.string().trim().min(1) }).strict(),
@@ -47,6 +49,7 @@ const operationSchema = z.discriminatedUnion("op", [
   z.object({
     op: z.literal("extract-white-region"),
     sourceImage: z.string().trim().min(1),
+    canvasPolicy: canvasPolicySchema,
     bounds: boundsSchema,
     name: z.string().trim().min(1),
     tolerance: z.number().int().min(0).max(255).default(12),
@@ -77,7 +80,11 @@ export const photoshopPsdRepairRecipeSchema = z.object({
   kind: z.literal("puppetloom-photoshop-psd-repair"),
   basePsd: z.string().trim().min(1),
   referenceImage: z.string().trim().min(1).optional(),
-  sources: z.array(z.object({ id: z.string().trim().min(1), path: z.string().trim().min(1) }).strict()).default([]),
+  sources: z.array(z.object({
+    id: z.string().trim().min(1),
+    path: z.string().trim().min(1),
+    canvasPolicy: canvasPolicySchema
+  }).strict()).default([]),
   operations: z.array(operationSchema).min(1),
   checks: z.object({
     requiredLayers: z.array(z.string().trim().min(1)).default([]),
@@ -87,12 +94,33 @@ export const photoshopPsdRepairRecipeSchema = z.object({
 
 export type PhotoshopPsdRepairRecipe = z.infer<typeof photoshopPsdRepairRecipeSchema>;
 export type PhotoshopPsdRepairOperation = PhotoshopPsdRepairRecipe["operations"][number];
+export type PhotoshopPsdCanvasPolicy = z.infer<typeof canvasPolicySchema>;
+
+export interface PsdRepairCanvas {
+  width: number;
+  height: number;
+}
+
+export interface PsdRepairInputManifestEntry {
+  id: string;
+  role: "base" | "donor" | "extraction" | "reference" | "review-output";
+  path: string;
+  sha256: string;
+  canvas: PsdRepairCanvas;
+  canvasPolicy: PhotoshopPsdCanvasPolicy | "base" | "comparison-only";
+  transform: {
+    applied: boolean;
+    target: PsdRepairCanvas;
+    scaleX: number;
+    scaleY: number;
+  };
+}
 
 export interface ResolvedPhotoshopPsdRepairRecipe extends Omit<PhotoshopPsdRepairRecipe, "basePsd" | "referenceImage" | "sources" | "operations"> {
   recipePath: string;
   basePsd: string;
   referenceImage?: string;
-  sources: Array<{ id: string; path: string }>;
+  sources: Array<{ id: string; path: string; canvasPolicy: PhotoshopPsdCanvasPolicy }>;
   operations: PhotoshopPsdRepairOperation[];
 }
 
@@ -102,7 +130,7 @@ export interface PhotoshopPsdRepairPlan {
   recipe: ResolvedPhotoshopPsdRepairRecipe;
   output: string;
   workDirectory: string;
-  inputManifest: Array<{ id: string; path: string; sha256: string }>;
+  inputManifest: PsdRepairInputManifestEntry[];
   estimatedBytes: number;
 }
 
@@ -130,6 +158,8 @@ export interface PsdRepairReview {
     dark: string;
     checker: string;
     layerContactSheet: string;
+    layerDetailSheet: string;
+    layerAlphaSheet: string;
     comparison?: string;
   };
   structuralInspection: {
@@ -144,6 +174,11 @@ export interface PsdRepairReview {
   requiresVisualReview: true;
 }
 
+export interface LayeredPsdReview extends PsdRepairReview {
+  roles: string[];
+  layers: Array<{ id: string; name: string; role: string; side: string }>;
+}
+
 async function exists(path: string): Promise<boolean> {
   try { await access(path); return true; }
   catch { return false; }
@@ -151,6 +186,94 @@ async function exists(path: string): Promise<boolean> {
 
 async function sha256(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function canvasOf(path: string): Promise<PsdRepairCanvas> {
+  if (extname(path).toLowerCase() === ".psd") {
+    const psd = readPsd(await readFile(path), {
+      skipLayerImageData: true,
+      skipCompositeImageData: true,
+      skipThumbnail: true,
+      skipLinkedFilesData: true,
+      logMissingFeatures: false
+    });
+    return { width: psd.width, height: psd.height };
+  }
+  const metadata = await sharp(path).metadata();
+  if (!metadata.width || !metadata.height) throw new PuppetLoomError("INVALID_INPUT", `无法读取 PSD 修复输入的画布尺寸：${path}`);
+  return { width: metadata.width, height: metadata.height };
+}
+
+function sameCanvas(left: PsdRepairCanvas, right: PsdRepairCanvas): boolean {
+  return left.width === right.width && left.height === right.height;
+}
+
+function sameAspectRatio(left: PsdRepairCanvas, right: PsdRepairCanvas): boolean {
+  const cross = Math.abs(left.width * right.height - right.width * left.height);
+  return cross / Math.max(1, left.width * right.height, right.width * left.height) <= 0.001;
+}
+
+function validateBounds(label: string, bounds: readonly [number, number, number, number], canvas: PsdRepairCanvas): void {
+  if (bounds[2] > canvas.width || bounds[3] > canvas.height) {
+    throw new PuppetLoomError("INVALID_INPUT", `${label} 超出规范画布 ${canvas.width}x${canvas.height}：${bounds.join(",")}`);
+  }
+}
+
+function validateCanonicalCoordinates(recipe: ResolvedPhotoshopPsdRepairRecipe, canvas: PsdRepairCanvas): void {
+  for (const [index, operation] of recipe.operations.entries()) {
+    if (operation.op === "clear-region" || operation.op === "extract-white-region") validateBounds(`operation #${index} ${operation.op}`, operation.bounds, canvas);
+    if (operation.op === "split-layer-x" && operation.splitX >= canvas.width) throw new PuppetLoomError("INVALID_INPUT", `operation #${index} split-layer-x 的 splitX 必须小于规范画布宽度 ${canvas.width}。`);
+  }
+  for (const check of recipe.checks.opaqueInteriorLayers) if ("bounds" in check && check.bounds) validateBounds(`opaqueInteriorLayers ${check.layer}`, check.bounds, canvas);
+}
+
+async function buildInputManifest(recipe: ResolvedPhotoshopPsdRepairRecipe, reviewOutput?: string): Promise<PsdRepairInputManifestEntry[]> {
+  const baseCanvas = await canvasOf(recipe.basePsd);
+  validateCanonicalCoordinates(recipe, baseCanvas);
+  const declarations: Array<{
+    id: string;
+    role: PsdRepairInputManifestEntry["role"];
+    path: string;
+    canvasPolicy: PsdRepairInputManifestEntry["canvasPolicy"];
+  }> = [
+    { id: "base", role: "base", path: recipe.basePsd, canvasPolicy: "base" },
+    ...recipe.sources.map((source) => ({ id: source.id, role: "donor" as const, path: source.path, canvasPolicy: source.canvasPolicy })),
+    ...recipe.operations.flatMap((operation, index) => operation.op === "extract-white-region"
+      ? [{ id: `extract-white-region-${index + 1}`, role: "extraction" as const, path: operation.sourceImage, canvasPolicy: operation.canvasPolicy }]
+      : []),
+    ...(recipe.referenceImage ? [{ id: "reference", role: "reference" as const, path: recipe.referenceImage, canvasPolicy: "comparison-only" as const }] : []),
+    ...(reviewOutput ? [{ id: "review-output", role: "review-output" as const, path: reviewOutput, canvasPolicy: "require-match" as const }] : [])
+  ];
+  const identities = new Map<string, Promise<{ sha256: string; canvas: PsdRepairCanvas }>>();
+  const identity = (path: string): Promise<{ sha256: string; canvas: PsdRepairCanvas }> => {
+    const key = path.toLowerCase();
+    const current = identities.get(key);
+    if (current) return current;
+    const created = Promise.all([sha256(path), canvasOf(path)]).then(([hash, canvas]) => ({ sha256: hash, canvas }));
+    identities.set(key, created);
+    return created;
+  };
+  return Promise.all(declarations.map(async (declaration) => {
+    const current = await identity(declaration.path);
+    const matches = sameCanvas(current.canvas, baseCanvas);
+    if (!matches && declaration.canvasPolicy === "require-match") {
+      throw new PuppetLoomError("INVALID_INPUT", `${declaration.id} 画布为 ${current.canvas.width}x${current.canvas.height}，与规范画布 ${baseCanvas.width}x${baseCanvas.height} 不一致；请显式使用 fit-full-canvas 或更换 donor。`);
+    }
+    if (!matches && declaration.canvasPolicy === "fit-full-canvas" && !sameAspectRatio(current.canvas, baseCanvas)) {
+      throw new PuppetLoomError("INVALID_INPUT", `${declaration.id} 与规范画布宽高比不一致，禁止拉伸或目测重摆：${current.canvas.width}x${current.canvas.height} -> ${baseCanvas.width}x${baseCanvas.height}`);
+    }
+    return {
+      ...declaration,
+      sha256: current.sha256,
+      canvas: current.canvas,
+      transform: {
+        applied: !matches && declaration.canvasPolicy === "fit-full-canvas",
+        target: baseCanvas,
+        scaleX: Number((baseCanvas.width / current.canvas.width).toFixed(8)),
+        scaleY: Number((baseCanvas.height / current.canvas.height).toFixed(8))
+      }
+    };
+  }));
 }
 
 function resolvedPath(recipeDirectory: string, path: string): string {
@@ -204,15 +327,9 @@ export async function planPhotoshopPsdRepair(options: { recipe: string; output: 
   const operationExists = await exists(join(workDirectory, "operation.json"));
   if (await exists(output) && !operationExists) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `PSD 修复输出已经存在，拒绝覆盖：${output}`);
   if (await exists(workDirectory) && !operationExists) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `PSD 修复工作目录已经存在但没有 operation.json：${workDirectory}`);
-  const protectedInputs = [recipe.basePsd, ...recipe.sources.map((source) => source.path)];
+  const protectedInputs = [recipe.basePsd, ...recipe.sources.map((source) => source.path), ...recipe.operations.filter((operation): operation is Extract<PhotoshopPsdRepairOperation, { op: "extract-white-region" }> => operation.op === "extract-white-region").map((operation) => operation.sourceImage)];
   if (protectedInputs.some((input) => input.toLowerCase() === output.toLowerCase())) throw new PuppetLoomError("INVALID_INPUT", "PSD 修复输出不能指向基础 PSD 或候选 PSD。" );
-  const manifestInputs = [
-    { id: "base", path: recipe.basePsd },
-    ...recipe.sources.map((source) => ({ id: source.id, path: source.path })),
-    ...(recipe.referenceImage ? [{ id: "reference", path: recipe.referenceImage }] : [])
-  ];
-  const unique = new Map(manifestInputs.map((item) => [item.path.toLowerCase(), item]));
-  const inputManifest = await Promise.all([...unique.values()].map(async (item) => ({ ...item, sha256: await sha256(item.path) })));
+  const inputManifest = await buildInputManifest(recipe);
   return {
     mode: "repair",
     engine: "photoshop-com",
@@ -231,14 +348,7 @@ export async function planPhotoshopPsdReview(options: { input: string; recipe: s
   if (extname(output).toLowerCase() !== ".psd" || !(await exists(output))) throw new PuppetLoomError("INVALID_INPUT", `找不到要复核的 PSD：${output}`);
   const operationExists = await exists(join(workDirectory, "operation.json"));
   if (await exists(workDirectory) && !operationExists) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `PSD 复核目录已经存在但没有 operation.json：${workDirectory}`);
-  const manifestInputs = [
-    { id: "review-output", path: output },
-    { id: "base", path: recipe.basePsd },
-    ...recipe.sources.map((source) => ({ id: source.id, path: source.path })),
-    ...(recipe.referenceImage ? [{ id: "reference", path: recipe.referenceImage }] : [])
-  ];
-  const unique = new Map(manifestInputs.map((item) => [item.path.toLowerCase(), item]));
-  const inputManifest = await Promise.all([...unique.values()].map(async (item) => ({ ...item, sha256: await sha256(item.path) })));
+  const inputManifest = await buildInputManifest(recipe, output);
   return {
     mode: "review",
     engine: "existing-psd",
@@ -256,7 +366,9 @@ async function estimatePsdRepairBytes(recipe: ResolvedPhotoshopPsdRepairRecipe, 
   const raw = readPsd(await readFile(recipe.basePsd), { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: false });
   const canvasPixels = Math.max(1, raw.width * raw.height);
   const leafLayers = flattenRawLayers(raw.children).length;
-  const reviewImageUpperBound = canvasPixels * 4 * 6 + 1040 * Math.max(250, Math.ceil(Math.max(1, leafLayers) / 4) * 250) * 4;
+  const overviewBytes = 1040 * Math.max(250, Math.ceil(Math.max(1, leafLayers) / 4) * 250) * 4;
+  const detailBytes = 1680 * Math.max(460, Math.ceil(Math.max(1, leafLayers) / 4) * 460) * 4 * 2;
+  const reviewImageUpperBound = canvasPixels * 4 * 6 + overviewBytes + detailBytes;
   return Math.ceil(inputBytes * 4 + reviewImageUpperBound + 16 * 1024 ** 2);
 }
 
@@ -314,6 +426,61 @@ async function layerContactSheet(imported: ImportedPsd): Promise<Buffer> {
   }));
   const rows = Math.ceil(cards.length / columns);
   return sharp({ create: { width: columns * tileWidth, height: rows * tileHeight, channels: 4, background: { r: 15, g: 20, b: 30, alpha: 1 } } })
+    .composite(cards.map((input, index) => ({ input, left: index % columns * tileWidth, top: Math.floor(index / columns) * tileHeight })))
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+}
+
+function alphaPreview(layer: ImportedLayer): Buffer {
+  const { data, width, height } = layer.pixels;
+  const output = Buffer.alloc(width * height * 4);
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const alpha = data[pixel * 4 + 3] ?? 0;
+    output[pixel * 4] = alpha;
+    output[pixel * 4 + 1] = alpha;
+    output[pixel * 4 + 2] = alpha;
+    output[pixel * 4 + 3] = 255;
+  }
+  return output;
+}
+
+function touchingCanvasEdges(layer: ImportedLayer, imported: ImportedPsd): string {
+  const edges: string[] = [];
+  if (layer.bounds.x <= 0) edges.push("L");
+  if (layer.bounds.y <= 0) edges.push("T");
+  if (layer.bounds.x + layer.bounds.width >= imported.canvas.width) edges.push("R");
+  if (layer.bounds.y + layer.bounds.height >= imported.canvas.height) edges.push("B");
+  return edges.length ? edges.join("") : "none";
+}
+
+async function layerDetailSheet(imported: ImportedPsd, mode: "color" | "alpha"): Promise<Buffer> {
+  const tileWidth = 420;
+  const tileHeight = 460;
+  const imageHeight = 392;
+  const columns = 4;
+  const cards = await Promise.all(imported.layers.map(async (layer, index) => {
+    const raw = mode === "color"
+      ? await encodeRawPng(layer.pixels)
+      : await sharp(alphaPreview(layer), { raw: { width: layer.pixels.width, height: layer.pixels.height, channels: 4 } }).png().toBuffer();
+    const image = await sharp(raw).resize(tileWidth - 32, imageHeight - 24, {
+      fit: "contain",
+      background: mode === "color" ? { r: 0, g: 0, b: 0, alpha: 0 } : { r: 0, g: 0, b: 0, alpha: 1 }
+    }).png().toBuffer();
+    const metadata = await sharp(image).metadata();
+    const left = Math.floor((tileWidth - (metadata.width ?? 0)) / 2);
+    const top = 10 + Math.floor((imageHeight - 20 - (metadata.height ?? 0)) / 2);
+    const bounds = `${Math.round(layer.bounds.x)},${Math.round(layer.bounds.y)} ${Math.round(layer.bounds.width)}x${Math.round(layer.bounds.height)}`;
+    const label = Buffer.from(`<svg width="${tileWidth}" height="68" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#101722"/><text x="10" y="25" fill="#edf2f8" font-family="Arial, sans-serif" font-size="15">${String(index + 1).padStart(2, "0")} ${xml(layer.sourceName)}</text><text x="10" y="50" fill="#a8b4c5" font-family="Arial, sans-serif" font-size="12">${xml(layer.role)} | ${bounds} | canvas edges: ${touchingCanvasEdges(layer, imported)}</text></svg>`);
+    const background = mode === "color"
+      ? backgroundBuffer(tileWidth, tileHeight, [230, 233, 238], [185, 191, 201])
+      : backgroundBuffer(tileWidth, tileHeight, [8, 12, 18]);
+    return sharp(background, { raw: { width: tileWidth, height: tileHeight, channels: 4 } })
+      .composite([{ input: image, left, top }, { input: label, left: 0, top: tileHeight - 68 }])
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+  }));
+  const rows = Math.ceil(cards.length / columns);
+  return sharp({ create: { width: columns * tileWidth, height: rows * tileHeight, channels: 4, background: { r: 8, g: 12, b: 18, alpha: 1 } } })
     .composite(cards.map((input, index) => ({ input, left: index % columns * tileWidth, top: Math.floor(index / columns) * tileHeight })))
     .png({ compressionLevel: 9 })
     .toBuffer();
@@ -379,12 +546,16 @@ export async function reviewPhotoshopPsdRepair(options: { output: string; workDi
   const darkPath = resolve(workDirectory, "on-dark.png");
   const checkerPath = resolve(workDirectory, "on-checker.png");
   const layerContactSheetPath = resolve(workDirectory, "layer-contact-sheet.png");
+  const layerDetailSheetPath = resolve(workDirectory, "layer-detail-sheet.png");
+  const layerAlphaSheetPath = resolve(workDirectory, "layer-alpha-sheet.png");
   await Promise.all([
     writeFile(recompositionPath, neutral),
     writeFile(whitePath, white),
     writeFile(darkPath, dark),
     writeFile(checkerPath, checker),
-    writeFile(layerContactSheetPath, await layerContactSheet(imported))
+    writeFile(layerContactSheetPath, await layerContactSheet(imported)),
+    writeFile(layerDetailSheetPath, await layerDetailSheet(imported, "color")),
+    writeFile(layerAlphaSheetPath, await layerDetailSheet(imported, "alpha"))
   ]);
   let comparisonPath: string | undefined;
   if (options.recipe.referenceImage) {
@@ -411,7 +582,16 @@ export async function reviewPhotoshopPsdRepair(options: { output: string; workDi
     layerCount: rawLayers.length,
     requiredLayerChecks,
     alphaChecks,
-    artifacts: { recomposition: recompositionPath, white: whitePath, dark: darkPath, checker: checkerPath, layerContactSheet: layerContactSheetPath, ...(comparisonPath ? { comparison: comparisonPath } : {}) },
+    artifacts: {
+      recomposition: recompositionPath,
+      white: whitePath,
+      dark: darkPath,
+      checker: checkerPath,
+      layerContactSheet: layerContactSheetPath,
+      layerDetailSheet: layerDetailSheetPath,
+      layerAlphaSheet: layerAlphaSheetPath,
+      ...(comparisonPath ? { comparison: comparisonPath } : {})
+    },
     structuralInspection: {
       valid: inspection.valid,
       visibleLayerCount: inspection.visibleLayerCount,
@@ -422,5 +602,31 @@ export async function reviewPhotoshopPsdRepair(options: { output: string; workDi
       warnings: inspection.warnings
     },
     requiresVisualReview: true
+  };
+}
+
+/** Generates the same structural and visual evidence for a decomposition candidate without requiring a repair recipe. */
+export async function reviewLayeredPsd(options: { input: string; reference?: string; outputDirectory: string }): Promise<LayeredPsdReview> {
+  const input = resolve(options.input);
+  const outputDirectory = resolve(options.outputDirectory);
+  const imported = await importPsd(input, { alphaCleanup: "preserve-all" });
+  const review = await reviewPhotoshopPsdRepair({
+    output: input,
+    workDirectory: outputDirectory,
+    recipe: {
+      version: 1,
+      kind: "puppetloom-photoshop-psd-repair",
+      checks: { requiredLayers: [], opaqueInteriorLayers: [] },
+      recipePath: join(outputDirectory, "source-review.generated.json"),
+      basePsd: input,
+      ...(options.reference ? { referenceImage: resolve(options.reference) } : {}),
+      sources: [],
+      operations: []
+    }
+  });
+  return {
+    ...review,
+    roles: [...new Set(imported.layers.map((layer) => layer.role))],
+    layers: imported.layers.map((layer) => ({ id: layer.id, name: layer.sourceName, role: layer.role, side: layer.side }))
   };
 }

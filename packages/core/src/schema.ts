@@ -125,6 +125,10 @@ const torsoVolumeProfileSchema = z.object({
 const motionParameterSemanticSchema = z.enum([
   "head-yaw", "head-pitch", "head-roll", "body-sway", "body-pitch", "body-roll",
   "gaze-x", "gaze-y", "breath", "blink", "mouth-open", "ear-x", "ear-y", "tail-x", "tail-y"
+  , "blink-left", "blink-right", "brow-left", "brow-right", "smile", "cheek-puff"
+  , "mouth-a", "mouth-i", "mouth-u", "mouth-e", "mouth-o"
+  , "arm-left", "arm-right", "hand-left-x", "hand-left-y", "hand-right-x", "hand-right-y"
+  , "hand-left-open", "hand-right-open"
 ]);
 const sparsePointMapSchema = z.record(z.string().regex(/^\d+$/), pointSchema);
 const keyformTransformSchema = z.object({
@@ -256,6 +260,30 @@ export const authoringPatchSchema = z.object({
   previews: z.array(authoringPreviewSchema).max(12).optional()
 }).superRefine(validateMoveLayerOperations);
 
+export const characterProductionConfigSchema = z.object({
+  variants: z.array(z.object({
+    id: z.string().min(1).max(128), name: z.string().min(1).max(256), defaultOptionId: z.string().min(1).max(128),
+    options: z.array(z.object({ id: z.string().min(1).max(128), name: z.string().min(1).max(256), layerIds: z.array(z.string().min(1)).min(1) })).min(1)
+  })).default([]),
+  props: z.array(z.object({
+    id: z.string().min(1).max(128), name: z.string().min(1).max(256), layerIds: z.array(z.string().min(1)).min(1),
+    slot: z.enum(["head", "face", "body", "hand-left", "hand-right", "free"]), defaultEnabled: z.boolean().optional()
+  })).default([]),
+  presets: z.array(z.object({
+    id: z.string().min(1).max(128), name: z.string().min(1).max(256),
+    variants: z.record(z.string().min(1), z.string().min(1)).optional(), props: z.array(z.string().min(1)).optional(),
+    parameters: z.record(z.string().min(1), z.number().finite()).optional(), expressions: z.record(z.string().min(1), z.number().min(0).max(1)).optional()
+  })).default([])
+});
+
+export const runtimeConstraintSettingsSchema = z.object({
+  motionLimits: z.array(z.object({ id: z.string().min(1), semantic: motionParameterSemanticSchema, min: z.number().finite(), max: z.number().finite() })).default([]),
+  collisions: z.array(z.object({
+    id: z.string().min(1), name: z.string().min(1), movingLayerIds: z.array(z.string().min(1)).min(1), colliderLayerIds: z.array(z.string().min(1)).min(1),
+    padding: z.number().min(0).max(0.25), maxCorrection: z.number().min(0).max(0.25), strength: z.number().min(0).max(1)
+  })).default([])
+});
+
 export const puppetLoomProjectSchema = z.object({
   version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   name: z.string().min(1),
@@ -299,7 +327,7 @@ export const puppetLoomProjectSchema = z.object({
       mesh: meshSchema,
       weights: z.object({ head: z.number(), body: z.number(), gaze: z.number(), physics: z.number() }),
       clipLayerId: z.string().optional(),
-      mouthVariant: z.enum(["closed", "slight", "open"]).optional(),
+      mouthVariant: z.enum(["closed", "slight", "open", "a", "i", "u", "e", "o"]).optional(),
       parentGroup: z.enum(["head", "body", "root"]),
       parentLayerId: z.string().min(1).optional(),
       deformerId: z.string().min(1).optional(),
@@ -317,7 +345,7 @@ export const puppetLoomProjectSchema = z.object({
     envelope: z.object({
       headYaw: z.number().nonnegative(), headPitch: z.number().nonnegative(), headRollDegrees: z.number().nonnegative(), bodySway: z.number().nonnegative(), bodyRollDegrees: z.number().nonnegative(), gazeX: z.number().nonnegative(), gazeY: z.number().nonnegative(), breath: z.number().nonnegative(), globalScale: z.number().positive()
     }),
-    features: z.object({ headTurn: z.boolean(), bodyFollow: z.boolean(), gaze: z.boolean(), hairPhysics: z.boolean(), blink: z.boolean(), mouthMotion: z.boolean() }),
+    features: z.object({ headTurn: z.boolean(), bodyFollow: z.boolean(), gaze: z.boolean(), hairPhysics: z.boolean(), blink: z.boolean(), mouthMotion: z.boolean(), asymmetricBlink: z.boolean().optional(), visemes: z.boolean().optional(), upperBodyTracking: z.boolean().optional() }),
     poseField: z.object({
       kind: z.enum(["ellipsoid-v1", "head-surfaces-v2"]),
       center: pointSchema,
@@ -374,8 +402,10 @@ export const puppetLoomProjectSchema = z.object({
         response: z.number().min(0).max(1),
         stability: z.number().min(0).max(1)
       })
-    ).optional()
+    ).optional(),
+    constraints: runtimeConstraintSettingsSchema.optional()
   }),
+  production: characterProductionConfigSchema.optional(),
   quality: z.object({
     neutralSimilarity: z.number().min(-1).max(1).optional(),
     poseValidations: z.array(z.object({ id: z.string(), headYaw: z.number(), headPitch: z.number(), headRoll: z.number(), score: z.number().min(0).max(1), passed: z.boolean(), issues: z.array(z.any()) })),
@@ -456,6 +486,43 @@ export const puppetLoomProjectSchema = z.object({
       }
       visited.add(parentId);
       parentId = project.layers.find((candidate) => candidate.id === parentId)?.parentLayerId;
+    }
+  }
+  const constraintIds = new Set<string>();
+  for (const [index, constraint] of (project.runtime.constraints?.motionLimits ?? []).entries()) {
+    if (constraintIds.has(constraint.id)) context.addIssue({ code: "custom", path: ["runtime", "constraints", "motionLimits", index, "id"], message: "约束 ID 不能重复。" });
+    constraintIds.add(constraint.id);
+    if (constraint.min > constraint.max) context.addIssue({ code: "custom", path: ["runtime", "constraints", "motionLimits", index], message: "运动范围必须满足 min <= max。" });
+  }
+  for (const [index, constraint] of (project.runtime.constraints?.collisions ?? []).entries()) {
+    if (constraintIds.has(constraint.id)) context.addIssue({ code: "custom", path: ["runtime", "constraints", "collisions", index, "id"], message: "约束 ID 不能重复。" });
+    constraintIds.add(constraint.id);
+    for (const layerId of [...constraint.movingLayerIds, ...constraint.colliderLayerIds]) if (!ids.has(layerId)) context.addIssue({ code: "custom", path: ["runtime", "constraints", "collisions", index], message: `碰撞约束引用了不存在的图层：${layerId}` });
+    if (constraint.movingLayerIds.some((id) => constraint.colliderLayerIds.includes(id))) context.addIssue({ code: "custom", path: ["runtime", "constraints", "collisions", index], message: "移动图层不能同时作为自身碰撞体。" });
+  }
+  if (project.production) {
+    const groupIds = new Set<string>(); const optionIds = new Set<string>(); const propIds = new Set<string>(); const presetIds = new Set<string>();
+    for (const [groupIndex, group] of project.production.variants.entries()) {
+      if (groupIds.has(group.id)) context.addIssue({ code: "custom", path: ["production", "variants", groupIndex, "id"], message: "换装组 ID 不能重复。" });
+      groupIds.add(group.id);
+      const local = new Set(group.options.map((option) => option.id));
+      if (!local.has(group.defaultOptionId)) context.addIssue({ code: "custom", path: ["production", "variants", groupIndex, "defaultOptionId"], message: "默认选项必须属于当前换装组。" });
+      for (const [optionIndex, option] of group.options.entries()) {
+        if (optionIds.has(option.id)) context.addIssue({ code: "custom", path: ["production", "variants", groupIndex, "options", optionIndex, "id"], message: "换装选项 ID 必须在项目中唯一。" });
+        optionIds.add(option.id);
+        for (const layerId of option.layerIds) if (!ids.has(layerId)) context.addIssue({ code: "custom", path: ["production", "variants", groupIndex, "options", optionIndex], message: `换装选项引用了不存在的图层：${layerId}` });
+      }
+    }
+    for (const [propIndex, prop] of project.production.props.entries()) {
+      if (propIds.has(prop.id)) context.addIssue({ code: "custom", path: ["production", "props", propIndex, "id"], message: "道具 ID 不能重复。" });
+      propIds.add(prop.id);
+      for (const layerId of prop.layerIds) if (!ids.has(layerId)) context.addIssue({ code: "custom", path: ["production", "props", propIndex], message: `道具引用了不存在的图层：${layerId}` });
+    }
+    for (const [presetIndex, preset] of project.production.presets.entries()) {
+      if (presetIds.has(preset.id)) context.addIssue({ code: "custom", path: ["production", "presets", presetIndex, "id"], message: "状态预设 ID 不能重复。" });
+      presetIds.add(preset.id);
+      for (const [groupId, optionId] of Object.entries(preset.variants ?? {})) if (!groupIds.has(groupId) || !optionIds.has(optionId)) context.addIssue({ code: "custom", path: ["production", "presets", presetIndex, "variants"], message: `状态预设引用了无效换装：${groupId}=${optionId}` });
+      for (const propId of preset.props ?? []) if (!propIds.has(propId)) context.addIssue({ code: "custom", path: ["production", "presets", presetIndex, "props"], message: `状态预设引用了不存在的道具：${propId}` });
     }
   }
   if (project.version >= 3 && !project.model) {
@@ -788,7 +855,7 @@ export const assetRequestDocumentSchema = z.object({
     id: z.string(),
     kind: z.enum(["closed-eye", "mouth-shape"]),
     side: z.enum(["left", "right", "center"]),
-    variant: z.enum(["closed", "slight", "open"]).optional(),
+    variant: z.enum(["closed", "slight", "open", "a", "i", "u", "e", "o"]).optional(),
     sourceLayerIds: z.array(z.string()),
     crop: rectSchema,
     reference: z.object({ path: z.string().min(1) }).optional(),

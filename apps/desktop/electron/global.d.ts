@@ -6,6 +6,8 @@ import type {
   CalibrationSaveResult,
   CalibrationSessionSummary,
   InspectionReport,
+  ProjectHealthReport,
+  ProjectLibraryReport,
   LayerBinding,
   MotionState,
   PuppetLoomProject,
@@ -13,6 +15,8 @@ import type {
   RuntimeControlSetRequest,
   RuntimeViewerDescriptor,
   RevisionComparisonResult,
+  SourcePreparationTask,
+  SourceReviewResult,
   VerifyResult
 } from "@puppetloom/core";
 import type { PointerLookTarget } from "@puppetloom/renderer";
@@ -131,6 +135,11 @@ export interface PuppetLoomDesktopApi {
   cancelCreate(operationId: string): Promise<boolean>;
   onCreateProgress(listener: (progress: { operationId: string; phase: DesktopCreatePhase }) => void): () => void;
   recentProjects(): Promise<RecentProject[]>;
+  inspectProjectHealth(projectDirectory: string): Promise<ProjectHealthReport>;
+  scanProjectLibrary(root: string, maxDepth?: number, maximumProjects?: number): Promise<ProjectLibraryReport>;
+  prepareSourceTask(request: { reference: string; output: string; name?: string; provider?: "see-through-official" | "external" }): Promise<{ directory: string; task: SourcePreparationTask }>;
+  reviewSourceCandidate(task: string, psd: string): Promise<SourceReviewResult>;
+  finalizeSourceReview(task: string, review: number, decision: "ready" | "needs-repair", note: string): Promise<SourcePreparationTask>;
   readProject(projectDirectory: string, revision?: number): Promise<PuppetLoomProject>;
   readEditorWorkspace(projectDirectory: string): Promise<EditorWorkspace>;
   generateArtMeshes(projectDirectory: string, layerIds: string[]): Promise<Record<string, LayerBinding["mesh"]>>;
@@ -155,18 +164,28 @@ export interface PuppetLoomDesktopApi {
   viewerCapabilities(): Promise<ViewerCapabilities>;
   revealPath(path: string): Promise<boolean>;
   copyText(text: string): Promise<boolean>;
+  environmentDoctor(): Promise<import("@puppetloom/core").EnvironmentDoctorReport>;
+  updateCheck(): Promise<import("./windows-updater.js").WindowsUpdateStatus>;
+  updateDownload(): Promise<import("./windows-updater.js").WindowsUpdateStatus>;
+  updateInstall(installer: string): Promise<boolean>;
+  exportProject(projectDirectory: string, format: "portable" | "web" | "cubism"): Promise<{ outputDirectory?: string; output?: string } | undefined>;
+  spoutOutput(action: "status" | "start" | "stop", options?: import("./spout-output-service.js").SpoutOutputOptions): Promise<import("./spout-output-service.js").SpoutOutputStatus>;
   controlViewer(id: number, action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   viewerAction(action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   viewerDrag(action: "start" | "move" | "end", point?: { x: number; y: number }): void;
   pointerTarget(): Promise<PointerLookTarget>;
   runtimeControl(): Promise<RuntimeControlSnapshot>;
   runtimeDescriptor(): Promise<RuntimeViewerDescriptor>;
-  runtimeAssets(): Promise<{ wasmBaseUrl: string; faceLandmarkerModelUrl: string }>;
+  runtimeAssets(): Promise<{ wasmBaseUrl: string; faceLandmarkerModelUrl: string; poseLandmarkerModelUrl: string; handLandmarkerModelUrl: string }>;
   setRuntimeSource(source: RuntimeControlSetRequest["source"]): Promise<unknown>;
   releaseRuntimeSource(sourceId: string): Promise<unknown>;
   triggerRuntimeTarget(target: { behaviorId?: string; expressionId?: string; durationMs?: number }): Promise<unknown>;
   inputRecording(action: "start" | "stop"): Promise<{ recording: boolean; output?: string; durationMs?: number; events?: number }>;
   inputReplay(action: "start" | "stop"): Promise<{ replaying: boolean; canceled?: boolean; input?: string }>;
+  listTakes(): Promise<import("@puppetloom/core").PerformanceTakeSummary[]>;
+  importTake(options?: { name?: string; tags?: string[]; note?: string }): Promise<import("@puppetloom/core").PerformanceTakeSummary | undefined>;
+  editTake(takeId: string, operations: import("@puppetloom/core").TakeEditOperations): Promise<import("@puppetloom/core").PerformanceTakeSummary>;
+  replayTake(takeId: string, speed?: number, loop?: boolean): Promise<unknown>;
   onRuntimeControl(listener: (snapshot: RuntimeControlSnapshot) => void): () => void;
   onViewerProject(listener: (payload: { project: PuppetLoomProject; sourceLabel: string }) => void): () => void;
   onInputReplayState(listener: (state: { replaying: boolean; reason: "started" | "finished" | "stopped" }) => void): () => void;

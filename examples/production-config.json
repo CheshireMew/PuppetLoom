@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "production": {
+    "variants": [],
+    "props": [],
+    "presets": [
+      {
+        "id": "neutral",
+        "name": "中立",
+        "parameters": {},
+        "expressions": {}
+      }
+    ]
+  },
+  "constraints": {
+    "motionLimits": [
+      { "id": "safe-head-yaw", "semantic": "head-yaw", "min": -0.85, "max": 0.85 },
+      { "id": "safe-head-pitch", "semantic": "head-pitch", "min": -0.75, "max": 0.75 }
+    ],
+    "collisions": []
+  }
+}

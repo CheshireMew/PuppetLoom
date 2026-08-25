@@ -24,6 +24,34 @@
 & <skill>\scripts\invoke_puppetloom.ps1 record --project E:\Puppets\Character --output E:\Puppets\Character\reports\agent-secondary-r0 --mode secondary --revision 0 --json
 ```
 
+### 创建前需要修 PSD 时
+
+运行前先确认 Photoshop 没有在使用。包装脚本检测到任何已运行的 Photoshop 进程时，必须在连接 COM、改变窗口状态或打开文档之前拒绝执行；不得为了自动化隐藏、退出或复用用户当前会话。自动化结束时只有其会话不存在剩余文档才允许退出 Photoshop，否则保留窗口可见并报告异常。
+
+普通创建只会在导入时忽略透明度很低、范围极小且与主体断开的高置信度 Alpha 噪点，不会生成一份已经清理好的 PSD。用户需要交付修复后的 PSD、残片超过这条保守清理边界，或已确认某个图层/区域需要改动时，使用包装脚本的 `psd` 命令族。先查看原图、未增强白底/深色底合成、单层预览和 Alpha 定位证据；存在多份候选时先建立逐部件来源清单，选定基础 PSD 和规范画布，再把已经证实的修改写进 JSON 配方。整层都是独立背景残片或托底时才用 `delete-layer`；只有矩形范围完全属于杂质，且不碰主体轮廓、阴影、抗锯齿和隐藏的运动延展时才用 `clear-region`；白边和边缘污染分别只在证据成立时使用 `remove-white-matte` 与 `defringe`。若要保留语义层、只替换其中已经客观清理的杂质，把保持完整画布和原始位置的透明清洁层列入 `sources`，再用 `duplicate-layer`、`delete-layer` 和 `rename-layer` 替换原层；不能裁成局部素材后凭目测重新摆放。检测到矩形边界本身不等于可以删，不能把角色本来需要的补底、被遮挡结构或有效颜色块当作硬矩形托底。
+
+配方必须使用 `version: 1`、`kind: "puppetloom-photoshop-psd-repair"`、`basePsd`、至少一项 `operations`，并在 `checks.requiredLayers` 中列出修复后必须保留的核心层；有原图时同时填写 `referenceImage`。`sources[].canvasPolicy` 与 `extract-white-region.canvasPolicy` 默认是 `require-match`；只有同一整画布构图、宽高比一致但分辨率不同的 donor 才显式改成 `fit-full-canvas`。预演会把基础 PSD、每份 donor、每个原画补件输入的尺寸、哈希和实际缩放记录进 `input-manifest.json`，尺寸不匹配或宽高比不同会在启动 Photoshop 前拒绝。所有图层选择器、`splitX` 和 `[left, top, right, bottom]` 都使用规范画布坐标并来自本次检查，不能照抄旧角色或示例坐标。正式修复先做只读预演，再执行到待视觉复核状态：
+
+```powershell
+& <skill>\scripts\invoke_puppetloom.ps1 psd repair --recipe E:\Repairs\maid-repair.json --output E:\Repairs\maid-repaired.psd --workdir E:\Repairs\maid-repair-run --dry-run --json
+& <skill>\scripts\invoke_puppetloom.ps1 psd repair --recipe E:\Repairs\maid-repair.json --output E:\Repairs\maid-repaired.psd --workdir E:\Repairs\maid-repair-run --json
+```
+
+首次启动任务时，`--output` 必须是新的 PSD 路径，`--workdir` 必须是新的操作目录，原 PSD 永不覆盖。任务中断或 Photoshop 失败时保留该目录，不删除半成品；输入没有变化时用原命令、原输出和同一个 workdir 重跑，命令会校验输入哈希、归档局部输出并恢复同一任务。第二条命令正常完成 Photoshop 和自动检查后会返回退出码 4、`status: awaiting-visual-review`；这是要求外部 Agent 看图的预期暂停，不是修复失败。实际打开返回的 `recomposition.png`、`on-white.png`、`on-dark.png`、`on-checker.png`、`layer-contact-sheet.png`、`layer-detail-sheet.png`、`layer-alpha-sheet.png` 和有原图时的 `reference-comparison.png`。缩略总览用于扫查全部图层，细节图用于确认每个部件的完整轮廓与画布截断，Alpha 图用于确认浅色实体内部不透明；不能把颜色亮度直接当作 Alpha，也不能只看整图后填写结论。逐项填写操作目录自动生成且已绑定证据哈希的 `visual-review.json`，然后定稿：
+
+```powershell
+& <skill>\scripts\invoke_puppetloom.ps1 psd finalize --workdir E:\Repairs\maid-repair-run --decision E:\Repairs\maid-repair-run\visual-review.json --json
+```
+
+若 Photoshop 已经产出新的 PSD，需要重新打开现有结果、补齐或再生证据，使用下面的替代入口；`psd review` 不是每次 `psd repair` 后还要机械重复的一步，它和 repair 都会进入同一个视觉定稿关口：
+
+```powershell
+& <skill>\scripts\invoke_puppetloom.ps1 psd review --input E:\Repairs\maid-repaired.psd --recipe E:\Repairs\maid-repair.json --workdir E:\Repairs\maid-review-run --json
+& <skill>\scripts\invoke_puppetloom.ps1 psd finalize --workdir E:\Repairs\maid-review-run --decision E:\Repairs\maid-review-run\visual-review.json --json
+```
+
+自动结构或 Alpha 检查失败时停止，不能靠视觉结论强行接受。`accepted` 才能直接把新 PSD 交给 `create`；`accepted-with-repairs` 必须保留非阻断修复计划，并继续遵守用户明确接受后才能进入创建、未修完不能报告成品的上层规则；`rejected` 停止。最终结论绑定输出 PSD 和全部证据哈希，证据或 PSD 改变后必须重新运行 repair 或 review，不能改写已经定稿的终态。
+
 先查看 `inspect` 返回的 `preflight`：普通创建保持自动 Alpha 清理，不传高级例外参数。系统默认只移除透明度很低、范围极小且与主体断开的高置信度噪点，眼睛高光、细发丝和装饰等疑似有效细节继续保留，源 PSD 始终不改。`--preserve-alpha-noise` 只用于诊断时保留全部区域；只有用户明确接受可能误删绘画细节时才使用 `--clean-alpha` 激进清理。不要把这两个高级例外变成普通用户创建角色前必须勾选或决定的步骤。
 
 `create` 输出必须是新目录或空目录；每次 `record` 也使用新的证据目录，软件不会覆盖同名证据。上面的 `record` 只在确实需要连续视频且用户允许时运行，不是固定交付物。参考图缺失时省略参数，不得代入不对应的图片。成功生成 `semantic/grouped/minimal` 任一等级都返回 0；2 是输入或补丁无效，3 是文件系统、项目或运行时错误。创建完成后始终维护一个规范项目目录，以内部 revision、session 和证据历史管理版本，不复制 `Character-r1/Character-r2` 一类目录。

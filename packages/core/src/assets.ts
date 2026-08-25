@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import sharp from "sharp";
 import { assetRequestDocumentSchema, calibrationDocumentSchema } from "./schema.js";
@@ -18,7 +18,12 @@ function paddedCrop(bounds: Rect, canvas: { width: number; height: number }): Re
   return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
 }
 
-export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocument {
+export interface AssetRequestOptions {
+  /** Request the optional A/I/U/E/O mouth set used by viseme tracking. */
+  visemes?: boolean;
+}
+
+export function makeAssetRequests(project: PuppetLoomProject, options: AssetRequestOptions = {}): AssetRequestDocument {
   const requests: AssetRequest[] = [];
   for (const side of ["left", "right"] as const) {
     if (project.layers.some((layer) => layer.role === "eyeClosed" && layer.side === side)) continue;
@@ -96,8 +101,74 @@ export function makeAssetRequests(project: PuppetLoomProject): AssetRequestDocum
         validation: { requireAlpha: true, minOpaqueCoverage: 0.002, maxOpaqueCoverage: 0.35 }
       });
     }
+    if (options.visemes) {
+      const descriptions: Record<"a" | "i" | "u" | "e" | "o", string> = {
+        a: "A：自然纵向张开，保留角色原本嘴角和口腔配色",
+        i: "I：横向略展开，嘴角自然，不露齿",
+        u: "U：小幅收圆前突，保持角色原本线条",
+        e: "E：比 I 更放松的横向开口，不露齿",
+        o: "O：自然圆形开口，幅度小于夸张惊讶表情"
+      };
+      for (const variant of ["a", "i", "u", "e", "o"] as const) {
+        if (project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
+        const id = `mouth-viseme-${variant}`;
+        requests.push({
+          id,
+          kind: "mouth-shape",
+          side: "center",
+          variant,
+          sourceLayerIds: [closedMouth.id],
+          crop,
+          reference: { path: `requests/references/${id}.png` },
+          output: { path: `supplements/${id}.png`, width: crop.width, height: crop.height, transparent: true },
+          prompt: `Using the original character art, the current PSD recomposition, and this reference crop together, draw only this character's ${descriptions[variant]} viseme at the requested position. Match the original line weight, mouth colors, shading, edge softness, and antialiasing. The existing closed mouth is authoritative and must not be redrawn. Put only the requested mouth shape on a clean pure white background.`,
+          constraints: [
+            "不得包含脸、鼻子、头发或背景。",
+            "五个口型必须保持同一嘴部位置、尺寸体系和画风，差异只来自发音形状。",
+            "保持中立发音，不添加牙齿、舌头或额外表情；接入前抠成真实透明 PNG。"
+          ],
+          validation: { requireAlpha: true, minOpaqueCoverage: 0.002, maxOpaqueCoverage: 0.35 }
+        });
+      }
+    }
   }
   return { version: 1, optional: true, requests };
+}
+
+export interface TrackingAssetRequestResult {
+  project: string;
+  added: string[];
+  total: number;
+  requestPath: string;
+}
+
+/** Adds the optional viseme request set to an existing project without discarding prior requests or evidence. */
+export async function prepareTrackingAssetRequests(projectDirectory: string): Promise<TrackingAssetRequestResult> {
+  const root = resolve(projectDirectory);
+  const project = parsePuppetLoomProject(JSON.parse(await readFile(join(root, "puppetloom.json"), "utf8")));
+  const requestPath = join(root, "requests", "asset-requests.json");
+  const current = assetRequestDocumentSchema.parse(JSON.parse(await readFile(requestPath, "utf8"))) as AssetRequestDocument;
+  const proposed = makeAssetRequests(project, { visemes: true });
+  const known = new Set(current.requests.map((request) => request.id));
+  const additions = proposed.requests.filter((request) => !known.has(request.id));
+  if (additions.length === 0) return { project: root, added: [], total: current.requests.length, requestPath };
+  const neutralPath = join(root, "reports", "neutral.png");
+  await access(neutralPath);
+  const neutral = sharp(await readFile(neutralPath));
+  await Promise.all(additions.map(async (request) => {
+    if (!request.reference) return;
+    const target = join(root, request.reference.path);
+    try { await access(target); return; } catch { /* Create only missing reference crops. */ }
+    await mkdir(dirname(target), { recursive: true });
+    await neutral.clone().extract({ left: Math.round(request.crop.x), top: Math.round(request.crop.y), width: Math.round(request.crop.width), height: Math.round(request.crop.height) }).png().toFile(target);
+  }));
+  const backup = join(root, "requests", "asset-requests.pre-tracking.json");
+  try { await writeFile(backup, `${JSON.stringify(current, null, 2)}\n`, { encoding: "utf8", flag: "wx" }); } catch { /* Keep the first pre-upgrade document. */ }
+  const next = { ...current, requests: [...current.requests, ...additions] };
+  const temporary = `${requestPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await rename(temporary, requestPath);
+  return { project: root, added: additions.map((request) => request.id), total: next.requests.length, requestPath };
 }
 
 async function loadProjectAndRequests(projectDirectory: string): Promise<{ project: PuppetLoomProject; requests: AssetRequestDocument }> {
@@ -180,6 +251,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
 
   const blinkEnabled = ["left", "right"].every((side) => layers.some((layer) => layer.role === "eyeClosed" && layer.side === side));
   const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && (layer.mouthVariant ?? "closed") === variant && layer.opacity > 0));
+  const visemesEnabled = ["a", "i", "u", "e", "o"].every((variant) => layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant && layer.opacity > 0));
   const nextProject: PuppetLoomProject = {
     ...project,
     version: PUPPETLOOM_PROJECT_VERSION,
@@ -189,7 +261,9 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
       features: {
         ...project.runtime.features,
         blink: blinkEnabled,
-        mouthMotion: mouthMotionEnabled
+        mouthMotion: mouthMotionEnabled,
+        asymmetricBlink: blinkEnabled,
+        visemes: visemesEnabled
       }
     },
     disabledReasons: project.disabledReasons.filter((reason) => !(blinkEnabled && reason.includes("闭眼图层")) && !(mouthMotionEnabled && reason.includes("三态嘴形")))
@@ -226,9 +300,10 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
         disabledFeatures: string[];
       };
       const features = Object.entries(nextProject.runtime.features);
+      const optionalFeatureNames = new Set(["asymmetricBlink", "visemes", "upperBodyTracking"]);
       report.layerCount = nextProject.layers.length;
       report.enabledFeatures = features.filter(([, enabled]) => enabled).map(([name]) => name);
-      report.disabledFeatures = features.filter(([, enabled]) => !enabled).map(([name]) => name);
+      report.disabledFeatures = features.filter(([name, enabled]) => !enabled && !optionalFeatureNames.has(name)).map(([name]) => name);
       await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     } catch {
       // Older projects without a build report remain usable after enhancement.

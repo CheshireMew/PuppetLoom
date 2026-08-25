@@ -1,4 +1,4 @@
-import type { PuppetLoomProject, RuntimeControlSnapshot, RuntimeControlSource, RuntimeMotionInputKey } from "@puppetloom/core/browser";
+import type { CharacterStateSelection, PuppetLoomProject, RuntimeControlSnapshot, RuntimeControlSource, RuntimeMotionInputKey } from "@puppetloom/core/browser";
 
 export interface ResolvedRuntimeControl {
   sources: RuntimeControlSource[];
@@ -6,6 +6,7 @@ export interface ResolvedRuntimeControl {
   parameters: Record<string, number>;
   expressions: Record<string, number>;
   behavior?: { id: string; timeSeconds: number; weight?: number };
+  characterState?: CharacterStateSelection;
 }
 
 function blendValue(current: number, target: number, blend: number): number {
@@ -26,6 +27,7 @@ export function resolveRuntimeControl(snapshot: RuntimeControlSnapshot | undefin
   const parameters: Record<string, number> = {};
   const expressions: Record<string, number> = {};
   let behavior: ResolvedRuntimeControl["behavior"];
+  let characterState: CharacterStateSelection | undefined;
   for (const source of sources) {
     const blend = Math.max(0, Math.min(1, source.blend));
     for (const [key, value] of Object.entries(source.motion ?? {}) as Array<[RuntimeMotionInputKey, number]>) {
@@ -34,8 +36,9 @@ export function resolveRuntimeControl(snapshot: RuntimeControlSnapshot | undefin
     for (const [key, value] of Object.entries(source.parameters ?? {})) parameters[key] = blendValue(parameters[key] ?? 0, value, blend);
     for (const [key, value] of Object.entries(source.expressions ?? {})) expressions[key] = blendValue(expressions[key] ?? 0, value, blend);
     if (source.behavior) behavior = { id: source.behavior.id, timeSeconds: Math.max(0, (nowMs - source.behavior.startedAtMs) / 1000), weight: blend };
+    if (source.characterState) characterState = structuredClone(source.characterState);
   }
-  return { sources, motion, parameters, expressions, ...(behavior ? { behavior } : {}) };
+  return { sources, motion, parameters, expressions, ...(behavior ? { behavior } : {}), ...(characterState ? { characterState } : {}) };
 }
 
 export function controlledMotionValue(base: number, key: RuntimeMotionInputKey, control: ResolvedRuntimeControl): number {
@@ -45,7 +48,7 @@ export function controlledMotionValue(base: number, key: RuntimeMotionInputKey, 
     if (target === undefined) continue;
     value = blendValue(value, target, source.blend);
   }
-  const minimum = key === "blink" || key === "mouthOpen" ? 0 : -1;
+  const minimum = ["blink", "mouthOpen", "blinkLeft", "blinkRight", "smile", "cheekPuff", "mouthA", "mouthI", "mouthU", "mouthE", "mouthO", "handLeftOpen", "handRightOpen"].includes(key) ? 0 : -1;
   return Math.max(minimum, Math.min(1, value));
 }
 
@@ -53,6 +56,7 @@ export function runtimeAuthoredState(project: PuppetLoomProject, control: Resolv
   parameters?: Record<string, number>;
   expressions?: Record<string, number>;
   behavior?: { id: string; timeSeconds: number; weight?: number };
+  characterState?: CharacterStateSelection;
 } {
   // Runtime callers normally receive a migrated v4 project, but pure motion consumers and
   // older embedded fixtures may intentionally provide only runtime settings and layers.
@@ -84,6 +88,7 @@ export function runtimeAuthoredState(project: PuppetLoomProject, control: Resolv
   return {
     ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
     ...(Object.keys(expressions).length > 0 ? { expressions } : {}),
-    ...(control.behavior ? { behavior: control.behavior } : {})
+    ...(control.behavior ? { behavior: control.behavior } : {}),
+    ...(control.characterState ? { characterState: control.characterState } : {})
   };
 }

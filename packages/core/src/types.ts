@@ -2,7 +2,7 @@ export const PUPPETLOOM_PROJECT_VERSION = 4 as const;
 
 export type RigLevel = "semantic" | "grouped" | "minimal";
 export type Side = "left" | "right" | "center";
-export type MouthVariant = "closed" | "slight" | "open";
+export type MouthVariant = "closed" | "slight" | "open" | "a" | "i" | "u" | "e" | "o";
 
 export type SemanticRole =
   | "backHair"
@@ -156,7 +156,26 @@ export type MotionParameterSemantic =
   | "gaze-y"
   | "breath"
   | "blink"
+  | "blink-left"
+  | "blink-right"
+  | "brow-left"
+  | "brow-right"
+  | "smile"
+  | "cheek-puff"
   | "mouth-open"
+  | "mouth-a"
+  | "mouth-i"
+  | "mouth-u"
+  | "mouth-e"
+  | "mouth-o"
+  | "arm-left"
+  | "arm-right"
+  | "hand-left-x"
+  | "hand-left-y"
+  | "hand-right-x"
+  | "hand-right-y"
+  | "hand-left-open"
+  | "hand-right-open"
   | "ear-x"
   | "ear-y"
   | "tail-x"
@@ -353,6 +372,36 @@ export interface RuntimeFeatures {
   hairPhysics: boolean;
   blink: boolean;
   mouthMotion: boolean;
+  /** Separate left/right eye channels backed by side-specific closed-eye art. */
+  asymmetricBlink?: boolean;
+  /** A/I/U/E/O replacement-art channels in addition to the legacy open amount. */
+  visemes?: boolean;
+  /** Authored arm/hand parameters are available for pose and hand tracking. */
+  upperBodyTracking?: boolean;
+}
+
+export interface LayerCollisionConstraint {
+  id: string;
+  name: string;
+  /** Layers that may be translated out of an overlap. */
+  movingLayerIds: string[];
+  /** Stable obstacle layers; their project bounds form the collision surface. */
+  colliderLayerIds: string[];
+  padding: number;
+  maxCorrection: number;
+  strength: number;
+}
+
+export interface MotionLimitConstraint {
+  id: string;
+  semantic: MotionParameterSemantic;
+  min: number;
+  max: number;
+}
+
+export interface RuntimeConstraintSettings {
+  motionLimits: MotionLimitConstraint[];
+  collisions: LayerCollisionConstraint[];
 }
 
 export interface CoherentPoseField {
@@ -448,6 +497,49 @@ export interface RuntimeSettings {
   semanticCage?: SemanticControlCage;
   motionTuning?: MotionTuning;
   secondaryMotionTuning?: SecondaryMotionTuning;
+  constraints?: RuntimeConstraintSettings;
+}
+
+export interface CharacterVariantOption {
+  id: string;
+  name: string;
+  layerIds: string[];
+}
+
+export interface CharacterVariantGroup {
+  id: string;
+  name: string;
+  defaultOptionId: string;
+  options: CharacterVariantOption[];
+}
+
+export type CharacterPropSlot = "head" | "face" | "body" | "hand-left" | "hand-right" | "free";
+
+export interface CharacterPropDefinition {
+  id: string;
+  name: string;
+  layerIds: string[];
+  slot: CharacterPropSlot;
+  defaultEnabled?: boolean;
+}
+
+export interface CharacterStateSelection {
+  presetId?: string;
+  variants?: Record<string, string>;
+  props?: string[];
+}
+
+export interface CharacterStatePreset extends Omit<CharacterStateSelection, "presetId"> {
+  id: string;
+  name: string;
+  parameters?: Record<string, number>;
+  expressions?: Record<string, number>;
+}
+
+export interface CharacterProductionConfig {
+  variants: CharacterVariantGroup[];
+  props: CharacterPropDefinition[];
+  presets: CharacterStatePreset[];
 }
 
 export interface SourceDescriptor {
@@ -500,6 +592,7 @@ export interface PuppetLoomProject {
   model: AuthoringModel;
   anchors: AnchorGraph;
   runtime: RuntimeSettings;
+  production?: CharacterProductionConfig;
   quality: QualitySummary;
   disabledReasons: string[];
 }
@@ -1118,6 +1211,27 @@ export interface MotionState {
   secondary?: SecondaryMotionState;
   blink: number;
   mouthOpen: number;
+  blinkLeft?: number;
+  blinkRight?: number;
+  browLeft?: number;
+  browRight?: number;
+  smile?: number;
+  cheekPuff?: number;
+  mouthA?: number;
+  mouthI?: number;
+  mouthU?: number;
+  mouthE?: number;
+  mouthO?: number;
+  armLeft?: number;
+  armRight?: number;
+  handLeftX?: number;
+  handLeftY?: number;
+  handRightX?: number;
+  handRightY?: number;
+  handLeftOpen?: number;
+  handRightOpen?: number;
+  /** Outfit, accessory and state preset selected for this frame. */
+  characterState?: CharacterStateSelection;
   /** Explicit authored parameter values. These take precedence over semantic motion fields. */
   parameters?: Record<string, number>;
   /** Named expression weights in 0..1. */

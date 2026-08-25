@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   compareProjectRevisions,
   enhanceProject,
+  prepareTrackingAssetRequests,
   listCalibrationSessions,
   loadCalibration,
   migrateProject,
@@ -175,6 +176,15 @@ export function registerProjectWorkflowCommands(program: Command): void {
         const result = await enhanceProject({ project: resolve(options.project), assets: resolve(options.assets) });
         print({ ok: true, accepted: result.accepted, rejected: result.rejected }, options);
       }, options);
+    });
+
+  program
+    .command("tracking-assets")
+    .description("为现有项目补充 A/I/U/E/O 口型任务与参考裁切；保留原请求和首份升级前文档")
+    .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+    .option("--json", "输出 JSON")
+    .action(async (options: { project: string; json?: boolean }) => {
+      await run(async () => print({ ok: true, ...(await prepareTrackingAssetRequests(resolve(options.project))) }, options), options);
     });
 
   program

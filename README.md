@@ -58,6 +58,9 @@ PuppetLoom 的目标是用自动化流程较快得到效果不错、可以使用
 | 让外部 Agent 制作或返修 | 结构化规格 → 只读计划 → 分部执行；每个部位返回准确 revision、局部前后对比、连续运动表、阻断项和最终验证。 |
 | 自己检查和微调 | 可编辑图层、轴心、网格、权重与响应参数的桌面编辑器；草稿可恢复，保存、接受、拒绝和恢复都会留下历史。 |
 | 驱动和录制角色 | 鼠标、摄像头、麦克风、快捷键和外部来源按优先级、混合权重与 TTL 合成；保存可回放输入 JSON 和可恢复 WebM。 |
+| 批量管理角色 | 制作中心统一处理单图分层任务、多项目体检、能力缺口、环境检查和更新；跨项目分析只从重复问题与已接受证据提出候选。 |
+| 做直播与演出 | 左右眼、眉毛、笑容、脸颊、A/I/U/E/O、上半身和双手输入；服装/道具/预设、碰撞约束、非破坏 Take 以及 OSC/VMC、MIDI、手柄和控制面板适配。 |
+| 发布到网页或 OBS | 导出透明 Web/OBS 目录和单文件 Web SDK；状态与动作可以继续由网页 API 控制。 |
 | 交给 Cubism | exp3、motion3、physics3、cdi3 侧车，官方 API 可写结构的检查与同步，以及以 Editor 导出 moc3/model3 为真源的新运行时目录。 |
 
 项目保留 PSD 的可见图层、顺序、坐标、透明度和混合模式记录，支持标准/自定义参数、一维与二维关键形态、变形器、表情、参数物理和具名行为。头部转向会收窄并移动远侧眼睛，但眼睛和眉毛始终保持完全不透明；只有耳朵、侧发等外围部件会在接近脸缘时降低可见度，近远侧发的绘制深度也可以随方向交换。
@@ -66,7 +69,7 @@ PuppetLoom 的目标是用自动化流程较快得到效果不错、可以使用
 
 ## 快速开始
 
-当前只验收 Windows。需要 Node.js 24 或更高版本、npm 11，以及支持 WebGL2 的显卡。项目尚未提供安装包，公开源码仓库是当前正式安装入口。
+当前只验收 Windows x64。普通用户可以使用项目生成的 NSIS 安装器；从源码运行需要 Node.js 24 或更高版本、npm 11，以及支持 WebGL2 的显卡。
 
 ```powershell
 git clone https://github.com/CheshireMew/PuppetLoom.git
@@ -119,6 +122,8 @@ node .\apps\cli\dist\index.js play --project $project
 
 用 `describe`、`render`、`record`、`compare` 和 `history` 检查准确 revision；用 `calibrate`、`author`、`actions`、`extensions` 或结构化 `agent` 流程创建下一条可恢复 revision。只有源 PSD 确实更新时才使用 `migrate` 创建新项目；`export` 会把当前有效 revision 烘焙到新的可移植目录。完整命令与退出码见 [Agent 调用说明](docs/AGENT_USAGE.md)。
 
+日常批量生产使用 `source`、`doctor`、`library scan`、`tracking-assets`、`production-config`、`take`、`improvements analyze` 和 `export-web`。这些命令与桌面制作中心共用项目格式，具体流程见 [制作中心与批量生产](docs/PRODUCTION_WORKFLOW.md)。
+
 ## 项目、revision 与证据
 
 PuppetLoom 项目是普通目录，不使用私有压缩包。它包含项目清单、源 PSD、纹理、当前校准、revision session、报告、可选素材请求，以及输入与表演录制。写入操作核对 base revision 和项目锁，在验证与证据全部完成后才切换一次 current revision；恢复同样创建新的可追踪 revision，不删除历史。
@@ -149,6 +154,9 @@ PuppetLoom 可以准备并同步 Cubism Editor 官方 API 已公开的结构，�
 - [验收记录](docs/VALIDATION.md) 与 [测试说明](docs/TESTING.md)：已经验证的链路，以及仍需真实素材或人工判断的范围。
 - [统一姿态模型](docs/COHERENT_POSE_MODEL.md)：头部、身体、视线、透视、遮挡和次级运动关系。
 - [Cubism 官方格式桥接](docs/CUBISM_BRIDGE.md)：官方格式交接与兼容限制。
+- [制作中心与批量生产](docs/PRODUCTION_WORKFLOW.md)：来源准备、多项目医生、追踪 2.0、角色状态、约束、Take 与跨项目分析。
+- [Runtime 适配器与 Web SDK](docs/RUNTIME_INTEGRATION.md)：OSC/VMC、MIDI、手柄、控制面板、OBS 与网页嵌入。
+- [Windows 安装、更新与环境检查](docs/WINDOWS_DISTRIBUTION.md)：NSIS 安装器、D 盘缓存、更新通道和环境医生。
 
 ## 开发与验收
 

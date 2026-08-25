@@ -334,7 +334,10 @@ function featuresFor(imported: ImportedPsd, level: RigLevel): RuntimeFeatures {
     gaze: level === "semantic" && paired("eyeWhite") && paired("iris"),
     hairPhysics: level !== "minimal" && layers.some((layer) => hairRoles.has(layer.role) || layer.role === "headwear" || layer.role === "ear" || layer.role === "tail" || layer.role === "topWear" || layer.role === "bottomWear" || layer.role === "accessory"),
     blink: paired("eyeClosed"),
-    mouthMotion: false
+    mouthMotion: false,
+    asymmetricBlink: paired("eyeClosed"),
+    visemes: false,
+    upperBodyTracking: layers.some((layer) => (layer.role === "arm" || layer.role === "hand") && layer.side !== "center")
   };
 }
 

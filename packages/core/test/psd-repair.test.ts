@@ -1,5 +1,7 @@
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { readPsd } from "ag-psd";
+import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { executePhotoshopPsdRepairOperation, finalizePhotoshopPsdRepairVisualReview } from "../src/psd-repair-operation.js";
 import { planPhotoshopPsdRepair, planPhotoshopPsdReview, readPhotoshopPsdRepairRecipe, reviewPhotoshopPsdRepair } from "../src/psd-repair.js";
@@ -37,7 +39,52 @@ describe("Photoshop PSD repair contract", () => {
     const parsed = await readPhotoshopPsdRepairRecipe(recipePath);
     const review = await reviewPhotoshopPsdRepair({ output: input, workDirectory: directory, recipe: parsed });
     expect(review).toMatchObject({ valid: true, requiredLayerChecks: [{ layer: "face", found: true }], requiresVisualReview: true });
-    expect(review.artifacts).toMatchObject({ recomposition: expect.any(String), white: expect.any(String), dark: expect.any(String), checker: expect.any(String), layerContactSheet: expect.any(String) });
+    expect(review.artifacts).toMatchObject({
+      recomposition: expect.any(String),
+      white: expect.any(String),
+      dark: expect.any(String),
+      checker: expect.any(String),
+      layerContactSheet: expect.any(String),
+      layerDetailSheet: expect.any(String),
+      layerAlphaSheet: expect.any(String)
+    });
+  });
+
+  it("binds extraction inputs and requires an explicit full-canvas policy for a different resolution", async () => {
+    const directory = artifactPath(`psd-repair-canvas-policy-${process.pid}-${Date.now()}`);
+    await mkdir(directory, { recursive: true });
+    const input = resolve("test/fixtures/semantic.psd");
+    const psd = readPsd(await readFile(input), { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: false });
+    const sourceImage = resolve(directory, "source-double-resolution.png");
+    const marker = Buffer.from(`<svg width="${psd.width * 2}" height="${psd.height * 2}" xmlns="http://www.w3.org/2000/svg"><rect x="20" y="20" width="20" height="20" fill="#6d4cc7"/></svg>`);
+    await sharp({ create: { width: psd.width * 2, height: psd.height * 2, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } }).composite([{ input: marker }]).png().toFile(sourceImage);
+    const recipePath = resolve(directory, "fit-recipe.json");
+    await writeFile(recipePath, JSON.stringify({
+      version: 1,
+      kind: "puppetloom-photoshop-psd-repair",
+      basePsd: input,
+      sources: [],
+      operations: [{ op: "extract-white-region", sourceImage, canvasPolicy: "fit-full-canvas", bounds: [0, 0, 30, 30], name: "source-detail" }],
+      checks: { requiredLayers: [], opaqueInteriorLayers: [] }
+    }));
+    const plan = await planPhotoshopPsdRepair({ recipe: recipePath, output: resolve(directory, "fit-output.psd"), workDirectory: resolve(directory, "fit-run") });
+    expect(plan.inputManifest.find((entry) => entry.role === "extraction")).toMatchObject({
+      path: sourceImage,
+      canvasPolicy: "fit-full-canvas",
+      canvas: { width: psd.width * 2, height: psd.height * 2 },
+      transform: { applied: true, target: { width: psd.width, height: psd.height }, scaleX: 0.5, scaleY: 0.5 }
+    });
+
+    const strictRecipePath = resolve(directory, "strict-recipe.json");
+    await writeFile(strictRecipePath, JSON.stringify({
+      version: 1,
+      kind: "puppetloom-photoshop-psd-repair",
+      basePsd: input,
+      sources: [],
+      operations: [{ op: "extract-white-region", sourceImage, bounds: [0, 0, 30, 30], name: "source-detail" }],
+      checks: { requiredLayers: [], opaqueInteriorLayers: [] }
+    }));
+    await expect(planPhotoshopPsdRepair({ recipe: strictRecipePath, output: resolve(directory, "strict-output.psd"), workDirectory: resolve(directory, "strict-run") })).rejects.toThrow(/规范画布.*fit-full-canvas/);
   });
 
   it("persists an awaiting-review state and only accepts a decision bound to every visual artifact", async () => {

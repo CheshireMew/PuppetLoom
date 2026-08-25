@@ -2,9 +2,14 @@ import { parentPort } from "node:worker_threads";
 import {
   createProject,
   inspectPsd,
+  inspectProjectHealth,
   loadCalibrationWorkspace,
   loadProject,
   loadProjectRevision,
+  prepareSourceTask,
+  reviewSourceCandidate,
+  finalizeSourceReview,
+  scanProjectLibrary,
   verifyProject
 } from "@puppetloom/core";
 import type { ProjectWorkerCreateResult, ProjectWorkerRequest } from "./project-worker-client.js";
@@ -43,6 +48,11 @@ async function run(request: ProjectWorkerRequest): Promise<unknown> {
       : loadProjectRevision(request.directory, request.revision);
   }
   if (request.operation === "load-workspace") return loadCalibrationWorkspace(request.directory);
+  if (request.operation === "project-health") return inspectProjectHealth(request.directory);
+  if (request.operation === "project-library") return scanProjectLibrary(request.root, { ...(request.maxDepth === undefined ? {} : { maxDepth: request.maxDepth }), ...(request.maximumProjects === undefined ? {} : { maximumProjects: request.maximumProjects }) });
+  if (request.operation === "source-prepare") return prepareSourceTask({ reference: request.reference, output: request.output, ...(request.name ? { name: request.name } : {}), ...(request.provider ? { provider: request.provider } : {}) });
+  if (request.operation === "source-review") return reviewSourceCandidate({ task: request.task, psd: request.psd });
+  if (request.operation === "source-finalize") return finalizeSourceReview({ task: request.task, review: request.review, decision: request.decision, note: request.note });
   controller = new AbortController();
   const input = request.request;
   const result = await createProject({

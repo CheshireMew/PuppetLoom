@@ -78,7 +78,7 @@ class SkillContractTests(unittest.TestCase):
 
     def test_public_cli_loop_is_complete(self) -> None:
         combined = self.skill + self.workflow
-        for command in ("inspect", "create", "verify", "describe", "migrate", "render", "agent", "author", "actions", "extensions", "calibrate", "compare", "history", "restore", "evidence", "enhance", "record", "edit", "play", "runtime", "cubism"):
+        for command in ("inspect", "create", "verify", "describe", "migrate", "render", "psd", "agent", "author", "actions", "extensions", "calibrate", "compare", "history", "restore", "evidence", "enhance", "record", "edit", "play", "runtime", "cubism"):
             self.assertIn(command, combined)
             self.assertIn(f'"{command}"', self.wrapper)
 
@@ -120,6 +120,11 @@ class SkillContractTests(unittest.TestCase):
             "source-normalized.png",
             "previews/contact-sheet.png",
             "Alpha 为零区域里的无效 RGB",
+            "增强诊断只用于定位像素",
+            "同时给出未增强画面",
+            "外接矩形面积判断污染严重程度",
+            "原图没有 Alpha 只能证明原图不存在隐藏透明蒙版",
+            "不能被表述为 PSD 已经修好",
             "recomposition.png",
             "comparison.png",
             "visual-review.json",
@@ -602,8 +607,10 @@ class SkillContractTests(unittest.TestCase):
         self.assertLess(restored, stopped)
 
     def test_visual_rules_preserve_exposed_project_lessons(self) -> None:
-        for phrase in ("近大远小", "上下看是俯视/仰视", "脖子不是滞后的头发", "前发根部随头骨", "眼白、虹膜、睫毛和眉毛在转头时保持不透明", "耳朵以头侧根部为铰链", "支撑轮廓、整体响应和局部柔性分别检查", "尾巴以身体连接处为锚点", "脚不能随呼吸位移", "十五种嘴形", "同一 ArtMesh", "源图像像素"):
-            self.assertIn(phrase, self.skill + self.visual)
+        combined = self.skill + self.visual + self.review
+        for phrase in ("近大远小", "上下看是俯视/仰视", "脖子不是滞后的头发", "前发根部随头骨", "眼白、虹膜、睫毛和眉毛在转头时保持不透明", "耳朵没有统一动作模板", "耳朵参数不能驱动头饰", "旧角色的动作关系只能帮助观察", "当前项目为真源", "不能默认继承部件关系、运动方向或物理响应", "`plan` 全绿只说明规格在当前结构假设下满足已有检查", "若左右耳与头饰已经是独立层", "只有确实没有独立耳层", "支撑轮廓、整体响应和局部柔性分别检查", "尾巴以身体连接处为锚点", "脚不能随呼吸位移", "十五种嘴形", "同一 ArtMesh", "源图像像素"):
+            self.assertIn(phrase, combined)
+        self.assertNotIn("触发后应快速连续抬落数次", self.visual)
 
     def test_supported_garments_separate_structure_response_and_flexibility(self) -> None:
         combined = self.review + self.visual

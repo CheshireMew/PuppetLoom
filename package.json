@@ -11,14 +11,15 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/renderer && npm run build -w @puppetloom/cli && npm run build -w @puppetloom/desktop",
-    "typecheck": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/renderer && npm run typecheck -w @puppetloom/core && npm run typecheck -w @puppetloom/renderer && npm run typecheck -w @puppetloom/cli && npm run typecheck -w @puppetloom/desktop",
+    "build": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/renderer && npm run build -w @puppetloom/web-runtime && npm run build -w @puppetloom/runtime-adapters && npm run build -w @puppetloom/cli && npm run build -w @puppetloom/desktop",
+    "typecheck": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/renderer && npm run typecheck -w @puppetloom/core && npm run typecheck -w @puppetloom/renderer && npm run typecheck -w @puppetloom/web-runtime && npm run typecheck -w @puppetloom/runtime-adapters && npm run typecheck -w @puppetloom/cli && npm run typecheck -w @puppetloom/desktop",
     "test": "npm run build && vitest run --config vitest.config.ts",
     "test:unit": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/renderer && vitest run --config vitest.config.ts packages",
     "test:integration": "npm run build && vitest run --config vitest.config.ts test",
     "test:e2e": "node scripts/run-electron-e2e.mjs",
     "test:real-project": "node scripts/run-real-project-e2e.mjs",
     "test:launcher": "node scripts/run-launcher-smoke.mjs",
+    "test:spout": "npm run build && node scripts/run-spout-e2e.mjs",
     "test:visual": "node scripts/run-visual-check.mjs",
     "test:performance": "node scripts/run-performance-check.mjs",
     "test:expressions": "node scripts/render-expression-sheet.mjs",
@@ -27,6 +28,7 @@
     "test:motion-evidence": "node scripts/run-motion-evidence-e2e.mjs",
     "test:model-agent": "npm run build -w @puppetloom/core && node scripts/run-model-agent-e2e.mjs",
     "test:model-agent:whole": "npm run build -w @puppetloom/core && npm run build -w @puppetloom/cli && node scripts/run-whole-model-agent-e2e.mjs",
+    "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1",
     "test:secondary-directions": "node scripts/render-secondary-direction-sheet.mjs",
     "test:ear-hinges": "node scripts/render-ear-hinge-sheet.mjs",
     "artifacts:report": "node scripts/report-artifacts.mjs",
@@ -40,7 +42,8 @@
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^24.3.0",
-    "electron": "^37.3.1",
+    "electron": "42.10.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.9.2",
     "vite": "^7.1.3",
     "vitest": "^3.2.4"

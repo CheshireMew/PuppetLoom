@@ -1,0 +1,10 @@
+{
+  "name": "@puppetloom/web-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/puppetloom-web.js",
+  "types": "dist/types/index.d.ts",
+  "scripts": { "build": "vite build && tsc -p tsconfig.json --emitDeclarationOnly", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "dependencies": { "@puppetloom/core": "0.1.0", "@puppetloom/renderer": "0.1.0" }
+}

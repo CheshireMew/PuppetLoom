@@ -2,7 +2,9 @@
 
 `psd repair` 供外部 Agent 在进入 PuppetLoom 创建流程前整理有缺陷的分层 PSD。它通过 Windows COM 启动本机 Photoshop，把结构化配方转换为真实的图层操作；基础 PSD、候选 PSD 和参考图只读，新任务的输出 PSD 与审计目录必须尚不存在。
 
-这条命令不是自动猜图层的黑盒。外部 Agent 先比较原画和候选 PSD，再明确选择每个部件的来源、拆分位置、清理区域和绘制顺序。Photoshop 负责实际复制、选择、去白边、合并和保存，PuppetLoom 负责输入哈希、非覆盖保护、重新打开检查以及白色、深色、棋盘和逐图层证据。
+自动化只允许使用由本次命令启动的 Photoshop 会话。只要检测到 Photoshop 已经运行，命令就会在连接 COM、改变窗口状态或打开任何文档之前拒绝执行；先保存并关闭正在使用的 Photoshop，再重试修复。命令结束时也只有在自动化会话中没有剩余文档才会退出 Photoshop，否则保留窗口可见并报告异常，绝不替用户关闭未保存文档。
+
+这条命令不是自动猜图层的黑盒。外部 Agent 先比较原画和候选 PSD，建立逐部件来源清单，再明确选择基础 PSD、规范画布、每个部件的 donor、拆分位置、清理区域和绘制顺序。Photoshop 负责实际整画布适配、复制、选择、去白边、合并和保存，PuppetLoom 负责输入尺寸与哈希、非覆盖保护、重新打开检查，以及白色、深色、棋盘、逐层细节和 Alpha 证据。
 
 ## 命令
 
@@ -49,7 +51,11 @@ node .\apps\cli\dist\index.js psd review `
   "basePsd": "./base.psd",
   "referenceImage": "./source.png",
   "sources": [
-    { "id": "candidate-a", "path": "./candidate-a.psd" }
+    {
+      "id": "candidate-a",
+      "path": "./candidate-a.psd",
+      "canvasPolicy": "fit-full-canvas"
+    }
   ],
   "operations": [
     {
@@ -68,6 +74,7 @@ node .\apps\cli\dist\index.js psd review `
     {
       "op": "extract-white-region",
       "sourceImage": "./source.png",
+      "canvasPolicy": "fit-full-canvas",
       "bounds": [465, 0, 615, 120],
       "name": "antler-r-top",
       "tolerance": 40,
@@ -103,4 +110,8 @@ node .\apps\cli\dist\index.js psd review `
 - `remove-white-matte`、`defringe`
 - `merge-layers`：把已确认的相邻部件合并为一个完整图层
 
-`opaqueInteriorLayers` 只检查明确应当实心的局部。它使用距透明边缘至少两个像素的区域判断内部半透明，避免把正常抗锯齿边缘和纱质衣物误报为缺陷。自动检查通过仍不等于视觉验收通过；外部 Agent 必须查看 `on-white.png`、`on-dark.png`、`on-checker.png`、`reference-comparison.png` 和 `layer-contact-sheet.png`。
+`sources[].canvasPolicy` 和 `extract-white-region.canvasPolicy` 默认是 `require-match`：输入画布必须与 `basePsd` 完全一致。只有确认输入是同一整画布构图、宽高比一致而分辨率不同，才使用 `fit-full-canvas`；Photoshop 会在内存中把整个 donor 等比例适配到基础 PSD，关闭时不保存 donor。宽高比不同会在预演阶段失败，工具不会拉伸、裁局部或猜测摆放位置。`input-manifest.json` 会绑定每个 donor 和每个原画补件来源的尺寸、SHA-256、画布策略与实际缩放。
+
+`extract-white-region` 使用 Photoshop 的连续背景魔棒或主体选择形成边界，不允许把 RGB 亮度或灰度映射成 Alpha。浅色实体内部必须保持不透明；需要用 `opaqueInteriorLayers` 对头饰、白发、白衣等明确应当实心的区域做自动检查。该检查使用距透明边缘至少两个像素的区域判断内部半透明，避免把正常抗锯齿边缘和纱质衣物误报为缺陷。
+
+自动检查通过仍不等于视觉验收通过。外部 Agent 必须查看 `on-white.png`、`on-dark.png`、`on-checker.png`、`reference-comparison.png`、`layer-contact-sheet.png`、`layer-detail-sheet.png` 和 `layer-alpha-sheet.png`。总览只负责扫查；逐层细节图与 Alpha 灰度图负责确认每个部件是否完整、是否触碰画布边缘、浅色内部是否被错误掏空。PSD 能打开、画布和图层数正确不能代替逐层复核。

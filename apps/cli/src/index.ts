@@ -5,6 +5,7 @@ import { registerAuthoringCommands } from "./commands/authoring.js";
 import { registerCubismCommands } from "./commands/cubism.js";
 import { registerInputProjectCommands } from "./commands/input-project.js";
 import { registerProjectWorkflowCommands } from "./commands/project-workflow.js";
+import { registerProductionCommands } from "./commands/production.js";
 import { registerRuntimeCommands } from "./commands/runtime.js";
 
 const parseAsJson = process.argv.includes("--json");
@@ -19,6 +20,7 @@ registerRuntimeCommands(program);
 registerCubismCommands(program);
 registerAuthoringCommands(program);
 registerProjectWorkflowCommands(program);
+registerProductionCommands(program);
 
 function configureCommandParsing(command: Command): void {
   command.exitOverride();

@@ -9,7 +9,8 @@ function viewer(): RuntimeViewerDescriptor {
     revision: 3,
     parameters: [{ id: "smile", name: "微笑", min: 0, default: 0, max: 1 }],
     expressions: [{ id: "happy", name: "开心" }],
-    behaviors: [{ id: "wave", name: "挥手", duration: 1.5, loop: false }]
+    behaviors: [{ id: "wave", name: "挥手", duration: 1.5, loop: false }],
+    production: { variants: [{ id: "coat", name: "外套", defaultOptionId: "blue", options: [{ id: "blue", name: "蓝", layerIds: ["coat-blue"] }, { id: "red", name: "红", layerIds: ["coat-red"] }] }], props: [{ id: "cup", name: "杯子", layerIds: ["cup"], slot: "hand-right" }], presets: [{ id: "stage", name: "舞台", variants: { coat: "red" }, props: ["cup"] }] }
   };
 }
 
@@ -51,6 +52,14 @@ describe("runtime control protocol", () => {
     expect(result.source.expiresAtMs).toBe(3500);
     expect(store.snapshot(7, 3499).sources[0]?.behavior).toEqual({ id: "wave", startedAtMs: 2000 });
     expect(store.snapshot(7, 3500).sources).toEqual([]);
+  });
+
+  it("validates and records outfit, prop and preset selections as a persistent runtime source", () => {
+    const store = new RuntimeControlStore(); store.registerViewer(viewer());
+    const request = parseRuntimeControlRequest({ version: 1, requestId: "state", op: "set", viewerId: 7, source: { id: "stream-deck", characterState: { presetId: "stage", variants: { coat: "red" }, props: ["cup"] } } });
+    store.apply(request, 3000); expect(store.snapshot(7, 3000).sources[0]?.characterState).toEqual({ presetId: "stage", variants: { coat: "red" }, props: ["cup"] });
+    const invalid = parseRuntimeControlRequest({ version: 1, requestId: "bad-state", op: "set", viewerId: 7, source: { id: "stream-deck", characterState: { variants: { coat: "missing" } } } });
+    expect(() => store.apply(invalid, 3001)).toThrow(/不存在选项/);
   });
 
   it("parses a portable, ordered input session and rejects time travel", () => {

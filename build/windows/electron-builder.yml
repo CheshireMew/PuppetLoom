@@ -1,0 +1,38 @@
+appId: com.puppetloom.desktop
+productName: PuppetLoom
+electronVersion: 42.10.0
+copyright: Copyright © 2026 PuppetLoom contributors
+asar: true
+asarUnpack:
+  - node_modules/@napolab/texture-bridge*/**/*
+npmRebuild: false
+directories:
+  output: ../../release/${version}
+  buildResources: ../../build/windows
+files:
+  - dist/**/*
+  - package.json
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE.txt
+  - from: ../../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: ../../docs/licenses/electron-texture-bridge-MIT-Spout2-BSD.txt
+    to: licenses/electron-texture-bridge-MIT-Spout2-BSD.txt
+extraMetadata:
+  main: dist/electron/main.js
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: ../../build/windows/icon.png
+  artifactName: PuppetLoom-${version}-Windows-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PuppetLoom
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true

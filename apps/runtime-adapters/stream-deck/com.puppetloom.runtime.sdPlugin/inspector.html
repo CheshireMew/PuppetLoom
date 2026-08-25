@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>body{font:13px system-ui;color:#ddd;background:#2d2d2d}label{display:grid;gap:5px;margin:12px 0}input,textarea{box-sizing:border-box;width:100%;padding:7px;color:#fff;background:#1f1f1f;border:1px solid #666;border-radius:4px}textarea{min-height:130px;font:12px Consolas,monospace}.error{color:#ff9ba6}</style>
+<label>Adapter Host 地址<input id="endpoint" value="http://127.0.0.1:39541/v1/control"></label>
+<label>按下时发送的 JSON<textarea id="payload">{"motion":{"smile":1}}</textarea></label>
+<p id="status"></p>
+<script>
+let socket, context, settings = {};
+const endpoint = document.querySelector('#endpoint'), payload = document.querySelector('#payload'), status = document.querySelector('#status');
+function save() {
+  try { JSON.parse(payload.value); status.textContent = ''; status.className = ''; }
+  catch (error) { status.textContent = `JSON 无效：${error.message}`; status.className = 'error'; return; }
+  settings = { endpoint: endpoint.value.trim(), payload: payload.value.trim() };
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ event: 'setSettings', context, payload: settings }));
+}
+endpoint.addEventListener('change', save); payload.addEventListener('change', save);
+function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
+  context = JSON.parse(actionInfo).context;
+  settings = JSON.parse(actionInfo).payload?.settings ?? {};
+  endpoint.value = settings.endpoint || endpoint.value; payload.value = settings.payload || payload.value;
+  socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  socket.onopen = () => socket.send(JSON.stringify({ event: registerEvent, uuid }));
+  socket.onmessage = ({ data }) => { const message = JSON.parse(data); if (message.event === 'didReceiveSettings') { settings = message.payload.settings || {}; endpoint.value = settings.endpoint || endpoint.value; payload.value = settings.payload || payload.value; } };
+}
+</script>

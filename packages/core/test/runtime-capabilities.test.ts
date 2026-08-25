@@ -44,4 +44,15 @@ describe("runtime capability truth", () => {
     expect(fixture.model.expressions.every((expression) => isModelExpressionAvailable(fixture, expression))).toBe(true);
     expect(fixture.model.behaviors.every((behavior) => isModelBehaviorAvailable(fixture, behavior))).toBe(true);
   });
+
+  it("only publishes asymmetric, viseme and upper-body semantics when their backing capabilities exist", () => {
+    const fixture = project(true, true);
+    expect(isMotionSemanticAvailable(fixture, "blink-left")).toBe(true);
+    expect(isMotionSemanticAvailable(fixture, "mouth-a")).toBe(false);
+    expect(isMotionSemanticAvailable(fixture, "arm-left")).toBe(false);
+    fixture.runtime.features.visemes = true;
+    fixture.runtime.features.upperBodyTracking = true;
+    expect(isMotionSemanticAvailable(fixture, "mouth-a")).toBe(true);
+    expect(isMotionSemanticAvailable(fixture, "hand-right-open")).toBe(true);
+  });
 });

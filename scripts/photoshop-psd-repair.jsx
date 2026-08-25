@@ -78,8 +78,8 @@
         return all[0];
     }
 
-    function sourcePath(recipe, id) {
-        for (var index = 0; index < recipe.sources.length; index += 1) if (recipe.sources[index].id === id) return recipe.sources[index].path;
+    function sourceEntry(recipe, id) {
+        for (var index = 0; index < recipe.sources.length; index += 1) if (recipe.sources[index].id === id) return recipe.sources[index];
         fail("source id not found: " + id);
     }
 
@@ -92,6 +92,32 @@
     }
 
     function unit(value) { return value && value.as ? value.as("px") : Number(value); }
+
+    function normalizeSourceCanvas(source, target, policy, label) {
+        var sourceWidth = unit(source.width);
+        var sourceHeight = unit(source.height);
+        var targetWidth = unit(target.width);
+        var targetHeight = unit(target.height);
+        var matches = Math.round(sourceWidth) === Math.round(targetWidth) && Math.round(sourceHeight) === Math.round(targetHeight);
+        var selectedPolicy = policy || "require-match";
+        var transform = {
+            policy: selectedPolicy,
+            source: { width: sourceWidth, height: sourceHeight },
+            target: { width: targetWidth, height: targetHeight },
+            applied: false,
+            scaleX: targetWidth / sourceWidth,
+            scaleY: targetHeight / sourceHeight
+        };
+        if (matches) return transform;
+        if (selectedPolicy !== "fit-full-canvas") fail(label + " canvas does not match the canonical canvas; set canvasPolicy to fit-full-canvas only for a full-canvas donor with the same aspect ratio." );
+        var cross = Math.abs(sourceWidth * targetHeight - targetWidth * sourceHeight);
+        var denominator = Math.max(1, sourceWidth * targetHeight, targetWidth * sourceHeight);
+        if (cross / denominator > 0.001) fail(label + " aspect ratio does not match the canonical canvas; refusing to stretch or guess placement." );
+        app.activeDocument = source;
+        source.resizeImage(new UnitValue(targetWidth, "px"), new UnitValue(targetHeight, "px"), target.resolution, ResampleMethod.BICUBIC);
+        transform.applied = true;
+        return transform;
+    }
 
     function selectRectangle(document, bounds) {
         document.selection.select([
@@ -130,23 +156,6 @@
         executeAction(charIDToTypeID("Dfrg"), descriptor, DialogModes.NO);
     }
 
-    function selectWhiteRange(document, tolerance) {
-        app.activeDocument = document;
-        var descriptor = new ActionDescriptor();
-        descriptor.putInteger(charIDToTypeID("Fzns"), tolerance);
-        var minimum = new ActionDescriptor();
-        minimum.putDouble(charIDToTypeID("Rd  "), Math.max(0, 255 - tolerance));
-        minimum.putDouble(charIDToTypeID("Grn "), Math.max(0, 255 - tolerance));
-        minimum.putDouble(charIDToTypeID("Bl  "), Math.max(0, 255 - tolerance));
-        descriptor.putObject(charIDToTypeID("Mnm "), charIDToTypeID("RGBC"), minimum);
-        var maximum = new ActionDescriptor();
-        maximum.putDouble(charIDToTypeID("Rd  "), 255);
-        maximum.putDouble(charIDToTypeID("Grn "), 255);
-        maximum.putDouble(charIDToTypeID("Bl  "), 255);
-        descriptor.putObject(charIDToTypeID("Mxm "), charIDToTypeID("RGBC"), maximum);
-        executeAction(charIDToTypeID("ClrR"), descriptor, DialogModes.NO);
-    }
-
     function selectBackgroundMagicWand(document, tolerance) {
         app.activeDocument = document;
         var descriptor = new ActionDescriptor();
@@ -174,6 +183,7 @@
     function extractWhiteRegion(target, operation, opened) {
         var source = openDocument(operation.sourceImage, opened);
         app.activeDocument = source;
+        var canvasTransform = normalizeSourceCanvas(source, target, operation.canvasPolicy, operation.name);
         source.crop(operation.bounds);
         if (operation.method === "select-subject") selectSubject(source);
         else {
@@ -196,7 +206,7 @@
         placeLayer(target, pasted, operation.placement);
         source.close(SaveOptions.DONOTSAVECHANGES);
         opened.pop();
-        return pasted;
+        return { canvasTransform: canvasTransform };
     }
 
     function mergeLayers(document, selectors, name, placement) {
@@ -225,7 +235,9 @@
         } else if (operation.op === "move-layer") {
             placeLayer(document, findLayer(document, operation.layer), operation.placement);
         } else if (operation.op === "duplicate-layer") {
-            var source = openDocument(sourcePath(recipe, operation.source), opened);
+            var sourceConfiguration = sourceEntry(recipe, operation.source);
+            var source = openDocument(sourceConfiguration.path, opened);
+            var canvasTransform = normalizeSourceCanvas(source, document, sourceConfiguration.canvasPolicy, operation.source);
             var sourceLayer = findLayer(source, operation.layer);
             var duplicate = sourceLayer.duplicate(document, ElementPlacement.PLACEATBEGINNING);
             app.activeDocument = document;
@@ -235,6 +247,7 @@
             opened.pop();
             app.activeDocument = document;
             placeLayer(document, duplicate, operation.placement);
+            return { canvasTransform: canvasTransform };
         } else if (operation.op === "split-layer-x") {
             var original = findLayer(document, operation.layer);
             var right = original.duplicate();
@@ -245,7 +258,7 @@
         } else if (operation.op === "clear-region") {
             clearRegion(document, findLayer(document, operation.layer), operation.bounds);
         } else if (operation.op === "extract-white-region") {
-            extractWhiteRegion(document, operation, opened);
+            return extractWhiteRegion(document, operation, opened);
         } else if (operation.op === "remove-white-matte") {
             removeWhiteMatte(document, findLayer(document, operation.layer));
         } else if (operation.op === "defringe") {
@@ -272,9 +285,12 @@
             app.displayDialogs = DialogModes.NO;
             target = openDocument(recipe.basePsd, opened);
             for (var index = 0; index < recipe.operations.length; index += 1) {
-                try { perform(target, recipe, recipe.operations[index], opened); }
+                var details;
+                try { details = perform(target, recipe, recipe.operations[index], opened); }
                 catch (operationError) { fail("operation #" + index + " (" + recipe.operations[index].op + ") failed: " + operationError.message); }
-                log.push({ index: index, op: recipe.operations[index].op, status: "completed" });
+                var logEntry = { index: index, op: recipe.operations[index].op, status: "completed" };
+                if (details) logEntry.details = details;
+                log.push(logEntry);
             }
             app.activeDocument = target;
             var saveOptions = new PhotoshopSaveOptions();

@@ -139,6 +139,13 @@ export class ProjectIpcService {
       return true;
     });
     ipcMain.handle("project:recent", () => this.recentProjects());
+    ipcMain.handle("production:project-health", (_event, directory: string) => runProjectWorker({ operation: "project-health", directory: resolve(directory) }));
+    ipcMain.handle("production:project-library", (_event, root: string, maxDepth = 4, maximumProjects = 200) => runProjectWorker({ operation: "project-library", root: resolve(root), maxDepth, maximumProjects }));
+    ipcMain.handle("production:source-prepare", (_event, request: { reference: string; output: string; name?: string; provider?: "see-through-official" | "external" }) => runProjectWorker({
+      operation: "source-prepare", reference: resolve(request.reference), output: resolve(request.output), ...(request.name ? { name: request.name } : {}), ...(request.provider ? { provider: request.provider } : {})
+    }));
+    ipcMain.handle("production:source-review", (_event, task: string, psd: string) => runProjectWorker({ operation: "source-review", task: resolve(task), psd: resolve(psd) }));
+    ipcMain.handle("production:source-finalize", (_event, task: string, review: number, decision: "ready" | "needs-repair", note: string) => runProjectWorker({ operation: "source-finalize", task: resolve(task), review, decision, note }));
     ipcMain.handle("project:read", async (_event, directory: string, revision?: number) => {
       const projectDirectory = resolve(directory);
       const project = await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: projectDirectory, ...(revision === undefined ? {} : { revision }) });

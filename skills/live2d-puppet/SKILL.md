@@ -13,7 +13,7 @@ description: "使用 PuppetLoom 让外部 Agent 通过 CLI 从分层角色 PSD �
 
 每次开始先完整读取 `references/from-zero-workflow.md` 和 `references/agent-review-and-repair.md`。只有原图、完全没有角色图、需要生成适合绑定的原图、需要 See-Through 分层或自动分层失败时，再完整读取 `references/source-art-and-layering.md`。只有用户选择本地 See-Through、询问本地门槛、安装失败或明确要求优化本地推理时，才完整读取 `references/see-through-local-deployment.md`。用户要求诊断或改善转头、上下看、脸部透视、头发、耳朵、呆毛、衣服、尾巴、呼吸、眨眼或嘴部时，再完整读取 `references/visual-rigging-rules.md`。用户要求配合录屏、演示编辑器与角色窗口、快速证明 Agent 实时控制或演示后保留窗口时，再完整读取 `references/runtime-demonstration.md`。用户提供了手动校准、接受/拒绝结果，或明确要求 Skill/软件从经验中学习时，再完整读取 `references/calibration-and-learning.md`。用户提到 Cubism、`.moc3`、`.model3.json`、官方格式、Editor External API、SDK 运行时或导出兼容时，再完整读取 `references/cubism-bridge-workflow.md`。
 
-使用 `scripts/invoke_puppetloom.ps1` 调用公开 CLI。普通项目先 `inspect/create/verify/describe/render`，再按任务和用户允许的证据形式选择 `play` 或 `record`；实际查看姿态图、4×4 次级运动图、准确 revision 的实时窗口，或获准生成的动态接触表/WebM 后才能判断结果。测试通过不等于视觉自然，视频也不是固定交付物。
+使用 `scripts/invoke_puppetloom.ps1` 调用公开 CLI。普通项目先 `inspect/create/verify/describe/render`，再按任务和用户允许的证据形式选择 `play` 或 `record`；实际查看姿态图、4×4 次级运动图、准确 revision 的实时窗口，或获准生成的动态接触表/WebM 后才能判断结果。测试通过不等于视觉自然，视频也不是固定交付物。分层验收发现 See-Through 背景残片、低透明托底或可安全去除的硬矩形托底时，不把普通创建的保守 Alpha 清理冒充 PSD 已修复；先由外部 Agent 结合原图、单层和未增强合成确认异常边界，再通过同一包装脚本的 `psd repair/review/finalize` 生成新的 PSD、绑定视觉证据并形成不可改写的终态。Photoshop 已经运行时不得连接或复用用户会话，先让用户保存并关闭 Photoshop；自动化只能使用本次命令启动的会话，且有剩余文档时必须保留窗口可见、禁止退出。用户提供多份 PSD 或要求结合原画补件时，先建立逐部件来源清单并选定规范画布；不同分辨率 donor 只有在明确启用整画布等比例适配且宽高比一致时才能进入 Photoshop 配方。原 PSD 永不覆盖，未完成逐层细节与 Alpha 复核、未形成视觉终态或被拒绝的输出不得进入创建；详细边界和命令见 `references/source-art-and-layering.md` 与 `references/from-zero-workflow.md`。
 
 修改角色的正式入口是外部 Agent 先看基线，再用 `agent specification` 取得当前 revision 的结构化模板，填写 `goal/parts/intent/rationale`，最后运行 `agent plan/apply --spec <json>`。每个部位都必须填写基于准确 revision 画面的非空 `rationale`；原样模板、占位理由或缺少理由会被 CLI 拒绝，不能用安全默认值冒充视觉判断。`parts` 可覆盖头脸、眼睛、嘴、前发、后发、呆毛、耳朵、头饰、身体、上衣、裙摆、尾巴和配饰。先运行只读 `agent plan`，核对 `inputMode: structured-specification`、`baseRevision`、草稿接管、目标图层、各部位状态、检查、返修、素材请求和 `blockers`；计划符合目标后再运行 `agent apply`。自然语言 `--instruction/--scope` 只保留旧调用兼容，不是正式入口：自然语言理解、看图判断和返修决策由本 Skill 中的外部 Agent 承担，软件只执行和验证明确规格。整模执行按确定顺序处理所有存在的部位，每个部位单独形成可恢复 revision，最后返回整模 `verification`、总状态和报告路径。项目没有相应图层时报告 `not-present`，缺少闭眼或嘴形等可选素材时报告 `needs-assets`，不能伪造图层或把它们说成已经制作完成。
 
@@ -40,7 +40,7 @@ description: "使用 PuppetLoom 让外部 Agent 通过 CLI 从分层角色 PSD �
 - `references/runtime-demonstration.md`：编辑器优先、角色窗口在后、公共 runtime CLI 控制、只读演示和可靠窗口保活。
 - `references/calibration-and-learning.md`：用户校准如何进入项目、软件或 Skill，及其证据门槛。
 - `references/cubism-bridge-workflow.md`：官方格式边界、参数映射、Editor 版本与授权、严格同步、侧车生成、最终目录和视觉验收。
-- `scripts/invoke_puppetloom.ps1`：定位 PuppetLoom、必要时构建并原样转发 CLI 命令和退出码。
+- `scripts/invoke_puppetloom.ps1`：定位 PuppetLoom、必要时构建并原样转发包括 `psd repair/review/finalize` 在内的 CLI 命令和退出码。
 - `scripts/acquire_layered_psd.ps1`、`scripts/acquire_layered_psd.py` 与 `scripts/finalize_psd_review.py`：通过 ModelScope See-Through 的公开 Gradio API 上传已获准原图，或在本地复核用户带回的原图和 PSD；生成原图与实际上传副本、归一化原图、带名称预览、真实可见图层重组、对照图、检查记录和一次传输重试证据，并确定性定稿三档视觉结论。它们不启动或安装本地 See-Through 推理服务。
 - `requirements-layering.txt`：PSD 重组与对照图所需、已在 `D:\Tools\Python310` 验证的 Pillow 和 psd-tools 版本。
 - `scripts/demo_puppetloom.ps1` 与 `scripts/demo_puppetloom.mjs`：通过 CLI 驱动真实 Electron 完成可录制的只读演示，并按需保持窗口。
