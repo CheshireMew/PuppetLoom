@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createProject,
   executePhotoshopPsdRepairOperation,
   exportPortableProject,
+  exportWebRuntime,
   finalizePhotoshopPsdRepairVisualReview,
   inspectPsd,
   planPhotoshopPsdRepair,
@@ -146,6 +148,21 @@ export function registerInputProjectCommands(program: Command): void {
     .option("--json", "输出 JSON")
     .action(async (options: { project: string; output: string; json?: boolean }) => {
       await run(async () => print(await exportPortableProject({ project: resolve(options.project), output: resolve(options.output) }), options), options);
+    });
+
+  program
+    .command("export-web")
+    .description("导出可直接部署、嵌入网页或作为 OBS 浏览器源的透明 Web Runtime")
+    .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+    .requiredOption("--output <new-directory>", "尚不存在的导出目录")
+    .option("--sdk <puppetloom-web.js>", "覆盖已构建的 Web Runtime SDK")
+    .option("--json", "输出 JSON")
+    .action(async (options: { project: string; output: string; sdk?: string; json?: boolean }) => {
+      await run(async () => {
+        const commandDirectory = dirname(fileURLToPath(import.meta.url));
+        const sdkBundle = options.sdk ? resolve(options.sdk) : resolve(commandDirectory, "../../../../packages/web-runtime/dist/puppetloom-web.js");
+        print(await exportWebRuntime({ project: resolve(options.project), output: resolve(options.output), sdkBundle }), options);
+      }, options);
     });
 
   const benchmark = program.command("benchmark").description("校验真实角色基准清单，并批量生成可复现的项目能力报告");

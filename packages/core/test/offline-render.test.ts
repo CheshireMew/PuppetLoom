@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { neutralMotionState } from "../src/deform.js";
 import { renderProjectPoseWithSources } from "../src/offline-render.js";
+import { featureGatedMotionState } from "../src/render-contract.js";
 import type { LayerBinding, PuppetLoomProject } from "../src/types.js";
 
 function layer(id: string, order: number, blendMode = "normal"): LayerBinding {
@@ -36,6 +37,27 @@ function pixel(red: number, green: number, blue: number, alpha: number) {
 }
 
 describe("offline renderer contract", () => {
+  it("lets the global blink drive both eyes until an asymmetric side is explicitly controlled", () => {
+    const value = project([]);
+    value.runtime.features.blink = true;
+    value.runtime.features.asymmetricBlink = true;
+    const global = featureGatedMotionState(value, { ...neutralMotionState, parameters: { "param-blink": 1 } });
+    expect(global.blink).toBe(1);
+    expect(global.blinkLeft).toBe(1);
+    expect(global.blinkRight).toBe(1);
+    const globalSecondPass = featureGatedMotionState(value, global);
+    expect(globalSecondPass.blink).toBe(1);
+    expect(globalSecondPass.blinkLeft).toBe(1);
+    expect(globalSecondPass.blinkRight).toBe(1);
+
+    const asymmetric = featureGatedMotionState(value, {
+      ...neutralMotionState,
+      parameters: { "param-blink": 1, "param-blink-left": 0.25 }
+    });
+    expect(asymmetric.blinkLeft).toBe(0.25);
+    expect(asymmetric.blinkRight).toBe(1);
+  });
+
   it.each([
     ["normal", [128, 0, 127]],
     ["multiply", [0, 0, 127]],

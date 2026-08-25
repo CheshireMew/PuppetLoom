@@ -11,7 +11,12 @@ Thumbs.db
 workspace/
 local-fixtures/
 /runtime/
+/release/
+/build/windows/icon.png
+/build/windows/builder-debug.yml
 archive/abandoned-tests/
 archive/nested-repositories/
 /archive/runtime-snapshots/
+/archive/accidental-pnpm-*/
+/archive/installer-builds/
 *.puppetloom.local.json

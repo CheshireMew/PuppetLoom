@@ -45,6 +45,15 @@ PuppetLoom uses the published JavaScript/Wasm package and downloads the official
 
 PuppetLoom consumes the published npm package without modifying its source files. The desktop build includes the modules used by the recording path. The corresponding source code is available from the upstream repository and the versioned npm package at <https://www.npmjs.com/package/mediabunny/v/1.55.2>; those files remain licensed under MPL-2.0 and are not relicensed by PuppetLoom's AGPL-3.0-or-later license.
 
+## electron-texture-bridge and Spout2
+
+- Project: `naporin0624/electron-texture-bridge` (`@napolab/texture-bridge-core` 0.15.0) — <https://github.com/naporin0624/electron-texture-bridge>
+- Upstream native component: `leadedge/Spout2`
+- Use: Electron shared-texture to D3D11/Spout2 zero-copy output on Windows x64
+- Licenses: MIT for electron-texture-bridge; BSD 2-Clause-style terms for bundled Spout2/SpoutDX portions
+
+PuppetLoom consumes the published prebuilt Windows x64 N-API binary. The native package stays outside ASAR so Electron can load it. Applicable MIT and Spout2 notices are reproduced in `docs/licenses/electron-texture-bridge-MIT-Spout2-BSD.txt` and shipped with the application.
+
 ## ag-psd
 
 - Project: `Agamnentzar/ag-psd`

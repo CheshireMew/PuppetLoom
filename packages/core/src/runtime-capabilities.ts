@@ -7,8 +7,10 @@ import type { ModelBehavior, ModelExpression, MotionParameterSemantic, PuppetLoo
  * artwork is absent.
  */
 export function isMotionSemanticAvailable(project: PuppetLoomProject, semantic: MotionParameterSemantic | undefined): boolean {
-  if (semantic === "blink") return project.runtime.features.blink;
+  if (semantic === "blink" || semantic === "blink-left" || semantic === "blink-right") return project.runtime.features.blink;
   if (semantic === "mouth-open") return project.runtime.features.mouthMotion;
+  if (semantic === "mouth-a" || semantic === "mouth-i" || semantic === "mouth-u" || semantic === "mouth-e" || semantic === "mouth-o") return Boolean(project.runtime.features.visemes);
+  if (semantic === "arm-left" || semantic === "arm-right" || semantic?.startsWith("hand-")) return Boolean(project.runtime.features.upperBodyTracking);
   return true;
 }
 

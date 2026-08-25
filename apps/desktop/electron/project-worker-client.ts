@@ -1,12 +1,17 @@
 import { Worker } from "node:worker_threads";
-import type { PuppetLoomProject, VerifyResult } from "@puppetloom/core";
+import type { PuppetLoomProject, SourcePreparationTask, VerifyResult } from "@puppetloom/core";
 import type { DesktopCreateRequest, EditorWorkspace } from "./global.js";
 
 export type ProjectWorkerRequest =
   | { operation: "inspect"; input: string; alphaCleanup: DesktopCreateRequest["alphaCleanup"] }
   | { operation: "create"; request: DesktopCreateRequest }
   | { operation: "load-project"; directory: string; revision?: number }
-  | { operation: "load-workspace"; directory: string };
+  | { operation: "load-workspace"; directory: string }
+  | { operation: "project-health"; directory: string }
+  | { operation: "project-library"; root: string; maxDepth?: number; maximumProjects?: number }
+  | { operation: "source-prepare"; reference: string; output: string; name?: string; provider?: SourcePreparationTask["decomposition"]["provider"] }
+  | { operation: "source-review"; task: string; psd: string }
+  | { operation: "source-finalize"; task: string; review: number; decision: "ready" | "needs-repair"; note: string };
 
 export interface ProjectWorkerCreateResult {
   outputDirectory: string;

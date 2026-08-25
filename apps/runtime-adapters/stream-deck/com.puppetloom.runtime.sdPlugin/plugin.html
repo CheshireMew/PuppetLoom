@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+let socket;
+function send(event, context, payload) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ event, context, payload })); }
+function connectElgatoStreamDeckSocket(port, uuid, registerEvent) {
+  socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  socket.onopen = () => socket.send(JSON.stringify({ event: registerEvent, uuid }));
+  socket.onmessage = async ({ data }) => {
+    const message = JSON.parse(data);
+    if (message.event !== "keyDown") return;
+    const settings = message.payload?.settings ?? {};
+    const endpoint = settings.endpoint || "http://127.0.0.1:39541/v1/control";
+    try {
+      const payload = JSON.parse(settings.payload || '{"motion":{"smile":1}}');
+      const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      send("showOk", message.context);
+    } catch (error) {
+      send("showAlert", message.context);
+      send("logMessage", message.context, { message: `PuppetLoom: ${String(error)}` });
+    }
+  };
+}
+</script>

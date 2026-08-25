@@ -201,6 +201,7 @@ async function writePoseSheet(output: string, imported: ImportedPsd, project: Pu
 
 function buildReport(project: PuppetLoomProject, recognized: number, warnings: string[], assetRequestCount: number, importPreflight: BuildReport["importPreflight"]): BuildReport {
   const featureEntries = Object.entries(project.runtime.features);
+  const optionalFeatureNames = new Set(["asymmetricBlink", "visemes", "upperBodyTracking"]);
   return {
     version: 1,
     project: project.name,
@@ -209,7 +210,7 @@ function buildReport(project: PuppetLoomProject, recognized: number, warnings: s
     recognizedLayerCount: recognized,
     safetyScale: project.quality.safetyScale,
     enabledFeatures: featureEntries.filter(([, enabled]) => enabled).map(([key]) => key),
-    disabledFeatures: featureEntries.filter(([, enabled]) => !enabled).map(([key]) => key),
+    disabledFeatures: featureEntries.filter(([key, enabled]) => !enabled && !optionalFeatureNames.has(key)).map(([key]) => key),
     warnings,
     quality: project.quality,
     assetRequestCount,

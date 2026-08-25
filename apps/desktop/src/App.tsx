@@ -1,12 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import type { BuildReport, InspectionReport, PuppetLoomProject, RuntimeViewerDescriptor } from "@puppetloom/core";
+import type { BuildReport, CharacterStateSelection, InspectionReport, PerformanceTakeSummary, PuppetLoomProject, RuntimeViewerDescriptor } from "@puppetloom/core";
 import { neutralMotionState } from "@puppetloom/core/browser";
 import { PuppetRenderer } from "@puppetloom/renderer";
-import { Activity, Camera, CameraOff, ChevronRight, ClipboardCopy, ExternalLink, FileImage, FileJson2, FileUp, FolderKanban, FolderOpen, FolderOutput, Image as ImageIcon, Mic, MicOff, Minus, MousePointer2, MousePointerClick, Pause, Pin, Play, Plus, PointerOff, Repeat2, ScanSearch, Smile, Sparkles, Square, Video, WandSparkles, X } from "lucide-react";
+import { Activity, Camera, CameraOff, ChevronRight, ClipboardCopy, ExternalLink, FileImage, FileJson2, FileUp, FolderKanban, FolderOpen, FolderOutput, Image as ImageIcon, Mic, MicOff, Minus, MousePointer2, MousePointerClick, Pause, Pin, Play, Plus, PointerOff, RadioTower, Repeat2, ScanSearch, Smile, Sparkles, Square, Video, WandSparkles, X } from "lucide-react";
 import type { DesktopCreatePhase, DesktopCreateRequest, RecentProject, ViewerCapabilities, ViewerState } from "../electron/global.js";
+import type { SpoutOutputStatus } from "../electron/spout-output-service.js";
 import { WindowTitleBar } from "./WindowTitleBar.js";
 import { startFaceInput, startMicrophoneInput, type InputAdapterStatus, type RuntimeInputAdapter } from "./runtime-input.js";
 import { startPerformanceRecording, type PerformanceRecorder, type PerformanceRecordingInputSession, type PerformanceRecordingOptions } from "./performance-recorder.js";
+import { ProductionCenter } from "./ProductionCenter.js";
 
 const EditorWorkspace = lazy(() => import("./EditorWorkspace.js").then((module) => ({ default: module.EditorWorkspace })));
 
@@ -62,7 +64,7 @@ function isViewerMoveOrZoomSurface(target: EventTarget | null): boolean {
   return target instanceof Element && !target.closest(viewerInteractionSelector);
 }
 
-function Viewer({ projectDirectory, revision }: { projectDirectory: string; revision?: number }): React.JSX.Element {
+function Viewer({ projectDirectory, revision, output = false }: { projectDirectory: string; revision?: number; output?: boolean }): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const [project, setProject] = useState<PuppetLoomProject>();
@@ -83,6 +85,10 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
   const [runtimeDescriptor, setRuntimeDescriptor] = useState<RuntimeViewerDescriptor>();
   const [showActions, setShowActions] = useState(false);
   const [showRecordingSettings, setShowRecordingSettings] = useState(false);
+  const [selectedCharacterState, setSelectedCharacterState] = useState<CharacterStateSelection>({});
+  const [takes, setTakes] = useState<PerformanceTakeSummary[]>([]);
+  const [takeEdit, setTakeEdit] = useState<{ id: string; startSeconds: number; endSeconds: number; speed: number; smoothWindow: number }>();
+  const [spoutStatus, setSpoutStatus] = useState<SpoutOutputStatus>();
   const [recordingSettings, setRecordingSettings] = useState<ViewerRecordingSettings>({ background: "transparent", backgroundColor: "#00ff00", width: 1080, height: 1080, fps: 30, durationSeconds: 0, includeAudio: true, includeMotionData: false });
   const [recordingPreview, setRecordingPreview] = useState<{ url: string; output: string; note?: string }>();
   const cameraInput = useRef<RuntimeInputAdapter | undefined>(undefined);
@@ -113,6 +119,15 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     const timer = window.setInterval(update, 250);
     return () => window.clearInterval(timer);
   }, [recordingClock]);
+  useEffect(() => { if (showRecordingSettings) void refreshTakes(); }, [showRecordingSettings]);
+  useEffect(() => {
+    if (output) return;
+    let disposed = false;
+    const refresh = () => void window.puppetloom.spoutOutput("status").then((status) => { if (!disposed) setSpoutStatus(status); }).catch(() => undefined);
+    refresh();
+    const timer = window.setInterval(refresh, spoutStatus?.active ? 1000 : 4000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [output, spoutStatus?.active]);
 
   useEffect(() => window.puppetloom.onViewerState((next) => {
     setState(next);
@@ -175,6 +190,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         renderer.current = await PuppetRenderer.create(canvas.current, project, (layer) => window.puppetloom.readAsset(projectDirectory, layer));
         renderer.current.start();
         const updatePointer = async () => {
+          if (output) return;
           if (disposed || pointerRequestActive || !renderer.current) return;
           pointerRequestActive = true;
           try {
@@ -199,11 +215,11 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
             pointerRequestActive = false;
           }
         };
-        void updatePointer();
+        if (!output) void updatePointer();
         // The motion controller interpolates this target every rendered frame;
         // a 10 Hz screen-coordinate sample remains smooth while avoiding a
         // cross-process round trip on every third frame.
-        pointerTimer = window.setInterval(() => void updatePointer(), 1000 / 10);
+        if (!output) pointerTimer = window.setInterval(() => void updatePointer(), 1000 / 10);
         renderer.current.setRuntimeControl(await window.puppetloom.runtimeControl());
         window.puppetloomRenderTestPose = (override) => {
           if (!renderer.current) return false;
@@ -229,7 +245,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       delete window.puppetloomRenderCurrentFrame;
       renderer.current?.dispose();
     };
-  }, [projectDirectory, project, revision]);
+  }, [projectDirectory, project, revision, output]);
 
   async function act(action: ViewerAction): Promise<void> {
     const next = await window.puppetloom.viewerAction(action);
@@ -316,8 +332,8 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     }
     try {
       setMicrophoneStatus({ state: "starting", message: "正在启动麦克风…" });
-      const input = await startMicrophoneInput((mouthOpen) => {
-        void window.puppetloom.setRuntimeSource({ id: "microphone", priority: 65, blend: 1, ttlMs: 250, motion: { mouthOpen } });
+      const input = await startMicrophoneInput((motion) => {
+        void window.puppetloom.setRuntimeSource({ id: "microphone", priority: 65, blend: 1, ttlMs: 250, motion });
       }, setMicrophoneStatus);
       microphoneInput.current = input;
     } catch (cause) {
@@ -519,9 +535,38 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
     }
   }
 
+  async function toggleSpoutOutput(): Promise<void> {
+    try {
+      const status = spoutStatus?.active
+        ? await window.puppetloom.spoutOutput("stop")
+        : await window.puppetloom.spoutOutput("start", { name: project ? `${project.name} · PuppetLoom` : "PuppetLoom", width: Math.round(recordingSettings.width), height: Math.round(recordingSettings.height), fps: recordingSettings.fps });
+      setSpoutStatus(status);
+      setTransientMessage(status.message);
+    } catch (cause) {
+      setSessionMessage({ text: `Spout2 输出失败：${messageOf(cause)}` });
+    }
+  }
+
+  async function selectCharacterState(next: CharacterStateSelection): Promise<void> {
+    try {
+      await window.puppetloom.setRuntimeSource({ id: "viewer-character-state", priority: 45, blend: 1, characterState: next });
+      setSelectedCharacterState(next);
+    } catch (cause) { setSessionMessage({ text: `状态切换失败：${messageOf(cause)}` }); }
+  }
+
+  async function refreshTakes(): Promise<void> { try { setTakes(await window.puppetloom.listTakes()); } catch (cause) { setSessionMessage({ text: `Take 列表读取失败：${messageOf(cause)}` }); } }
+  async function importTake(): Promise<void> { try { const take = await window.puppetloom.importTake(); if (take) { await refreshTakes(); setTransientMessage(`已导入 Take：${take.name}`); } } catch (cause) { setSessionMessage({ text: `Take 导入失败：${messageOf(cause)}` }); } }
+  async function saveTakeEdit(): Promise<void> {
+    if (!takeEdit) return;
+    try {
+      const edited = await window.puppetloom.editTake(takeEdit.id, { trim: { startMs: Math.round(takeEdit.startSeconds * 1000), endMs: Math.round(takeEdit.endSeconds * 1000) }, speed: takeEdit.speed, smoothWindow: takeEdit.smoothWindow });
+      await refreshTakes(); setTakeEdit(undefined); setTransientMessage(`已创建编辑版：${edited.name}`);
+    } catch (cause) { setSessionMessage({ text: `Take 编辑失败：${messageOf(cause)}` }); }
+  }
+
   return (
     <main
-      className={`viewer ${draggingWindow ? "is-window-dragging" : ""}`}
+      className={`viewer ${output ? "is-output" : ""} ${draggingWindow ? "is-window-dragging" : ""}`}
       data-testid="viewer"
       aria-label={project?.name ?? "PuppetLoom viewer"}
       onWheel={zoomViewerWithWheel}
@@ -536,6 +581,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       {showActions && runtimeDescriptor && <aside className="action-panel" aria-label="表情与动作">
         <div className="action-group"><strong>表情</strong>{runtimeDescriptor.expressions.map((expression, index) => { const key = `CommandOrControl+Shift+${index + 1}`; return <button className="with-icon" key={expression.id} onClick={() => void triggerTarget({ expressionId: expression.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 1}` : "系统快捷键不可用，请点击触发" : expression.id}><Smile aria-hidden="true" />{expression.name}</button>; })}</div>
         <div className="action-group"><strong>动作</strong>{runtimeDescriptor.behaviors.map((behavior, index) => { const key = `CommandOrControl+Shift+${index + 5}`; return <button className="with-icon" key={behavior.id} onClick={() => void triggerTarget({ behaviorId: behavior.id })} title={index < 4 ? capabilities.hotkeys[key] ? `快捷键 Ctrl+Shift+${index + 5}` : "系统快捷键不可用，请点击触发" : behavior.id}><Activity aria-hidden="true" />{behavior.name}</button>; })}</div>
+        {runtimeDescriptor.production && <><div className="action-group character-presets"><strong>状态预设</strong>{runtimeDescriptor.production.presets.map((preset) => <button className={selectedCharacterState.presetId === preset.id ? "is-active" : ""} key={preset.id} onClick={() => void selectCharacterState({ presetId: preset.id })}>{preset.name}</button>)}</div><div className="action-group character-variants"><strong>服装与造型</strong>{runtimeDescriptor.production.variants.map((group) => <label key={group.id}><span>{group.name}</span><select value={selectedCharacterState.variants?.[group.id] ?? group.defaultOptionId} onChange={(event) => void selectCharacterState({ variants: { ...(selectedCharacterState.variants ?? {}), [group.id]: event.target.value }, ...(selectedCharacterState.props ? { props: selectedCharacterState.props } : {}) })}>{group.options.map((option) => <option value={option.id} key={option.id}>{option.name}</option>)}</select></label>)}</div><div className="action-group character-props"><strong>道具</strong>{runtimeDescriptor.production.props.map((prop) => { const selected = selectedCharacterState.props?.includes(prop.id) ?? prop.defaultEnabled ?? false; return <label key={prop.id}><input type="checkbox" checked={selected} onChange={(event) => { const current = new Set(selectedCharacterState.props ?? runtimeDescriptor.production!.props.filter((value) => value.defaultEnabled).map((value) => value.id)); event.target.checked ? current.add(prop.id) : current.delete(prop.id); void selectCharacterState({ ...(selectedCharacterState.variants ? { variants: selectedCharacterState.variants } : {}), props: [...current] }); }} />{prop.name}</label>; })}</div></>}
         {Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) && <p className="hotkey-warning">部分系统快捷键已被其它软件占用；面板按钮仍可正常使用。</p>}
       </aside>}
       {showRecordingSettings && !recordingPerformance && <aside className="recording-panel" aria-label="视频录制设置">
@@ -552,6 +598,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
         <label className="recording-checkbox recording-data-option"><input type="checkbox" checked={recordingSettings.includeMotionData} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeMotionData: event.target.checked }))} /><span><strong>同时保存动作数据</strong><small>用于在同一项目版本上重放鼠标跟随、面捕、口型、表情、动作和外部控制；不包含摄像头原片或声音。</small></span></label>
         <p>视频按所选尺寸等比居中保存为 WebM，不拉伸角色。动作数据是可选的独立 JSON，普通录制无需开启。</p>
         <button className="recording-start with-icon" disabled={recordingInput || replayingInput} onClick={() => void startConfiguredPerformanceRecording()}><Video aria-hidden="true" />开始录制视频</button>
+        <section className="spout-output"><strong>Spout2 共享纹理</strong><p>使用上面的宽高与帧率，通过 D3D11 共享透明画面；OBS、TouchDesigner 等软件会看到发送器名称。</p><button className={`with-icon ${spoutStatus?.active ? "is-active" : ""}`} disabled={spoutStatus?.supported === false} onClick={() => void toggleSpoutOutput()}><RadioTower aria-hidden="true" />{spoutStatus?.active ? "停止 Spout2 输出" : "开始 Spout2 输出"}</button>{spoutStatus?.active && <small>{spoutStatus.senderName} · {spoutStatus.width}×{spoutStatus.height} · {spoutStatus.fps} FPS · 已发送 {spoutStatus.frames ?? 0} 帧{spoutStatus.droppedFrames ? ` · 丢弃 ${spoutStatus.droppedFrames} 帧` : ""}</small>}{spoutStatus?.supported === false && <small>{spoutStatus.message}</small>}</section>
         <details className="recording-advanced">
           <summary><ChevronRight aria-hidden="true" />动作数据工具</summary>
           <p>单独记录或回放动作数据，适合修改角色后做同输入对比和排查问题。回放时实时来源会暂时隔离。</p>
@@ -559,6 +606,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
             <button className={`with-icon ${recordingInput ? "is-recording" : ""}`} disabled={replayingInput} onClick={() => void toggleInputRecording()}>{recordingInput ? <Square aria-hidden="true" /> : <FileJson2 aria-hidden="true" />}{recordingInput ? "停止并保存动作数据" : "单独录制动作数据"}</button>
             <button className={`with-icon ${replayingInput ? "is-active" : ""}`} disabled={recordingInput} onClick={() => void toggleInputReplay()}><Repeat2 aria-hidden="true" />{replayingInput ? "停止动作数据回放" : "回放动作数据"}</button>
           </div>
+          <section className="take-library"><header><strong>Take 库</strong><span><button onClick={() => void importTake()}>导入</button><button onClick={() => void refreshTakes()}>刷新</button></span></header>{takes.length === 0 ? <p>尚未导入 Take。原始动作会话和每个编辑版都会独立保留。</p> : takes.map((take) => <article key={take.id}><div><strong>{take.name}</strong><small>{formatDuration(take.durationMs)} · {take.events} 个事件{take.parentTakeId ? " · 编辑版" : ""}</small></div><span><button onClick={() => { void window.puppetloom.replayTake(take.id).then(() => setReplayingInput(true)).catch((cause) => setSessionMessage({ text: messageOf(cause) })); }}>回放</button><button onClick={() => setTakeEdit({ id: take.id, startSeconds: 0, endSeconds: take.durationMs / 1000, speed: 1, smoothWindow: 1 })}>编辑</button></span></article>)}{takeEdit && <div className="take-editor"><strong>创建非破坏性编辑版</strong><label>开始（秒）<input type="number" min="0" step="0.1" value={takeEdit.startSeconds} onChange={(event) => setTakeEdit({ ...takeEdit, startSeconds: Number(event.target.value) })} /></label><label>结束（秒）<input type="number" min="0.1" step="0.1" value={takeEdit.endSeconds} onChange={(event) => setTakeEdit({ ...takeEdit, endSeconds: Number(event.target.value) })} /></label><label>速度<select value={takeEdit.speed} onChange={(event) => setTakeEdit({ ...takeEdit, speed: Number(event.target.value) })}><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><label>平滑窗口<input type="number" min="1" max="120" step="1" value={takeEdit.smoothWindow} onChange={(event) => setTakeEdit({ ...takeEdit, smoothWindow: Number(event.target.value) })} /></label><span><button onClick={() => setTakeEdit(undefined)}>取消</button><button className="primary" onClick={() => void saveTakeEdit()}>保存新版本</button></span></div>}</section>
         </details>
       </aside>}
       {recordingPreview && <aside className="recording-preview" aria-label="视频录制预览"><div><strong>刚刚保存的视频</strong><button aria-label="关闭视频录制预览" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="视频录制预览" controls src={recordingPreview.url} />{recordingPreview.note && <p>{recordingPreview.note}</p>}<button className="with-icon" onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}><FolderOpen aria-hidden="true" />在文件夹中显示</button></aside>}
@@ -577,6 +625,7 @@ function Viewer({ projectDirectory, revision }: { projectDirectory: string; revi
       </nav>
       {state.clickThrough && <div className="shortcut-hint">{capabilities.hotkeys["CommandOrControl+Shift+P"] ? "Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被占用；请从创建页的远程控制关闭鼠标穿透"}</div>}
       <div className="viewer-status-stack">
+      {spoutStatus?.active && <div className="spout-operation" role="status"><RadioTower aria-hidden="true" /><strong>Spout2 输出中</strong><small>{spoutStatus.senderName} · {spoutStatus.width}×{spoutStatus.height}@{spoutStatus.fps}</small></div>}
       {recordingClock && <div className="recording-operation" role="timer" aria-live="off"><span className="recording-dot" aria-hidden="true" /><strong>{recordingClock.kind === "video" ? "视频录制中" : "动作数据录制中"}</strong><time>{formatDuration(recordingElapsedMs)}</time>{recordingClock.targetDurationMs !== undefined && <small>剩余 {formatDuration(Math.max(0, recordingClock.targetDurationMs - recordingElapsedMs))}</small>}</div>}
       {recordingFinalizing && <div className="recording-operation is-finalizing" role="status"><strong>正在完成视频文件…</strong><small>正在写入最后的数据并准备预览，请勿关闭窗口。</small></div>}
       {replayingInput && <div className="replay-operation" role="status"><Repeat2 aria-hidden="true" /><strong>正在回放动作数据</strong><small>实时输入已暂时隔离</small></div>}
@@ -645,6 +694,7 @@ function Report({ report }: { report: BuildReport }): React.JSX.Element {
 }
 
 function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): React.JSX.Element {
+  const [productionSection, setProductionSection] = useState<"library" | "source">();
   const [input, setInput] = useState("");
   const [reference, setReference] = useState("");
   const [output, setOutput] = useState("");
@@ -661,6 +711,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
   const [error, setError] = useState("");
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [creatorCapabilities, setCreatorCapabilities] = useState<ViewerCapabilities>({ hotkeys: {} });
+  const [exportBusy, setExportBusy] = useState(false);
   const inspectionGeneration = useRef(0);
   const createOperationId = useRef<string | undefined>(undefined);
 
@@ -749,6 +800,17 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
     onEdit(directory);
   }
 
+  async function exportProject(format: "portable" | "web" | "cubism"): Promise<void> {
+    if (!projectDirectory) return;
+    setExportBusy(true); setError("");
+    try {
+      const result = await window.puppetloom.exportProject(projectDirectory, format);
+      const target = result?.outputDirectory ?? result?.output;
+      if (target) { await window.puppetloom.revealPath(target); }
+    } catch (cause) { setError(`导出失败：${messageOf(cause)}`); }
+    finally { setExportBusy(false); }
+  }
+
   function openRecent(directory: string): void {
     setError("");
     onEdit(directory);
@@ -776,9 +838,9 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
           <div className="mark" aria-hidden="true"><Sparkles /></div>
           <div><span className="creator-eyebrow">角色工作台</span><h1>创建角色项目</h1><p>准备分层素材，PuppetLoom 会完成预检、绑定和项目初始化。</p></div>
         </div>
-        <button className="secondary open-project with-icon" onClick={() => void openExisting()}><FolderOpen aria-hidden="true" />打开已有项目</button>
+        <div className="creator-header-actions"><button className="secondary with-icon" onClick={() => setProductionSection("source")}><FileImage aria-hidden="true" />素材准备</button><button className="secondary with-icon" onClick={() => setProductionSection("library")}><FolderKanban aria-hidden="true" />项目体检</button><button className="secondary open-project with-icon" onClick={() => void openExisting()}><FolderOpen aria-hidden="true" />打开已有项目</button></div>
       </header>
-      <div className="workflow">
+      {productionSection ? <ProductionCenter initialSection={productionSection} onClose={() => setProductionSection(undefined)} onEdit={onEdit} /> : <div className="workflow">
         <section className="inputs">
           <div className="section-title"><FileImage aria-hidden="true" /><div><h2>角色素材</h2><p>选择源文件并指定项目位置</p></div></div>
           <DropField label="分层 PSD" value={input} accept="\\.psd$" icon={<FileImage />} disabled={busy} onPick={() => choose("psd")} onDrop={setInput} onClear={() => setInput("")} onReject={() => setError("这里只能放入 .psd 文件。 ")} />
@@ -816,6 +878,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
               <p>项目已写入：<br/><code>{projectDirectory}</code></p><div className="path-actions"><button className="with-icon" onClick={() => void window.puppetloom.revealPath(projectDirectory)}><FolderOpen aria-hidden="true" />在文件夹中显示</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(projectDirectory)}><ClipboardCopy aria-hidden="true" />复制路径</button></div>
               <button className="primary with-icon" onClick={() => onEdit(projectDirectory)}><ExternalLink aria-hidden="true" />打开绑定与校准编辑器</button>
               <button className="primary with-icon" onClick={() => void launch()}><Play aria-hidden="true" />打开透明角色窗口</button>
+              <details className="export-center"><summary><FolderOutput aria-hidden="true" />导出中心</summary><p>导出不会覆盖现有目录。视频与 Take 在角色窗口中管理。</p><div><button disabled={exportBusy} onClick={() => void exportProject("portable")}>可移植项目</button><button disabled={exportBusy} onClick={() => void exportProject("web")}>Web / OBS</button><button disabled={exportBusy} onClick={() => void exportProject("cubism")}>Cubism 交接包</button></div></details>
               {viewerId !== undefined && <div className="remote-controls">
                 <button className="with-icon" onClick={() => void controlRemote("pause")}><Pause aria-hidden="true" />暂停 / 继续</button>
                 <button className="with-icon" disabled={creatorCapabilities.hotkeys["CommandOrControl+Shift+P"] === false} title={creatorCapabilities.hotkeys["CommandOrControl+Shift+P"] === false ? "恢复快捷键被占用，已停用鼠标穿透" : "切换鼠标穿透"} onClick={() => void controlRemote("click-through")}><PointerOff aria-hidden="true" />鼠标穿透</button>
@@ -844,7 +907,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
               <span>创建或打开项目后，会在这里快速进入。</span>
             </div>}
         </section>
-      </div>
+      </div>}
     </main>
   );
 }
@@ -855,7 +918,7 @@ export function App(): React.JSX.Element {
   const revisionValue = params.get("revision");
   const revision = revisionValue !== null && Number.isInteger(Number(revisionValue)) && Number(revisionValue) >= 0 ? Number(revisionValue) : undefined;
   const [editorProject, setEditorProject] = useState(params.get("editor") === "1" && project ? project : "");
-  if (params.get("viewer") === "1" && project) return <Viewer projectDirectory={project} {...(revision !== undefined ? { revision } : {})} />;
+  if (params.get("viewer") === "1" && project) return <Viewer projectDirectory={project} output={params.get("output") === "spout"} {...(revision !== undefined ? { revision } : {})} />;
   const editing = Boolean(editorProject);
   return (
     <div className={`desktop-window ${editing ? "is-editor" : "is-creator"}`}>

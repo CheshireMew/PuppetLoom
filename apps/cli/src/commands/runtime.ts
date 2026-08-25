@@ -13,6 +13,19 @@ import {
 import type { Command } from "commander";
 import { assignment, assignments, finiteOption, positiveInteger, print, run, sendRuntimeControl } from "../cli-support.js";
 
+function variantAssignments(values: string[] | undefined): Record<string, string> | undefined {
+  if (!values?.length) return undefined;
+  const result: Record<string, string> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    const group = separator > 0 ? value.slice(0, separator).trim() : "";
+    const option = separator > 0 ? value.slice(separator + 1).trim() : "";
+    if (!group || !option) throw new PuppetLoomError("INVALID_INPUT", `variant 必须使用 group=option 格式：${value}`);
+    result[group] = option;
+  }
+  return result;
+}
+
 export function registerRuntimeCommands(program: Command): void {
   const runtime = program.command("runtime").description("检查并实时控制已打开的角色窗口，供外部 Agent、输入设备和自动化脚本调用");
 
@@ -40,7 +53,29 @@ export function registerRuntimeCommands(program: Command): void {
     .option("--gaze-y <value>", "视线上下，-1 到 1")
     .option("--breath <value>", "呼吸，-1 到 1")
     .option("--blink <value>", "闭眼，0 到 1")
+    .option("--blink-left <value>", "左眼闭合，0 到 1")
+    .option("--blink-right <value>", "右眼闭合，0 到 1")
+    .option("--brow-left <value>", "左眉，-1 到 1")
+    .option("--brow-right <value>", "右眉，-1 到 1")
+    .option("--smile <value>", "微笑，0 到 1")
+    .option("--cheek-puff <value>", "鼓腮，0 到 1")
     .option("--mouth-open <value>", "张嘴，0 到 1")
+    .option("--mouth-a <value>", "A 口型，0 到 1")
+    .option("--mouth-i <value>", "I 口型，0 到 1")
+    .option("--mouth-u <value>", "U 口型，0 到 1")
+    .option("--mouth-e <value>", "E 口型，0 到 1")
+    .option("--mouth-o <value>", "O 口型，0 到 1")
+    .option("--arm-left <value>", "左臂抬起，0 到 1")
+    .option("--arm-right <value>", "右臂抬起，0 到 1")
+    .option("--hand-left-x <value>", "左手横向，-1 到 1")
+    .option("--hand-left-y <value>", "左手纵向，-1 到 1")
+    .option("--hand-right-x <value>", "右手横向，-1 到 1")
+    .option("--hand-right-y <value>", "右手纵向，-1 到 1")
+    .option("--hand-left-open <value>", "左手张开，0 到 1")
+    .option("--hand-right-open <value>", "右手张开，0 到 1")
+    .option("--preset <id>", "状态预设 ID")
+    .option("--variant <group=option>", "换装选择，可重复", assignment, [])
+    .option("--prop <id>", "本次启用的道具 ID，可重复；提供后按完整集合处理", assignment, [])
     .option("--parameter <id=value>", "模型参数，可重复", assignment, [])
     .option("--expression <id=value>", "表情强度，可重复", assignment, [])
     .option("--priority <value>", "优先级 0 到 100；高优先级后混合", "50")
@@ -50,7 +85,10 @@ export function registerRuntimeCommands(program: Command): void {
     .option("--json", "输出 JSON")
     .action(async (options: {
       viewer: string; source: string; headYaw?: string; headPitch?: string; headRoll?: string; bodySway?: string; bodyPitch?: string; bodyRoll?: string;
-      gazeX?: string; gazeY?: string; breath?: string; blink?: string; mouthOpen?: string; parameter?: string[]; expression?: string[];
+      gazeX?: string; gazeY?: string; breath?: string; blink?: string; blinkLeft?: string; blinkRight?: string; browLeft?: string; browRight?: string;
+      smile?: string; cheekPuff?: string; mouthOpen?: string; mouthA?: string; mouthI?: string; mouthU?: string; mouthE?: string; mouthO?: string;
+      armLeft?: string; armRight?: string; handLeftX?: string; handLeftY?: string; handRightX?: string; handRightY?: string; handLeftOpen?: string; handRightOpen?: string;
+      preset?: string; variant?: string[]; prop?: string[]; parameter?: string[]; expression?: string[];
       priority: string; blend: string; ttl?: string; url?: string; json?: boolean;
     }) => {
       await run(async () => {
@@ -65,10 +103,33 @@ export function registerRuntimeCommands(program: Command): void {
           gazeY: finiteOption(options.gazeY, "gaze-y", -1, 1),
           breath: finiteOption(options.breath, "breath", -1, 1),
           blink: finiteOption(options.blink, "blink", 0, 1),
-          mouthOpen: finiteOption(options.mouthOpen, "mouth-open", 0, 1)
+          blinkLeft: finiteOption(options.blinkLeft, "blink-left", 0, 1),
+          blinkRight: finiteOption(options.blinkRight, "blink-right", 0, 1),
+          browLeft: finiteOption(options.browLeft, "brow-left", -1, 1),
+          browRight: finiteOption(options.browRight, "brow-right", -1, 1),
+          smile: finiteOption(options.smile, "smile", 0, 1),
+          cheekPuff: finiteOption(options.cheekPuff, "cheek-puff", 0, 1),
+          mouthOpen: finiteOption(options.mouthOpen, "mouth-open", 0, 1),
+          mouthA: finiteOption(options.mouthA, "mouth-a", 0, 1),
+          mouthI: finiteOption(options.mouthI, "mouth-i", 0, 1),
+          mouthU: finiteOption(options.mouthU, "mouth-u", 0, 1),
+          mouthE: finiteOption(options.mouthE, "mouth-e", 0, 1),
+          mouthO: finiteOption(options.mouthO, "mouth-o", 0, 1),
+          armLeft: finiteOption(options.armLeft, "arm-left", 0, 1),
+          armRight: finiteOption(options.armRight, "arm-right", 0, 1),
+          handLeftX: finiteOption(options.handLeftX, "hand-left-x", -1, 1),
+          handLeftY: finiteOption(options.handLeftY, "hand-left-y", -1, 1),
+          handRightX: finiteOption(options.handRightX, "hand-right-x", -1, 1),
+          handRightY: finiteOption(options.handRightY, "hand-right-y", -1, 1),
+          handLeftOpen: finiteOption(options.handLeftOpen, "hand-left-open", 0, 1),
+          handRightOpen: finiteOption(options.handRightOpen, "hand-right-open", 0, 1)
         }).filter((entry): entry is [string, number] => entry[1] !== undefined)) as RuntimeMotionInput;
         const parameters = assignments(options.parameter, "parameter");
         const expressions = assignments(options.expression, "expression");
+        const variants = variantAssignments(options.variant);
+        const characterState = options.preset || variants || options.prop?.length
+          ? { ...(options.preset ? { presetId: options.preset } : {}), ...(variants ? { variants } : {}), ...(options.prop?.length ? { props: [...new Set(options.prop)] } : {}) }
+          : undefined;
         const request = parseRuntimeControlRequest({
           version: 1,
           requestId: randomUUID(),
@@ -82,6 +143,7 @@ export function registerRuntimeCommands(program: Command): void {
             ...(Object.keys(motion).length ? { motion } : {}),
             ...(parameters ? { parameters } : {}),
             ...(expressions ? { expressions } : {})
+            , ...(characterState ? { characterState } : {})
           }
         });
         print(await sendRuntimeControl(request, options.url), options);

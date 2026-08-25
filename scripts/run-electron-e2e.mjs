@@ -238,8 +238,8 @@ try {
     const state = await window.puppetloom.windowShellState();
     return !state.minimized && state.contentBounds.width >= 1300 && state.contentBounds.height >= 800;
   });
-  const editorWindowSize = await controlWindow.evaluate((window) => window.getSize());
-  if (editorWindowSize[0] < 1300 || editorWindowSize[1] < 800) throw new Error(`编辑器窗口没有扩展到可操作尺寸：${JSON.stringify(editorWindowSize)}`);
+  const editorContentSize = await controlWindow.evaluate((window) => window.getContentSize());
+  if (editorContentSize[0] < 1300 || editorContentSize[1] < 800) throw new Error(`编辑器窗口没有扩展到可操作尺寸：${JSON.stringify(editorContentSize)}`);
   const editorShell = await control.evaluate(() => window.puppetloom.windowShellState());
   assertIntegratedShell(editorShell, "编辑器");
   await control.waitForFunction(() => {
@@ -317,8 +317,8 @@ try {
   if (!compactLayout.shell || compactLayout.shell.scrollWidth > compactLayout.shell.clientWidth || compactLayout.panels.length !== 3 || compactLayout.panels.some((panel) => panel.left < -1 || panel.right > compactLayout.viewport.width + 1) || !compactLayout.lastHeaderButton || compactLayout.lastHeaderButton.right > compactLayout.viewport.width + 1) {
     throw new Error(`紧凑窗口布局发生横向裁切：${JSON.stringify(compactLayout)}`);
   }
-  await controlWindow.evaluate((window, size) => window.setSize(size[0], size[1]), editorWindowSize);
-  await control.waitForFunction((size) => window.innerWidth === size[0] && window.innerHeight === size[1], editorWindowSize);
+  await controlWindow.evaluate((window, size) => window.setContentSize(size[0], size[1]), editorContentSize);
+  await control.waitForFunction((size) => window.innerWidth === size[0] && window.innerHeight === size[1], editorContentSize);
   const zoomAnchor = {
     x: stageBeforeNavigation.x + stageBeforeNavigation.width * 0.3,
     y: stageBeforeNavigation.y + stageBeforeNavigation.height * 0.36

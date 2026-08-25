@@ -1,0 +1,26 @@
+{
+  "Name": "PuppetLoom Runtime Control",
+  "Version": "1.0.0",
+  "Author": "PuppetLoom contributors",
+  "Description": "Send a reviewed motion, expression, behavior or character-state payload to PuppetLoom Runtime Adapter Host.",
+  "Category": "PuppetLoom",
+  "CategoryIcon": "images/category",
+  "Icon": "images/plugin",
+  "CodePath": "plugin.html",
+  "PropertyInspectorPath": "inspector.html",
+  "SDKVersion": 2,
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.puppetloom.runtime.control",
+      "Name": "Runtime Control",
+      "Tooltip": "Send a JSON control payload to PuppetLoom",
+      "Icon": "images/action",
+      "States": [
+        { "Image": "images/action", "TitleAlignment": "middle", "FontSize": "11" }
+      ]
+    }
+  ]
+}

@@ -95,6 +95,11 @@ contextBridge.exposeInMainWorld("puppetloom", {
     return () => ipcRenderer.removeListener("project:create-progress", handler);
   },
   recentProjects: () => ipcRenderer.invoke("project:recent"),
+  inspectProjectHealth: (projectDirectory: string) => ipcRenderer.invoke("production:project-health", projectDirectory),
+  scanProjectLibrary: (root: string, maxDepth?: number, maximumProjects?: number) => ipcRenderer.invoke("production:project-library", root, maxDepth, maximumProjects),
+  prepareSourceTask: (request: unknown) => ipcRenderer.invoke("production:source-prepare", request),
+  reviewSourceCandidate: (task: string, psd: string) => ipcRenderer.invoke("production:source-review", task, psd),
+  finalizeSourceReview: (task: string, review: number, decision: string, note: string) => ipcRenderer.invoke("production:source-finalize", task, review, decision, note),
   readProject: (projectDirectory: string, revision?: number) => ipcRenderer.invoke("project:read", projectDirectory, revision),
   readEditorWorkspace: (projectDirectory: string) => ipcRenderer.invoke("editor:read", projectDirectory),
   generateArtMeshes: (projectDirectory: string, layerIds: string[]) => ipcRenderer.invoke("editor:generate-art-meshes", projectDirectory, layerIds),
@@ -135,6 +140,12 @@ contextBridge.exposeInMainWorld("puppetloom", {
   viewerCapabilities: () => ipcRenderer.invoke("viewer:capabilities"),
   revealPath: (path: string) => ipcRenderer.invoke("system:reveal-path", path),
   copyText: (text: string) => ipcRenderer.invoke("system:copy-text", text),
+  environmentDoctor: () => ipcRenderer.invoke("system:environment-doctor"),
+  updateCheck: () => ipcRenderer.invoke("system:update-check"),
+  updateDownload: () => ipcRenderer.invoke("system:update-download"),
+  updateInstall: (installer: string) => ipcRenderer.invoke("system:update-install", installer),
+  exportProject: (projectDirectory: string, format: string) => ipcRenderer.invoke("system:export-project", projectDirectory, format),
+  spoutOutput: (action: "status" | "start" | "stop", options?: unknown) => ipcRenderer.invoke("viewer:spout-output", action, options),
   controlViewer: (id: number, action: string) => ipcRenderer.invoke("viewer:control", id, action),
   viewerAction: (action: string) => ipcRenderer.invoke("viewer:self-control", action),
   viewerDrag: (action: "start" | "move" | "end", point?: { x: number; y: number }) => ipcRenderer.send("viewer:drag", action, point),
@@ -147,6 +158,10 @@ contextBridge.exposeInMainWorld("puppetloom", {
   triggerRuntimeTarget: (target: unknown) => ipcRenderer.invoke("viewer:runtime-trigger", target),
   inputRecording: (action: "start" | "stop") => ipcRenderer.invoke("viewer:input-recording", action),
   inputReplay: (action: "start" | "stop") => ipcRenderer.invoke("viewer:input-replay", action),
+  listTakes: () => ipcRenderer.invoke("viewer:take-list"),
+  importTake: (options?: unknown) => ipcRenderer.invoke("viewer:take-import", options),
+  editTake: (takeId: string, operations: unknown) => ipcRenderer.invoke("viewer:take-edit", takeId, operations),
+  replayTake: (takeId: string, speed?: number, loop?: boolean) => ipcRenderer.invoke("viewer:take-replay", takeId, speed, loop),
   onRuntimeControl: (listener: (snapshot: unknown) => void) => {
     const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);
     ipcRenderer.on("viewer:runtime-control-changed", handler);

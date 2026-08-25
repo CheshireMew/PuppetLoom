@@ -248,7 +248,7 @@ export class RuntimeControlService {
     const events = this.store.snapshot(viewerId, nowMs).sources.flatMap((source): RuntimeInputSessionEvent[] => {
       const ttlMs = source.expiresAtMs === undefined ? undefined : Math.max(50, source.expiresAtMs - nowMs);
       const baseline: RuntimeInputSessionEvent[] = [];
-      if (source.motion || source.parameters || source.expressions) baseline.push({
+      if (source.motion || source.parameters || source.expressions || source.characterState) baseline.push({
         atMs: 0,
         op: "set",
         source: {
@@ -258,7 +258,8 @@ export class RuntimeControlService {
           ...(ttlMs === undefined ? {} : { ttlMs }),
           ...(source.motion ? { motion: structuredClone(source.motion) } : {}),
           ...(source.parameters ? { parameters: structuredClone(source.parameters) } : {}),
-          ...(source.expressions ? { expressions: structuredClone(source.expressions) } : {})
+          ...(source.expressions ? { expressions: structuredClone(source.expressions) } : {}),
+          ...(source.characterState ? { characterState: structuredClone(source.characterState) } : {})
         }
       });
       if (source.behavior) baseline.push({

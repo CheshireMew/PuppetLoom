@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FaceInputMapper, MicrophoneInputMapper, type FacePoint } from "../apps/desktop/src/runtime-input.js";
+import { FaceInputMapper, MicrophoneInputMapper, MicrophoneVisemeMapper, UpperBodyInputMapper, type FacePoint } from "../apps/desktop/src/runtime-input.js";
 
 function face(overrides: { noseX?: number; noseY?: number; roll?: number; gazeX?: number } = {}): FacePoint[] {
   const points = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.5 }));
@@ -90,6 +90,25 @@ describe("desktop runtime input mapping", () => {
       blendshapes: { eyeBlinkLeft: 0.95, eyeBlinkRight: 0.14 }
     }, 66 + index * 33);
     expect(motion!.blink).toBe(0);
+    expect(motion!.blinkLeft).toBeGreaterThan(0.9);
+    expect(motion!.blinkRight).toBeLessThan(0.05);
+  });
+
+  it("maps brows, smile, cheeks and vowel groups without discarding legacy mouth-open", () => {
+    const mapper = new FaceInputMapper(1);
+    mapper.sample({ landmarks: face(), blendshapes: {} }, 0);
+    let motion;
+    for (let index = 0; index < 8; index += 1) motion = mapper.sample({
+      landmarks: face(),
+      blendshapes: { browInnerUp: 0.8, browDownLeft: 0.1, browDownRight: 0.25, mouthSmileLeft: 0.7, mouthSmileRight: 0.8, cheekPuff: 0.6, jawOpen: 0.55, mouthFunnel: 0.7, mouthPucker: 0.65 }
+    }, 33 + index * 33);
+    expect(motion!.browLeft).toBeGreaterThan(0.4);
+    expect(motion!.browRight).toBeGreaterThan(0.25);
+    expect(motion!.smile).toBeGreaterThan(0.65);
+    expect(motion!.cheekPuff).toBeGreaterThan(0.5);
+    expect(motion!.mouthOpen).toBeGreaterThan(0.45);
+    expect(motion!.mouthU).toBeGreaterThan(0.5);
+    expect(motion!.mouthO).toBeGreaterThan(0.4);
   });
 
   it("drops missing faces so TTL fallback can restore autonomous motion", () => {
@@ -125,5 +144,36 @@ describe("desktop runtime input mapping", () => {
     const opened = Array.from({ length: 5 }, () => mapper.sample(loud)).at(-1)!;
     expect(opened).toBeGreaterThan(0.7);
     expect(mapper.sample(silent)).toBeGreaterThan(0.2);
+  });
+
+  it("extracts deterministic local viseme weights from microphone spectrum", () => {
+    const mapper = new MicrophoneVisemeMapper();
+    const loud = Float32Array.from({ length: 1024 }, (_, index) => index % 2 ? 0.12 : -0.12);
+    const spectrum = new Float32Array(512).fill(-100);
+    spectrum.fill(-12, 5, 30);
+    let motion;
+    for (let index = 0; index < 6; index += 1) motion = mapper.sample(loud, spectrum, 48_000);
+    expect(motion!.mouthOpen).toBeGreaterThan(0.7);
+    expect(motion!.mouthU).toBeGreaterThan(0.5);
+    expect(motion!.mouthO).toBeGreaterThan(0.4);
+  });
+
+  it("maps pose and hand landmarks to calibrated upper-body channels", () => {
+    const mapper = new UpperBodyInputMapper(1);
+    const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5 }));
+    pose[11] = { x: 0.4, y: 0.45 };
+    pose[12] = { x: 0.6, y: 0.45 };
+    pose[15] = { x: 0.3, y: 0.25 };
+    pose[16] = { x: 0.7, y: 0.3 };
+    const openHand = Array.from({ length: 21 }, () => ({ x: 0.3, y: 0.15 }));
+    openHand[0] = { x: 0.3, y: 0.25 };
+    openHand[9] = { x: 0.3, y: 0.2 };
+    for (const [index, x] of [[4, 0.15], [8, 0.22], [12, 0.3], [16, 0.38], [20, 0.45]] as const) openHand[index] = { x, y: 0.02 };
+    mapper.sample({ poseLandmarks: pose });
+    let motion;
+    for (let index = 0; index < 8; index += 1) motion = mapper.sample({ poseLandmarks: pose, hands: [{ side: "left", landmarks: openHand }] });
+    expect(motion!.armLeft).toBeGreaterThan(0.8);
+    expect(motion!.armRight).toBeGreaterThan(0.6);
+    expect(motion!.handLeftOpen).toBeGreaterThan(0.2);
   });
 });

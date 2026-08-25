@@ -26,7 +26,26 @@ const semanticFields: Record<MotionParameterSemantic, keyof MotionState> = {
   "gaze-y": "gazeY",
   breath: "breath",
   blink: "blink",
+  "blink-left": "blinkLeft",
+  "blink-right": "blinkRight",
+  "brow-left": "browLeft",
+  "brow-right": "browRight",
+  smile: "smile",
+  "cheek-puff": "cheekPuff",
   "mouth-open": "mouthOpen",
+  "mouth-a": "mouthA",
+  "mouth-i": "mouthI",
+  "mouth-u": "mouthU",
+  "mouth-e": "mouthE",
+  "mouth-o": "mouthO",
+  "arm-left": "armLeft",
+  "arm-right": "armRight",
+  "hand-left-x": "handLeftX",
+  "hand-left-y": "handLeftY",
+  "hand-right-x": "handRightX",
+  "hand-right-y": "handRightY",
+  "hand-left-open": "handLeftOpen",
+  "hand-right-open": "handRightOpen",
   "ear-x": "earX",
   "ear-y": "earY",
   "tail-x": "tailX",
@@ -45,6 +64,17 @@ const builtInParameters: Array<Pick<ModelParameter, "id" | "name" | "group" | "m
   { id: "param-breath", name: "Breath", group: "Body", min: -1, default: 0, max: 1, semantic: "breath" },
   { id: "param-blink", name: "Blink", group: "Eyes", min: 0, default: 0, max: 1, semantic: "blink" },
   { id: "param-mouth-open", name: "Mouth Open", group: "Mouth", min: 0, default: 0, max: 1, semantic: "mouth-open" }
+  , { id: "param-blink-left", name: "Blink Left", group: "Eyes", min: 0, default: 0, max: 1, semantic: "blink-left" }
+  , { id: "param-blink-right", name: "Blink Right", group: "Eyes", min: 0, default: 0, max: 1, semantic: "blink-right" }
+  , { id: "param-brow-left", name: "Brow Left", group: "Face", min: -1, default: 0, max: 1, semantic: "brow-left" }
+  , { id: "param-brow-right", name: "Brow Right", group: "Face", min: -1, default: 0, max: 1, semantic: "brow-right" }
+  , { id: "param-smile", name: "Smile", group: "Face", min: 0, default: 0, max: 1, semantic: "smile" }
+  , { id: "param-cheek-puff", name: "Cheek Puff", group: "Face", min: 0, default: 0, max: 1, semantic: "cheek-puff" }
+  , { id: "param-mouth-a", name: "Mouth A", group: "Visemes", min: 0, default: 0, max: 1, semantic: "mouth-a" }
+  , { id: "param-mouth-i", name: "Mouth I", group: "Visemes", min: 0, default: 0, max: 1, semantic: "mouth-i" }
+  , { id: "param-mouth-u", name: "Mouth U", group: "Visemes", min: 0, default: 0, max: 1, semantic: "mouth-u" }
+  , { id: "param-mouth-e", name: "Mouth E", group: "Visemes", min: 0, default: 0, max: 1, semantic: "mouth-e" }
+  , { id: "param-mouth-o", name: "Mouth O", group: "Visemes", min: 0, default: 0, max: 1, semantic: "mouth-o" }
 ];
 
 export function createDefaultAuthoringModel(): AuthoringModel {
@@ -137,7 +167,10 @@ export function resolveParameterValues(project: PuppetLoomProject, state: Motion
   const behaviorValues = activeBehaviorValues(project, state);
   for (const parameter of model.parameters) {
     const semanticField = parameter.semantic ? semanticFields[parameter.semantic] : undefined;
-    const semanticValue = semanticField ? state[semanticField] : undefined;
+    const directSemanticValue = semanticField ? state[semanticField] : undefined;
+    const semanticValue = directSemanticValue === undefined && (parameter.semantic === "blink-left" || parameter.semantic === "blink-right")
+      ? state.blink
+      : directSemanticValue;
     const candidate = typeof semanticValue === "number"
         ? semanticValue
         : parameter.default;

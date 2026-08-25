@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isModelBehaviorAvailable, isModelExpressionAvailable, parseRuntimeControlRequest, parseRuntimeControlServiceRequest, parseRuntimeInputSession } from "@puppetloom/core/browser";
 import type { PuppetLoomProject, RuntimeControlSetRequest, RuntimeInputSession, RuntimeViewerDescriptor } from "@puppetloom/core";
+import { editPerformanceTake, exportPortableProject, exportWebRuntime, importPerformanceTake, inspectWindowsEnvironment, listPerformanceTakes, prepareCubismExport, readPerformanceTake } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, protocol, screen, session, shell } from "electron";
 import type { ViewerLaunchOptions, ViewerState, WindowShellAction, WindowShellState } from "./global.js";
@@ -12,8 +13,10 @@ import { ProjectIpcService } from "./project-ipc.js";
 import { PerformanceRecordingService } from "./performance-recording-service.js";
 import { RuntimeControlService } from "./runtime-control-service.js";
 import { RuntimeLogWriter } from "./runtime-log-writer.js";
+import { SpoutOutputService, type SpoutOutputOptions } from "./spout-output-service.js";
 import { runProjectWorker } from "./project-worker-client.js";
 import { visibleWindowBounds, WindowPreferencesStore, type StoredWindowBounds, type ViewerWindowPreference } from "./window-preferences.js";
+import { checkWindowsUpdate, downloadWindowsUpdate, installWindowsUpdate } from "./windows-updater.js";
 
 const electronDirectory = dirname(fileURLToPath(import.meta.url));
 const preload = join(electronDirectory, "preload.cjs");
@@ -26,9 +29,11 @@ const viewerSourceLabels = new Map<number, string>();
 const viewerLookOrigins = new Map<number, { x: number; y: number }>();
 const viewerAspectRatios = new Map<number, number>();
 const viewerWindowDrags = new Map<number, { cursor: { x: number; y: number }; bounds: StoredWindowBounds }>();
+const spoutMirrorSources = new Map<number, number>();
 let runtimeLogPath: string | undefined;
 let runtimeLogWriter: RuntimeLogWriter | undefined;
 let runtimeControlService: RuntimeControlService | undefined;
+let spoutOutputService: SpoutOutputService | undefined;
 let windowPreferences: WindowPreferencesStore;
 const performanceRecordingService = new PerformanceRecordingService();
 const editorWindows = new Map<number, string>();
@@ -58,23 +63,26 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
-function runtimeAssetLocations(): { wasmBaseUrl: string; faceLandmarkerModelUrl: string } {
+function runtimeAssetLocations(): { wasmBaseUrl: string; faceLandmarkerModelUrl: string; poseLandmarkerModelUrl: string; handLandmarkerModelUrl: string } {
   return {
     wasmBaseUrl: "puppetloom-runtime://mediapipe/wasm",
-    faceLandmarkerModelUrl: "puppetloom-runtime://mediapipe/face_landmarker.task"
+    faceLandmarkerModelUrl: "puppetloom-runtime://mediapipe/face_landmarker.task",
+    poseLandmarkerModelUrl: "puppetloom-runtime://mediapipe/pose_landmarker_lite.task",
+    handLandmarkerModelUrl: "puppetloom-runtime://mediapipe/hand_landmarker.task"
   };
 }
 
 function registerRuntimeAssetProtocol(): void {
-  const wasmDirectory = resolve(electronDirectory, "../../../../node_modules/@mediapipe/tasks-vision/wasm");
-  const modelDirectory = process.env.PUPPETLOOM_RUNTIME_ASSET_DIRECTORY ?? join("D:\\Tools", "PuppetLoom", "runtime-assets", "mediapipe");
+  const bundledDirectory = resolve(electronDirectory, "../runtime-assets/mediapipe");
+  const wasmDirectory = app.isPackaged ? join(bundledDirectory, "wasm") : resolve(electronDirectory, "../../../../node_modules/@mediapipe/tasks-vision/wasm");
+  const modelDirectory = process.env.PUPPETLOOM_RUNTIME_ASSET_DIRECTORY ?? (app.isPackaged ? bundledDirectory : join("D:\\Tools", "PuppetLoom", "runtime-assets", "mediapipe"));
   protocol.handle("puppetloom-runtime", (request) => {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const requested = parts.at(-1) ?? "";
     let path: string | undefined;
     if (parts[0] === "wasm" && MEDIAPIPE_WASM_FILES.has(requested)) path = join(wasmDirectory, requested);
-    if (parts.length === 1 && requested === "face_landmarker.task") path = join(modelDirectory, requested);
+    if (parts.length === 1 && ["face_landmarker.task", "pose_landmarker_lite.task", "hand_landmarker.task"].includes(requested)) path = join(modelDirectory, requested);
     if (!path || !existsSync(path)) return new Response("Runtime asset not found", { status: 404 });
     const contentType = requested.endsWith(".wasm") ? "application/wasm" : requested.endsWith(".js") ? "text/javascript; charset=utf-8" : "application/octet-stream";
     return new Response(readFileSync(path), { status: 200, headers: { "content-type": contentType, "cache-control": "public, max-age=31536000, immutable", "access-control-allow-origin": "*" } });
@@ -171,6 +179,21 @@ function publishWindowShellState(window: BrowserWindow): void {
 
 function displayWorkAreas(): StoredWindowBounds[] {
   return screen.getAllDisplays().map((display) => display.workArea);
+}
+
+function fitWindowInsideDisplay(window: BrowserWindow, minimumSize: { width: number; height: number }): StoredWindowBounds {
+  const current = window.getBounds();
+  const fitted = visibleWindowBounds(current, displayWorkAreas(), current, minimumSize);
+  if (current.x !== fitted.x || current.y !== fitted.y || current.width !== fitted.width || current.height !== fitted.height) {
+    const content = window.getContentBounds();
+    window.setContentBounds({
+      x: fitted.x + content.x - current.x,
+      y: fitted.y + content.y - current.y,
+      width: Math.max(1, fitted.width - (current.width - content.width)),
+      height: Math.max(1, fitted.height - (current.height - content.height))
+    }, false);
+  }
+  return window.getBounds();
 }
 
 function persistControlWindow(window: BrowserWindow): void {
@@ -308,7 +331,8 @@ function runtimeDescriptor(windowId: number, projectDirectory: string, project: 
     ...(revision === undefined ? {} : { revision }),
     parameters: project.model.parameters.map(({ id, name, min, default: defaultValue, max, semantic }) => ({ id, name, min, default: defaultValue, max, ...(semantic ? { semantic } : {}) })),
     expressions: project.model.expressions.filter((expression) => isModelExpressionAvailable(project, expression)).map(({ id, name }) => ({ id, name })),
-    behaviors: project.model.behaviors.filter((behavior) => isModelBehaviorAvailable(project, behavior)).map(({ id, name, duration, loop }) => ({ id, name, duration, loop }))
+    behaviors: project.model.behaviors.filter((behavior) => isModelBehaviorAvailable(project, behavior)).map(({ id, name, duration, loop }) => ({ id, name, duration, loop })),
+    ...(project.production ? { production: structuredClone(project.production) } : {})
   };
 }
 
@@ -428,6 +452,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     viewerAspectRatios.delete(window.id);
     viewerWindowDrags.delete(window.id);
     runtimeControlService?.unregisterViewer(window.id);
+    void spoutOutputService?.stop(window.id);
   });
   try {
     await window.loadFile(rendererPage, { query: {
@@ -473,7 +498,8 @@ function createControlWindow(projectDirectory?: string, editor = false): Browser
     title: editor ? "PuppetLoom 编辑器" : "PuppetLoom",
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
   });
-  runtimeLog("control-window-created", { id: window.id, ...bounds, restored: Boolean(preference.bounds), maximized: Boolean(preference.maximized) });
+  const actualBounds = fitWindowInsideDisplay(window, { width: CONTROL_WINDOW_MIN_WIDTH, height: CONTROL_WINDOW_MIN_HEIGHT });
+  runtimeLog("control-window-created", { id: window.id, requestedBounds: bounds, ...actualBounds, restored: Boolean(preference.bounds), maximized: Boolean(preference.maximized) });
   const query = editor && projectDirectory ? { editor: "1", project: resolve(projectDirectory) } : undefined;
   registerControlWindowShell(window);
   if (preference.maximized) window.maximize();
@@ -486,6 +512,9 @@ function createControlWindow(projectDirectory?: string, editor = false): Browser
   window.once("closed", () => {
     editorWindows.delete(window.id);
     editorCloseReady.delete(window.id);
+  });
+  window.webContents.on("did-finish-load", () => {
+    fitWindowInsideDisplay(window, { width: CONTROL_WINDOW_MIN_WIDTH, height: CONTROL_WINDOW_MIN_HEIGHT });
   });
   void window.loadFile(rendererPage, query ? { query } : undefined);
   return window;
@@ -553,6 +582,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     onChange: (viewerId, snapshot) => {
       const viewer = BrowserWindow.fromId(viewerId);
       if (viewer && !viewer.isDestroyed() && !viewer.webContents.isDestroyed()) viewer.webContents.send("viewer:runtime-control-changed", snapshot);
+      for (const [mirrorId, sourceId] of spoutMirrorSources) {
+        if (sourceId !== viewerId) continue;
+        const mirror = BrowserWindow.fromId(mirrorId);
+        if (mirror && !mirror.isDestroyed() && !mirror.webContents.isDestroyed()) mirror.webContents.send("viewer:runtime-control-changed", { ...snapshot, viewerId: mirrorId });
+      }
     },
     onReplayState: (viewerId, state) => {
       const viewer = BrowserWindow.fromId(viewerId);
@@ -560,6 +594,33 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     }
   });
   await runtimeControlService.start();
+  spoutOutputService = new SpoutOutputService({
+    rendererPage,
+    preload,
+    log: runtimeLog,
+    onMirrorCreated: (mirror, sourceViewerId) => {
+      const projectDirectory = viewerProjects.get(sourceViewerId);
+      const project = viewerProjectSnapshots.get(sourceViewerId);
+      if (!projectDirectory || !project) throw new Error("Spout2 来源窗口没有可用项目。");
+      viewerProjects.set(mirror.id, projectDirectory);
+      viewerRevisions.set(mirror.id, viewerRevisions.get(sourceViewerId));
+      viewerProjectSnapshots.set(mirror.id, structuredClone(project));
+      viewerSourceLabels.set(mirror.id, "Spout2 共享纹理输出");
+      viewerAspectRatios.set(mirror.id, project.canvas.width / project.canvas.height);
+      viewerStates.set(mirror.id, { paused: false, alwaysOnTop: false, clickThrough: false, mouseTracking: false, scale: 1 });
+      spoutMirrorSources.set(mirror.id, sourceViewerId);
+    },
+    onMirrorClosed: (mirrorId) => {
+      spoutMirrorSources.delete(mirrorId);
+      viewerStates.delete(mirrorId);
+      viewerProjects.delete(mirrorId);
+      viewerRevisions.delete(mirrorId);
+      viewerProjectSnapshots.delete(mirrorId);
+      viewerSourceLabels.delete(mirrorId);
+      viewerLookOrigins.delete(mirrorId);
+      viewerAspectRatios.delete(mirrorId);
+    }
+  });
   const projectIpc = new ProjectIpcService(applicationProfile);
   projectIpc.register();
   const calibrationIpc = new CalibrationIpcService((directory, project) => projectIpc.rememberProject(directory, project));
@@ -639,6 +700,22 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     clipboard.writeText(value);
     return true;
   });
+  ipcMain.handle("system:environment-doctor", () => inspectWindowsEnvironment(resolve(electronDirectory, "../../../.."), app.isPackaged ? { packaged: true, resourcesPath: process.resourcesPath } : {}));
+  ipcMain.handle("system:update-check", () => checkWindowsUpdate());
+  ipcMain.handle("system:update-download", () => downloadWindowsUpdate());
+  ipcMain.handle("system:update-install", (_event, installer: string) => { installWindowsUpdate(installer); return true; });
+  ipcMain.handle("system:export-project", async (event, projectDirectory: string, format: "portable" | "web" | "cubism") => {
+    const window = ownerWindow(event);
+    const project = viewerProjectSnapshots.get(window?.id ?? -1)
+      ?? await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: resolve(projectDirectory) });
+    const selection = window ? await dialog.showOpenDialog(window, { title: "选择导出位置", properties: ["openDirectory", "createDirectory"] }) : await dialog.showOpenDialog({ title: "选择导出位置", properties: ["openDirectory", "createDirectory"] });
+    const parent = selection.filePaths[0]; if (selection.canceled || !parent) return undefined;
+    const name = project.name.replace(/[<>:"/\\|?*]+/g, "-"); const output = join(parent, `${name}-${format}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+    if (format === "portable") return exportPortableProject({ project: resolve(projectDirectory), output });
+    if (format === "cubism") return prepareCubismExport(resolve(projectDirectory), output);
+    const sdkBundle = app.isPackaged ? resolve(electronDirectory, "../runtime-assets/web/puppetloom-web.js") : resolve(electronDirectory, "../../../../packages/web-runtime/dist/puppetloom-web.js");
+    return exportWebRuntime({ project: resolve(projectDirectory), output, sdkBundle });
+  });
   ipcMain.handle("viewer:control", (_event, id: number, action: string) => {
     const window = BrowserWindow.fromId(id);
     return window ? controlViewer(window, action) : null;
@@ -671,6 +748,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:pointer-target", (event) => {
     const window = ownerWindow(event);
+    if (window && spoutMirrorSources.has(window.id)) return { x: 0, y: 0, strength: 0 };
     if (!window || !stateFor(window).mouseTracking) return { x: 0, y: 0, strength: 0 };
     const cursor = screen.getCursorScreenPoint();
     const bounds = window.getBounds();
@@ -680,34 +758,50 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("viewer:runtime-control", (event) => {
     const window = ownerWindow(event);
     if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口没有运行时控制状态。" );
-    return runtimeControlService.snapshot(window.id);
+    const sourceViewerId = spoutMirrorSources.get(window.id) ?? window.id;
+    const snapshot = runtimeControlService.snapshot(sourceViewerId);
+    return sourceViewerId === window.id ? snapshot : { ...snapshot, viewerId: window.id };
   });
   ipcMain.handle("viewer:runtime-descriptor", (event) => {
     const window = ownerWindow(event);
     if (!window || !runtimeControlService) throw new Error("当前窗口没有运行时能力描述。" );
-    return runtimeControlService.store.inspect().find((viewer) => viewer.id === window.id);
+    const sourceViewerId = spoutMirrorSources.get(window.id) ?? window.id;
+    const descriptor = runtimeControlService.store.inspect().find((viewer) => viewer.id === sourceViewerId);
+    return descriptor && sourceViewerId !== window.id ? { ...descriptor, id: window.id } : descriptor;
   });
   ipcMain.handle("runtime:assets", () => runtimeAssetLocations());
   ipcMain.handle("viewer:runtime-set", (event, source: RuntimeControlSetRequest["source"]) => {
     const window = ownerWindow(event);
     if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口不能接收运行时输入。" );
-    return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "set", viewerId: window.id, source }));
+    return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "set", viewerId: spoutMirrorSources.get(window.id) ?? window.id, source }));
   });
   ipcMain.handle("viewer:runtime-release", (event, sourceId: string) => {
     const window = ownerWindow(event);
     if (!window || !viewerProjects.has(window.id) || !runtimeControlService) return false;
-    return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "release", viewerId: window.id, sourceId }));
+    return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "release", viewerId: spoutMirrorSources.get(window.id) ?? window.id, sourceId }));
   });
   ipcMain.handle("viewer:runtime-trigger", (event, target: { behaviorId?: string; expressionId?: string; durationMs?: number }) => {
     const window = ownerWindow(event);
     if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口不能触发表情或动作。" );
     return runtimeControlService.applyLocal(parseRuntimeControlRequest({
-      version: 1, requestId: randomUUID(), op: "trigger", viewerId: window.id, sourceId: "viewer-action-panel",
+      version: 1, requestId: randomUUID(), op: "trigger", viewerId: spoutMirrorSources.get(window.id) ?? window.id, sourceId: "viewer-action-panel",
       ...(target.behaviorId ? { behaviorId: target.behaviorId } : {}),
       ...(target.expressionId ? { expressionId: target.expressionId } : {}),
       ...(target.durationMs === undefined ? {} : { durationMs: target.durationMs }),
       priority: 80
     }));
+  });
+  ipcMain.handle("viewer:spout-output", async (event, action: "status" | "start" | "stop", options?: SpoutOutputOptions) => {
+    const window = ownerWindow(event);
+    if (!window || spoutMirrorSources.has(window.id) || !spoutOutputService) throw new Error("当前窗口不能管理 Spout2 输出。" );
+    if (action === "status") return spoutOutputService.status(window.id);
+    if (action === "stop") return spoutOutputService.stop(window.id);
+    if (action !== "start") throw new Error(`未知 Spout2 操作：${String(action)}`);
+    const projectDirectory = viewerProjects.get(window.id);
+    const project = viewerProjectSnapshots.get(window.id);
+    if (!projectDirectory || !project) throw new Error("当前窗口没有角色项目。" );
+    const revision = viewerRevisions.get(window.id);
+    return spoutOutputService.start({ sourceViewerId: window.id, projectDirectory, projectName: project.name, ...(revision === undefined ? {} : { revision }), ...(options ? { options } : {}) });
   });
   ipcMain.handle("viewer:input-recording", (event, action: "start" | "stop") => {
     const window = ownerWindow(event);
@@ -740,6 +834,27 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       version: 1, requestId: randomUUID(), op: "replay-start", viewerId: window.id, session: sessionDocument, speed: 1, loop: false
     }));
     return { ...(result as Record<string, unknown>), input: path };
+  });
+  ipcMain.handle("viewer:take-list", (event) => {
+    const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
+    if (!projectDirectory) throw new Error("当前窗口没有角色项目。"); return listPerformanceTakes(projectDirectory);
+  });
+  ipcMain.handle("viewer:take-import", async (event, options?: { name?: string; tags?: string[]; note?: string }) => {
+    const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
+    if (!window || !projectDirectory) throw new Error("当前窗口没有角色项目。");
+    const selection = await dialog.showOpenDialog(window, { title: "导入动作会话为 Take", defaultPath: join(projectDirectory, "reports", "input-sessions"), properties: ["openFile"], filters: [{ name: "PuppetLoom 动作数据", extensions: ["json"] }] });
+    const path = selection.filePaths[0]; if (selection.canceled || !path) return undefined;
+    return importPerformanceTake(projectDirectory, JSON.parse(readFileSync(path, "utf8")) as unknown, options);
+  });
+  ipcMain.handle("viewer:take-edit", (event, takeId: string, operations: import("@puppetloom/core").TakeEditOperations) => {
+    const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
+    if (!projectDirectory) throw new Error("当前窗口没有角色项目。"); return editPerformanceTake(projectDirectory, takeId, operations);
+  });
+  ipcMain.handle("viewer:take-replay", async (event, takeId: string, speed = 1, loop = false) => {
+    const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
+    if (!window || !projectDirectory || !runtimeControlService) throw new Error("当前窗口不能回放 Take。");
+    const take = await readPerformanceTake(projectDirectory, takeId);
+    return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "replay-start", viewerId: window.id, session: take.session, speed, loop }));
   });
   ipcMain.handle("viewer:performance-recording-start", (event, metadata: import("./performance-recording-service.js").PerformanceRecordingMetadata) => {
     const window = ownerWindow(event);
@@ -879,6 +994,7 @@ app.on("before-quit", (event) => {
   runtimeLog("app-before-quit");
   performanceRecordingService.interruptAll("PuppetLoom 在录制结束前退出。" );
   void (async () => {
+    await spoutOutputService?.stopAll();
     await runtimeControlService?.stop();
     runtimeLog("app-will-quit");
     await runtimeLogWriter?.close();
