@@ -87,34 +87,15 @@ function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], 
   if (role === "frontHair") return secondaryAnchors?.frontHairRoot ?? roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.52 });
   if (role === "backHair" || role === "sideHair") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.15 });
   if (role === "ear") {
-    const x = side === "left" ? bounds.x : side === "right" ? bounds.x + bounds.width : bounds.x + bounds.width * 0.5;
-    return roundPoint({ x, y: bounds.y + bounds.height * 0.42 });
+    return roundPoint(rectCenter(bounds));
   }
-  if (role === "headwear" && !secondaryAnchors?.earHingeLeft && !secondaryAnchors?.earHingeRight) {
-    const hanging = bounds.height > bounds.width * 1.15;
-    return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * (hanging ? 0.04 : 0.84) });
-  }
+  if (role === "headwear") return roundPoint(rectCenter(bounds));
   if (role === "tail") return roundPoint({ x: bounds.x + bounds.width * 0.03, y: bounds.y + bounds.height * 0.08 });
   if (role === "topWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.18 });
   if (role === "bottomWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.12 });
   if (role === "arm" || role === "hand") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.08 });
   if (role === "leg" || role === "foot") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.05 });
   return roundPoint(rectCenter(bounds));
-}
-
-function countOpaqueWingPixels(layer: ImportedLayer, hingeX: number, hingeY: number, direction: -1 | 1, faceWidth: number, faceHeight: number): number {
-  let count = 0;
-  const { width, height, data } = layer.pixels;
-  for (let y = 0; y < height; y += 1) {
-    const globalY = layer.bounds.y + y;
-    if (globalY < hingeY - faceHeight * 0.12) continue;
-    for (let x = 0; x < width; x += 1) {
-      const globalX = layer.bounds.x + x;
-      if ((globalX - hingeX) * direction < faceWidth * 0.04) continue;
-      if ((data[(y * width + x) * 4 + 3] ?? 0) > 8) count += 1;
-    }
-  }
-  return count;
 }
 
 function nearestOpaquePoint(
@@ -214,29 +195,19 @@ function frontHairAnchorsFor(layer: ImportedLayer, faceLayer: ImportedLayer | un
 function secondaryAnchorsFor(
   layer: ImportedLayer,
   faceLayer: ImportedLayer | undefined,
-  canvas: ImportedPsd["canvas"],
-  hasSeparateEarLayers: boolean
+  canvas: ImportedPsd["canvas"]
 ): LayerSecondaryAnchors | undefined {
   if (layer.role === "frontHair") return frontHairAnchorsFor(layer, faceLayer, canvas);
-  if (layer.role !== "headwear" || !faceLayer || hasSeparateEarLayers) return undefined;
-  const hingeLeftX = faceLayer.bounds.x + faceLayer.bounds.width * 0.03;
-  const hingeRightX = faceLayer.bounds.x + faceLayer.bounds.width * 0.97;
-  const hingeY = faceLayer.bounds.y + faceLayer.bounds.height * 0.5;
-  const leftPixels = countOpaqueWingPixels(layer, hingeLeftX, hingeY, -1, faceLayer.bounds.width, faceLayer.bounds.height);
-  const rightPixels = countOpaqueWingPixels(layer, hingeRightX, hingeY, 1, faceLayer.bounds.width, faceLayer.bounds.height);
-  const threshold = Math.max(24, Math.round(layer.opaquePixels * 0.006));
-  if (leftPixels < threshold || rightPixels < threshold) return undefined;
-  return {
-    earHingeLeft: roundPoint({ x: hingeLeftX / canvas.width, y: hingeY / canvas.height }),
-    earHingeRight: roundPoint({ x: hingeRightX / canvas.width, y: hingeY / canvas.height })
-  };
+  // Merged ears and decorative headwear cannot be distinguished reliably from
+  // silhouette alone. A formal Agent specification must author such hinges.
+  return undefined;
 }
 
 function weightsFor(role: SemanticRole, level: RigLevel, insideHead: boolean): LayerWeights {
   if (level === "minimal") return { head: 0, body: 0, gaze: 0, physics: 0 };
   if (role === "iris") return { head: 1, body: 0, gaze: level === "semantic" ? 1 : 0, physics: 0 };
   if (hairRoles.has(role)) return { head: 1, body: 0, gaze: 0, physics: level === "semantic" ? (role === "backHair" ? 0.8 : 1) : 0.35 };
-  if (role === "headwear" || role === "ear") return { head: 1, body: 0, gaze: 0, physics: level === "semantic" ? 0.55 : 0.2 };
+  if (role === "headwear" || role === "ear") return { head: 1, body: 0, gaze: 0, physics: 0 };
   if (headRoles.has(role) || (role === "unknown" && insideHead)) return { head: 1, body: 0, gaze: 0, physics: 0 };
   if (role === "neck") return { head: level === "semantic" ? 1 : 0.78, body: 1, gaze: 0, physics: 0 };
   if (role === "tail") return { head: 0, body: 1, gaze: 0, physics: level === "semantic" ? 0.75 : 0.3 };
@@ -374,7 +345,6 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
   const level = suggestedRigLevel(imported.layers);
   const anchors = deriveAnchors(imported);
   const faceLayer = findLayer(imported.layers, "face");
-  const hasSeparateEarLayers = imported.layers.some((layer) => layer.role === "ear");
   const headBoundsPx = rectUnion(imported.layers.filter((layer) => headRoles.has(layer.role)).map((layer) => layer.bounds));
   const headBounds = headBoundsPx ? normalizedRect(headBoundsPx, imported.canvas.width, imported.canvas.height) : undefined;
   const layers: LayerBinding[] = imported.layers.map((layer) => {
@@ -385,7 +355,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
     const weights = weightsFor(layer.role, level, insideHead);
     const parentGroup: LayerBinding["parentGroup"] = weights.head >= 0.5 ? "head" : weights.body > 0 ? "body" : "root";
     const clipLayerId = clipLayerFor(layer, imported.layers);
-    const secondaryAnchors = secondaryAnchorsFor(layer, faceLayer, imported.canvas, hasSeparateEarLayers);
+    const secondaryAnchors = secondaryAnchorsFor(layer, faceLayer, imported.canvas);
     const binding: LayerBinding = {
       id: layer.id,
       sourceName: layer.sourceName,

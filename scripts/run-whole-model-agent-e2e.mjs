@@ -43,6 +43,31 @@ await executeManagedRun({
   const specification = await runCliJson(["agent", "specification", "--project", projectDirectory, "--scope", "whole"]);
   specification.goal = "外部 Agent 已查看真实模型基线；保持原角色观感，整模采用自然、协调、克制的运动";
   for (const part of specification.parts) part.rationale = [`外部 Agent 已检查基线，${part.part} 使用保守起点，执行后必须继续看局部对比和连续帧。`];
+  const pointMap = (layer, value) => Object.fromEntries(layer.mesh.points.map((_, index) => [String(index), value(layer.mesh.points[index], index)]));
+  const releaseFor = (layer) => pointMap(layer, (point, index) => layer.mesh.influences?.physicsRelease?.[index]
+    ?? Math.min(1, Math.hypot(point.x - layer.pivot.x, point.y - layer.pivot.y) / Math.max(1e-6, Math.hypot(layer.bounds.width, layer.bounds.height) * 0.72)));
+  const sensitive = new Set(["frontHair", "backHair", "ears", "headwear", "topCloth", "mouth"]);
+  const anatomyLayers = {};
+  for (const part of specification.parts.filter((candidate) => sensitive.has(candidate.part))) {
+    for (const id of part.layerIds ?? []) {
+      const layer = before.layers.find((candidate) => candidate.id === id);
+      if (!layer) continue;
+      anatomyLayers[id] = part.part === "mouth"
+        ? { mesh: layer.mesh }
+        : {
+            pivot: layer.pivot,
+            ...(part.part === "frontHair" || part.part === "backHair"
+              ? layer.hairStrands?.length ? { hairStrands: layer.hairStrands } : { vertexInfluences: { physicsRelease: releaseFor(layer) } }
+              : { vertexInfluences: { physicsRelease: releaseFor(layer) } }),
+            ...(part.part === "headwear" ? { headwearPerspective: layer.headwearPerspective ?? null } : {})
+          };
+    }
+  }
+  const cage = before.runtime.semanticCage?.points;
+  specification.anatomy = {
+    ...(cage ? { semanticPoints: Object.fromEntries(["eyeLeft", "eyeRight", "nose", "mouthLeft", "mouth", "mouthRight", "chin"].map((id) => [id, cage[id].position])) } : {}),
+    layers: anatomyLayers
+  };
   const specificationPath = artifactRun.path("whole-model-rig-spec.json");
   await writeFile(specificationPath, `${JSON.stringify(specification, null, 2)}\n`, "utf8");
   const plan = await runCliJson(["agent", "plan", "--project", projectDirectory, "--spec", specificationPath]);

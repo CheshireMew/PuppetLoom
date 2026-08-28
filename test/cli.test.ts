@@ -104,7 +104,8 @@ describe("CLI contract", () => {
       kind: string;
       baseRevision: number;
       goal: string;
-      parts: Array<{ part: string; rationale: string[]; intent: { amplitude: number; deformationScale: number } }>;
+      anatomy: Record<string, unknown>;
+      parts: Array<{ part: string; layerIds: string[]; rationale: string[]; intent: { amplitude: number; deformationScale: number } }>;
     };
     expect(specification).toMatchObject({ kind: "puppetloom-rig-spec", scope: "selected", baseRevision: 0, parts: [{ part: "frontHair" }] });
     const files = artifactPath(`cli-agent-spec-${process.pid}-${Date.now()}`);
@@ -119,6 +120,20 @@ describe("CLI contract", () => {
     specification.parts[0]!.rationale = ["连续转头证据中发梢摆幅偏大。"];
     specification.parts[0]!.intent.amplitude = 0.65;
     specification.parts[0]!.intent.deformationScale = 0.7;
+    const current = JSON.parse(await readFile(resolve(cliProject, "puppetloom.json"), "utf8")) as {
+      layers: Array<{ id: string; pivot: { x: number; y: number }; hairStrands?: unknown; mesh: { points: unknown[]; influences?: { physicsRelease?: number[] } } }>;
+    };
+    const frontHair = current.layers.find((layer) => layer.id === specification.parts[0]!.layerIds[0])!;
+    specification.anatomy = {
+      layers: {
+        [frontHair.id]: {
+          pivot: frontHair.pivot,
+          ...(frontHair.hairStrands ? { hairStrands: frontHair.hairStrands } : {
+            vertexInfluences: { physicsRelease: Object.fromEntries(frontHair.mesh.points.map((_, index) => [String(index), frontHair.mesh.influences?.physicsRelease?.[index] ?? 0])) }
+          })
+        }
+      }
+    };
     const path = resolve(files, "rig-spec.json");
     await writeFile(path, JSON.stringify(specification));
     const planned = await cli(["agent", "plan", "--project", cliProject, "--spec", path, "--json"]);
@@ -185,12 +200,43 @@ describe("CLI contract", () => {
     const specification = JSON.parse(generated.stdout) as {
       scope: "whole";
       goal: string;
-      parts: Array<{ part: string; rationale: string[] }>;
+      anatomy: Record<string, unknown>;
+      parts: Array<{ part: string; layerIds: string[]; rationale: string[] }>;
     };
     expect(specification.scope).toBe("whole");
     expect(specification.parts.length).toBeGreaterThan(0);
     specification.goal = "外部 Agent 已查看整模基线，并逐项确认现有部位的制作意图";
     for (const part of specification.parts) part.rationale = [`已检查 ${part.part} 的基线和连续运动，需要按本规格制作。`];
+    const current = JSON.parse(await readFile(resolve(cliProject, "puppetloom.json"), "utf8")) as {
+      runtime: { semanticCage: { points: Record<string, { position: { x: number; y: number } }> } };
+      layers: Array<{
+        id: string;
+        pivot: { x: number; y: number };
+        hairStrands?: unknown;
+        headwearPerspective?: unknown;
+        mesh: { points: unknown[]; influences?: { physicsRelease?: number[] } };
+      }>;
+    };
+    const geometryParts = new Set(["headFace", "mouth", "frontHair", "backHair", "ears", "headwear", "topCloth"]);
+    const headwearLayerIds = new Set(specification.parts.find((part) => part.part === "headwear")?.layerIds ?? []);
+    const geometryLayerIds = new Set(specification.parts.filter((part) => geometryParts.has(part.part)).flatMap((part) => part.layerIds));
+    specification.anatomy = {
+      semanticPoints: Object.fromEntries([
+        "eyeLeft", "eyeRight", "nose", "mouthLeft", "mouth", "mouthRight", "chin"
+      ].flatMap((id) => current.runtime.semanticCage.points[id] ? [[id, current.runtime.semanticCage.points[id].position]] : [])),
+      layers: Object.fromEntries([...geometryLayerIds].map((id) => {
+        const layer = current.layers.find((candidate) => candidate.id === id)!;
+        return [id, {
+          pivot: layer.pivot,
+          mesh: layer.mesh,
+          ...(layer.hairStrands ? { hairStrands: layer.hairStrands } : {}),
+          vertexInfluences: {
+            physicsRelease: Object.fromEntries(layer.mesh.points.map((_, index) => [String(index), layer.mesh.influences?.physicsRelease?.[index] ?? 0]))
+          },
+          ...(headwearLayerIds.has(id) ? { headwearPerspective: layer.headwearPerspective ?? null } : {})
+        }];
+      }))
+    };
 
     const files = artifactPath(`cli-whole-spec-${process.pid}-${Date.now()}`);
     await mkdir(files, { recursive: true });

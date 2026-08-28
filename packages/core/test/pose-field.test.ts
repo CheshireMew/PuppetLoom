@@ -230,6 +230,7 @@ describe("coherent semantic pose field", () => {
 
   it("makes the near half of crown headwear larger and the far half smaller", () => {
     const headwear = layer("headwear");
+    headwear.headwearPerspective = "crown";
     const y = headwear.bounds.y + headwear.bounds.height * 0.16;
     const center = { x: headwear.bounds.x + headwear.bounds.width * 0.5, y };
     const left = { x: center.x - headwear.bounds.width * 0.24, y };

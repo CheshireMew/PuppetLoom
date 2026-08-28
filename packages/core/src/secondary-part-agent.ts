@@ -39,6 +39,8 @@ export interface SecondaryPartAgentOptions {
   instruction?: string;
   layerIds?: string[];
   intent?: SecondaryPartIntent;
+  /** Read-only project snapshot used by the whole-model Agent to validate pending anatomy before it is committed. */
+  previewProject?: PuppetLoomProject;
 }
 
 export interface SecondaryPartIntent {
@@ -72,6 +74,7 @@ export interface SecondaryPartAgentPlan {
 
 export interface SecondaryPartAgentRunResult {
   ok: true;
+  changed: boolean;
   task: SecondaryModelAgentPart;
   project: string;
   projectDirectory: string;
@@ -81,9 +84,9 @@ export interface SecondaryPartAgentRunResult {
   adoptedDraftRevision?: number;
   checks: ModelAgentCheck[];
   repairs: ModelAgentRepair[];
-  reportPath: string;
-  comparisonSheet: string;
-  differenceImage: string;
+  reportPath?: string;
+  comparisonSheet?: string;
+  differenceImage?: string;
 }
 
 interface PartPolicy {
@@ -170,7 +173,9 @@ function targetLayers(project: PuppetLoomProject, part: SecondaryModelAgentPart,
   return layers;
 }
 
-function vertexRelease(part: SecondaryModelAgentPart, layer: LayerBinding, point: Point): number {
+function vertexRelease(part: SecondaryModelAgentPart, layer: LayerBinding, point: Point, index?: number): number {
+  const authored = index === undefined ? undefined : layer.mesh.influences?.physicsRelease?.[index];
+  if (authored !== undefined) return clamp(authored);
   const width = Math.max(1e-6, layer.bounds.width);
   const height = Math.max(1e-6, layer.bounds.height);
   const u = clamp((point.x - layer.bounds.x) / width);
@@ -190,12 +195,7 @@ function vertexRelease(part: SecondaryModelAgentPart, layer: LayerBinding, point
 }
 
 function headwearAttachmentPivot(layer: LayerBinding): Point {
-  if (layer.secondaryAnchors?.earHingeLeft || layer.secondaryAnchors?.earHingeRight) return layer.pivot;
-  const hanging = layer.bounds.height > layer.bounds.width * 1.15;
-  return {
-    x: rounded(layer.bounds.x + layer.bounds.width * 0.5, 8),
-    y: rounded(layer.bounds.y + layer.bounds.height * (hanging ? 0.04 : 0.84), 8)
-  };
+  return layer.pivot;
 }
 
 function ids(part: SecondaryModelAgentPart): { output: string; physics: string } {
@@ -207,7 +207,7 @@ function layerBinding(part: SecondaryModelAgentPart, layer: LayerBinding, parame
   const keyform = (value: -1 | 0 | 1): ModelKeyform => {
     if (value === 0) return { values: [value] };
     const deltas = Object.fromEntries(layer.mesh.points.flatMap((point, index) => {
-      const release = vertexRelease(part, layer, point);
+      const release = vertexRelease(part, layer, point, index);
       if (release <= 1e-5) return [];
       if (part === "ahoge") {
         const pivot = layer.secondaryAnchors?.ahogeRoot ?? layer.pivot;
@@ -253,10 +253,13 @@ function proposalOperations(part: SecondaryModelAgentPart, layers: LayerBinding[
       op: "upsert-parameter",
       parameter: { id: partIds.output, name: `${policy.label} Follow`, group: `Agent / ${policy.label}`, kind: "continuous", min: -1, default: 0, max: 1 }
     },
-    ...layers.flatMap((layer) => [
-      { op: "upsert-binding", binding: layerBinding(part, layer, policy.driver, scale, 1, "direct") } as AuthoringOperation,
-      { op: "upsert-binding", binding: layerBinding(part, layer, partIds.output, scale, -1, "follow") } as AuthoringOperation
-    ]),
+    ...layers.flatMap((layer) => {
+      const direction: 1 | -1 = part === "ears" && layer.side === "right" ? -1 : 1;
+      return [
+        { op: "upsert-binding", binding: layerBinding(part, layer, policy.driver, scale, direction, "direct") } as AuthoringOperation,
+        { op: "upsert-binding", binding: layerBinding(part, layer, partIds.output, scale, direction === 1 ? -1 : 1, "follow") } as AuthoringOperation
+      ];
+    }),
     {
       op: "upsert-physics",
       physics: {
@@ -300,20 +303,28 @@ function layerOverrides(part: SecondaryModelAgentPart, project: PuppetLoomProjec
   const layerPatches = Object.fromEntries(layers.map((layer) => {
     if (part === "ahoge") return [layer.id, {}];
     const authoredClothing = part === "topCloth" || part === "skirt";
-    const physics = Object.fromEntries(layer.mesh.points.map((point, index) => [
+    const physicsRelease = Object.fromEntries(layer.mesh.points.map((point, index) => [
       String(index),
-      authoredClothing
-        ? clothingPhysicsMask(layer, point)
-        : rounded(Math.max(layer.mesh.influences?.physics?.[index] ?? 0, vertexRelease(part, layer, point)), 6)
+      rounded(vertexRelease(part, layer, point, index), 6)
     ]));
+    const physics = Object.fromEntries(layer.mesh.points.map((point, index) => {
+      const authored = layer.mesh.influences?.physicsRelease?.[index];
+      return [
+        String(index),
+        authored !== undefined
+          ? rounded(authored, 6)
+          : authoredClothing
+            ? clothingPhysicsMask(layer, point)
+            : rounded(Math.max(layer.mesh.influences?.physics?.[index] ?? 0, vertexRelease(part, layer, point, index)), 6)
+      ];
+    }));
     const weights = policy.driver === "param-head-yaw"
       ? { ...layer.weights, head: 1, physics: part === "ears" ? Math.max(layer.weights.physics, 0.55) : 1 }
       : { ...layer.weights, body: 1, physics: 1 };
     const order = part === "skirt" ? skirtOrderBehindArms(project, layer) : undefined;
     return [layer.id, {
       weights,
-      vertexInfluences: { physics },
-      ...(part === "headwear" ? { pivot: layer.pivot } : {}),
+      vertexInfluences: { physics, physicsRelease },
       ...(part === "skirt" && intent.garmentStructure ? { garmentStructure: intent.garmentStructure } : {}),
       ...(part === "skirt" && intent.garmentFlexibility !== undefined ? { garmentFlexibility: intent.garmentFlexibility } : {}),
       ...(order !== undefined ? { order } : {})
@@ -429,6 +440,7 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
   let otherNeutralDrift = 0;
   let maximumRootDelta = 0;
   let maximumWaistDelta = 0;
+  let waistSeamVertices = 0;
   let maximumRelativeDelta = 0;
   let maximumAutonomousRelativeDelta = 0;
   const autonomousState = representativeAutonomousState(part, proposed);
@@ -462,8 +474,11 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
     if ((part === "topCloth" && layer.role === "topWear") || (part === "skirt" && layer.role === "bottomWear")) {
       const seamIndices = layer.mesh.points.flatMap((point, index) => {
         const v = clamp((point.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height));
-        return (layer.role === "topWear" ? v >= 0.82 : v <= 0.2) ? [index] : [];
+        const inSeamBand = layer.role === "topWear" ? v >= 0.82 : v <= 0.2;
+        const authoredFixed = vertexRelease(part, layer, point, index) <= 1e-5;
+        return inSeamBand && authoredFixed ? [index] : [];
       });
+      waistSeamVertices += seamIndices.length;
       for (const index of seamIndices) {
         const values = operations.flatMap((operation) => operation.op === "upsert-binding" && operation.binding.target.kind === "layer" && operation.binding.target.id === layer.id
           ? operation.binding.keyforms.flatMap((keyform) => {
@@ -483,6 +498,7 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
   let settledError = 1;
   let dynamicFailures = 0;
   const visibleMinimum = part === "topCloth" && layers.every((layer) => layer.role === "topWear") ? 0 : 0.0015;
+  const reboundRequired = intentRequiresRebound(part, proposed);
   for (let frame = 0; frame <= 210; frame += 1) {
     const timeSeconds = frame / 60;
     const input = timeSeconds < 0.4 ? 0 : timeSeconds < 1.65 ? 0.78 : 0;
@@ -525,15 +541,15 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
     }] : []),
     ...((part === "topCloth" || part === "skirt") ? [{
       id: "waist-seam-lock",
-      label: "腰线两侧不参与独立布料变形",
-      passed: maximumWaistDelta <= 1e-6,
-      details: { maximumWaistDelta: rounded(maximumWaistDelta, 10) }
+      label: "角色标注的腰线固定区不参与独立布料变形",
+      passed: waistSeamVertices > 0 && maximumWaistDelta <= 1e-6,
+      details: { inspectedFixedVertices: waistSeamVertices, maximumWaistDelta: rounded(maximumWaistDelta, 10) }
     }] : []),
     {
       id: "lag-rebound",
-      label: "滞后会回弹并最终收敛",
-      passed: reboundPeak < -0.001 && settledError <= 0.03,
-      details: { reboundPeak: rounded(reboundPeak, 8), settledError: rounded(settledError, 8) }
+      label: "滞后按阻尼设定平滑回正",
+      passed: settledError <= 0.03 && (!reboundRequired || reboundPeak < -0.001),
+      details: { reboundPeak: rounded(reboundPeak, 8), settledError: rounded(settledError, 8), reboundRequired }
     },
     {
       id: "pose-safety",
@@ -663,6 +679,12 @@ export function createSecondaryPartAgentProposal(project: PuppetLoomProject, opt
   return last!;
 }
 
+function intentRequiresRebound(part: SecondaryModelAgentPart, project: PuppetLoomProject): boolean {
+  const physicsId = ids(part).physics;
+  const physics = project.model.physics.find((group) => group.id === physicsId);
+  return (physics?.damping ?? 1) < 0.86;
+}
+
 async function preparedProposal(root: string, project: PuppetLoomProject, options: SecondaryPartAgentOptions): Promise<PreparedSecondaryProposal> {
   const selected = targetLayers(project, options.part, options.layerIds);
   const meshPreparation = await prepareAgentMeshes(root, project, selected.map((layer) => layer.id));
@@ -680,9 +702,10 @@ async function preparedProposal(root: string, project: PuppetLoomProject, option
 export async function planSecondaryPartAgent(projectDirectory: string, options: SecondaryPartAgentOptions): Promise<SecondaryPartAgentPlan> {
   const root = resolve(projectDirectory);
   const [committed, calibration, draft] = await Promise.all([loadProject(root), loadCalibration(root), loadCalibrationDraft(root)]);
-  const selected = targetLayers(committed, options.part, options.layerIds);
+  const planningProject = options.previewProject ?? committed;
+  const selected = targetLayers(planningProject, options.part, options.layerIds);
   const draftState = draftAssessment(draft, options.part, selected.map((layer) => layer.id));
-  const effective = draftState.compatible && draft ? applyCalibrationOverrides(committed, effectiveDraftOverrides(draft)) : committed;
+  const effective = draftState.compatible && draft ? applyCalibrationOverrides(planningProject, effectiveDraftOverrides(draft)) : planningProject;
   const proposal = await preparedProposal(root, effective, options);
   const failed = proposal.checks.filter((check) => !check.passed).map((check) => `自检未通过：${check.label}`);
   const blockers = [...draftState.blockers, ...failed];
@@ -738,9 +761,23 @@ export async function runSecondaryPartAgent(projectDirectory: string, options: S
     reportDetails: { intent: proposal.intent, adoptedDraftRevision }
   });
   await clearCalibrationDraft(root);
+  if (!committedProposal.changed) return {
+    ok: true,
+    changed: adoptedDraftRevision !== undefined,
+    task: options.part,
+    project: committedProposal.project.name,
+    projectDirectory: root,
+    fromRevision: plan.baseRevision,
+    toRevision: committedProposal.revision,
+    targetLayerIds: proposal.layers.map((layer) => layer.id),
+    ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
+    checks: proposal.checks,
+    repairs: proposal.repairs
+  };
   const result = committedProposal.result;
   return {
     ok: true,
+    changed: true,
     task: options.part,
     project: result.project.name,
     projectDirectory: root,

@@ -150,11 +150,10 @@ describe("secondary part Agent", () => {
     }
   });
 
-  it("moves an independent headwear pivot to its attachment edge and verifies visible idle deformation", () => {
+  it("keeps the Agent-authored headwear attachment pivot and verifies visible idle deformation", () => {
     const proposal = createSecondaryPartAgentProposal(project(), { part: "headwear", instruction: "让吊饰轻微摆动" });
     const headwear = proposal.project.layers.find((candidate) => candidate.id === "headwear")!;
-    expect(headwear.pivot.x).toBeCloseTo(headwear.bounds.x + headwear.bounds.width * 0.5, 8);
-    expect(headwear.pivot.y).toBeCloseTo(headwear.bounds.y + headwear.bounds.height * 0.84, 8);
+    expect(headwear.pivot).toEqual(project().layers.find((candidate) => candidate.id === "headwear")!.pivot);
     expect(proposal.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "autonomous-secondary-visible", passed: true })
     ]));

@@ -14,7 +14,9 @@ PuppetLoom 负责读取 PSD 和项目、生成结构化规格模板、验证明�
 & <skill>\scripts\invoke_puppetloom.ps1 agent specification --project E:\Puppets\Character --scope whole --json
 ```
 
-模板的 `kind` 固定为 `puppetloom-rig-spec`，`scope` 明确区分 `whole` 与 `selected`，`baseRevision` 绑定当前项目，`parts` 只包含项目实际存在且本轮获准处理的部位。整模计划仍必须逐项报告全部职责：不存在的部位标为 `not-present`，规格漏掉实际存在的部位则停止，不能静默使用默认值。外部 Agent 必须在看过基线后修改 `goal`、每个部位的 `intent` 和 `rationale`，再保存为 JSON。模板数值只是安全起点，不能原样当成“已经理解用户”。`layerIds` 只在自动目标不够精确时填写。
+模板的 `kind` 固定为 `puppetloom-rig-spec`，`scope` 明确区分 `whole` 与 `selected`，`baseRevision` 绑定当前项目，`parts` 只包含项目实际存在且本轮获准处理的部位，并列出当前稳定 `layerIds`。整模计划仍必须逐项报告全部职责：不存在的部位标为 `not-present`，规格漏掉实际存在的部位则停止，不能静默使用默认值。外部 Agent 必须在看过基线、局部图层和 `describe --layer` 后修改 `goal`、填写角色专属 `anatomy`、每个部位的 `intent` 和 `rationale`，再保存为 JSON。模板数值只是安全起点，不能原样当成“已经理解用户”；`layerIds` 不能沿用旧角色或为了省事删掉，自动目标不精确时必须以本次项目的稳定 ID 修正。
+
+`anatomy` 必须描述本次角色，而不是复制另一角色的网格代码。头脸至少记录双眼、鼻、嘴与下巴的实际控制点，倾斜或不对称原画不能被拉平成镜像模板；嘴部同时记录 `mouthLeft/mouth/mouthRight` 和实际嘴型网格修正。前发与后发按画面中的发帽、刘海、侧锁、卷发和呆毛职责写实际轴心与发束，权重数组长度必须匹配当前 ArtMesh。左右耳分别记录各自图层、连接根和覆盖全部网格顶点的 `physicsRelease`，不能共享一个镜像动作；头饰和上衣同样要明确固定区与自由区。每个头饰图层必须显式写 `headwearPerspective: "crown"` 或 `null`：只有真正的宽皇冠/冠带结构选择 crown，月牙夹、发卡、链坠和窄吊饰选择 null。`agent plan` 会按当前 revision 核对这些覆盖，空对象、局部顶点样例或无关字段不能通过。
 
 主运动部位使用 `amplitude/response/stability`。前发额外使用 `ahogeAmplitude/ahogeResponse/ahogeStability/lagResponse/lagDamping/deformationScale`；其它次级运动使用 `lagResponse/lagDamping/deformationScale`。幅度表示目标可见度，response 表示跟随速度，stability 和 lagDamping 控制收敛与回弹，lagResponse 控制物理追赶速度，deformationScale 控制局部关键形变形。裙摆还可使用 `garmentStructure` 区分软垂布料与保体积支撑结构，并用 `garmentFlexibility` 单独控制支撑结构中下段的受限弹性。支撑类型、整体摆动速度和局部柔性是三个独立判断：“塌陷”先修结构，“太慢”调 response/lag，“太硬”调 flexibility，不能靠降低摆幅把软布伪装成裙撑，也不能靠锁死整件裙子维持体积。`rationale` 必须写看到了什么和为什么这样改，不能只复述数字。
 
@@ -23,7 +25,7 @@ PuppetLoom 负责读取 PSD 和项目、生成结构化规格模板、验证明�
 & <skill>\scripts\invoke_puppetloom.ps1 agent apply --project E:\Puppets\Character --spec E:\Puppets\rig-spec-r0.json --json
 ```
 
-`plan` 必须返回 `inputMode: structured-specification`。规格 revision 过期、同一部位重复、参数越界、目标图层不存在或范围与用户目标不符时停止并重新观察，不通过改 `baseRevision` 强行套用旧判断。`--instruction/--scope` 是旧调用兼容入口；正式外部 Agent 流程不依赖软件解析自然语言。
+`plan` 必须返回 `inputMode: structured-specification`。规格 revision 过期、同一部位重复、参数越界、目标图层不存在、anatomy 未覆盖当前网格或范围与用户目标不符时停止并重新观察，不通过改 `baseRevision` 强行套用旧判断。`--instruction/--scope` 是只读旧调用兼容入口；没有 `--spec` 的 `apply` 必须被拒绝，正式外部 Agent 流程不依赖软件解析自然语言。
 
 生成规格前以当前项目为真源，检查目标部位的稳定 layer ID、语义角色、`alphaTopology`、连接区域、轴心、已有绑定以及每个参数实际驱动的图层。以前角色、参考素材或历史规格只能帮助观察，不能默认继承部件关系、运动方向或物理响应。用户指出当前角色的分层或连接与以前不同，或质疑两个部件是否仍被连带驱动时，即使 `plan` 全绿，也先用 `describe` 和实际参数输入检查结构与耦合，再决定是改规格、做项目校准还是修软件；不要先靠缩小幅度掩盖语义错误。
 

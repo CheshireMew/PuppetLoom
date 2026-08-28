@@ -50,6 +50,7 @@ describe("mesh and safety", () => {
       id: "headwear", sourceName: "headwear", sourcePath: ["headwear"], role: "headwear" as const, side: "center" as const, order: 0, opacity: 1,
       blendMode: "normal", bounds: { x: 0.2, y: 0.08, width: 0.6, height: 0.28 }, texture: "textures/headwear.png",
       pivot: { x: 0.5, y: 0.15 }, mesh: makeGridMesh({ x: 0.2, y: 0.08, width: 0.6, height: 0.28 }, 5, 5),
+      secondaryAnchors: { earHingeLeft: { x: 0.38, y: 0.19 }, earHingeRight: { x: 0.62, y: 0.19 } },
       weights: { head: 1, body: 0, gaze: 0, physics: 0.55 }, parentGroup: "head" as const
     };
     const project = {

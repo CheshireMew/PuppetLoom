@@ -313,6 +313,7 @@ export const puppetLoomProjectSchema = z.object({
       pivot: pointSchema,
       garmentStructure: z.enum(["soft", "supported"]).optional(),
       garmentFlexibility: z.number().min(0).max(0.5).optional(),
+      headwearPerspective: z.literal("crown").optional(),
       secondaryAnchors: z.object({
         earHingeLeft: pointSchema.optional(),
         earHingeRight: pointSchema.optional(),
@@ -703,6 +704,7 @@ const layerCalibrationOverrideSchema = z.object({
   pivot: pointSchema.optional(),
   garmentStructure: z.enum(["soft", "supported"]).optional(),
   garmentFlexibility: z.number().min(0).max(0.5).optional(),
+  headwearPerspective: z.literal("crown").nullable().optional(),
   secondaryAnchors: secondaryAnchorOverrideSchema.optional(),
   hairStrands: z.array(hairStrandSchema).min(2).max(12).optional(),
   weights: z.object({

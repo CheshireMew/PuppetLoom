@@ -95,7 +95,7 @@ describe("standard performance action library", () => {
     ];
     const plan = planStandardPerformanceActions(before, 0);
     const after = applyAuthoringOperations(before, plan.patch!.operations);
-    const activeState = { ...neutralMotionState, behavior: { id: "action-ear-flick", timeSeconds: 0.12 } };
+    const activeState = { ...neutralMotionState, behavior: { id: "action-ear-flick", timeSeconds: 0.36 } };
     for (const id of ["ear-left", "ear-right"]) {
       const ear = after.layers.find((value) => value.id === id)!;
       expect(deformedPoints(after, ear, activeState)).not.toEqual(ear.mesh.points);

@@ -90,6 +90,32 @@ describe("automatic semantic control cage", () => {
     }
   });
 
+  it("preserves a character's tilted eye line and slanted mouth instead of flattening the face", () => {
+    const imported = fixture();
+    const screenLeftEye = imported.layers.find((entry) => entry.id === "eye-screen-left")!;
+    const screenRightEye = imported.layers.find((entry) => entry.id === "eye-screen-right")!;
+    screenLeftEye.bounds.y += 7;
+    screenRightEye.bounds.y -= 3;
+    const mouth = imported.layers.find((entry) => entry.id === "mouth")!;
+    mouth.pixels.data.fill(0);
+    let opaque = 0;
+    for (let x = 0; x < mouth.pixels.width; x += 1) {
+      const centerY = Math.round(mouth.pixels.height * 0.7 - x * 0.12);
+      for (let offset = -2; offset <= 2; offset += 1) {
+        const y = centerY + offset;
+        if (y < 0 || y >= mouth.pixels.height) continue;
+        mouth.pixels.data[(y * mouth.pixels.width + x) * 4 + 3] = 255;
+        opaque += 1;
+      }
+    }
+    mouth.opaquePixels = opaque;
+
+    const cage = buildSemanticControlCage(imported)!;
+    expect(cage.points.eyeLeft.position.y).not.toBe(cage.points.eyeRight.position.y);
+    expect(cage.points.mouthLeft.position.y).toBeGreaterThan(cage.points.mouthRight.position.y);
+    expect(cage.points.cheekLeft.position.y).not.toBe(cage.points.cheekRight.position.y);
+  });
+
   it("does not invent a face cage when no face pixels exist", () => {
     const imported = fixture();
     imported.layers = imported.layers.filter((entry) => entry.role !== "face");

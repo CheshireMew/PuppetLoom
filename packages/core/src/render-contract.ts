@@ -6,6 +6,27 @@ import type { LayerBinding, MotionState, PuppetLoomProject } from "./types.js";
 
 const eyeSurfaceRoles = new Set(["eyeWhite", "iris", "eyelash"]);
 
+interface FeatureGateIndex {
+  blinkLeftParameterIds: Set<string>;
+  blinkRightParameterIds: Set<string>;
+}
+
+const featureGateIndexCache = new WeakMap<PuppetLoomProject, FeatureGateIndex>();
+
+function featureGateIndex(project: PuppetLoomProject): FeatureGateIndex {
+  const cached = featureGateIndexCache.get(project);
+  if (cached) return cached;
+  const parameterIds = (semantic: "blink-left" | "blink-right") => new Set([`param-${semantic}`, ...(project.model?.parameters ?? [])
+    .filter((parameter) => parameter.semantic === semantic)
+    .map((parameter) => parameter.id)]);
+  const value = {
+    blinkLeftParameterIds: parameterIds("blink-left"),
+    blinkRightParameterIds: parameterIds("blink-right")
+  };
+  featureGateIndexCache.set(project, value);
+  return value;
+}
+
 /**
  * Missing replacement art must leave the painted neutral face intact. Runtime
  * inputs and review timelines may still contain blink or mouth values, but a
@@ -14,17 +35,14 @@ const eyeSurfaceRoles = new Set(["eyeWhite", "iris", "eyelash"]);
 export function featureGatedMotionState(project: PuppetLoomProject, state: MotionState): MotionState {
   const authoredState = characterMotionState(project, state);
   const resolved = resolveMotionState(project, constrainMotionState(project, authoredState));
-  const asymmetricParameterIds = (semantic: "blink-left" | "blink-right"): Set<string> => new Set([`param-${semantic}`, ...(project.model?.parameters ?? [])
-    .filter((parameter) => parameter.semantic === semantic)
-    .map((parameter) => parameter.id)]);
   const asymmetricControlIsExplicit = (parameterIds: Set<string>, field: "blinkLeft" | "blinkRight"): boolean => {
     if (authoredState[field] !== undefined) return true;
-    if ([...parameterIds].some((id) => authoredState.parameters?.[id] !== undefined)) return true;
-    const expressionIds = new Set(Object.entries(authoredState.expressions ?? {})
-      .filter(([, weight]) => weight !== 0)
-      .map(([id]) => id));
+    for (const id of parameterIds) if (authoredState.parameters?.[id] !== undefined) return true;
+    const expressionIds = authoredState.expressions
+      ? new Set(Object.entries(authoredState.expressions).filter(([, weight]) => weight !== 0).map(([id]) => id))
+      : undefined;
     const expressions = project.model?.expressions ?? [];
-    if (expressions.some((expression) => expressionIds.has(expression.id)
+    if (expressionIds && expressions.some((expression) => expressionIds.has(expression.id)
       && [...parameterIds].some((id) => expression.parameters[id] !== undefined))) return true;
     const behavior = project.model?.behaviors?.find((candidate) => candidate.id === authoredState.behavior?.id);
     if (!behavior) return false;
@@ -33,8 +51,7 @@ export function featureGatedMotionState(project: PuppetLoomProject, state: Motio
       : expressions.some((expression) => expression.id === track.target.id
         && [...parameterIds].some((id) => expression.parameters[id] !== undefined)));
   };
-  const blinkLeftParameterIds = asymmetricParameterIds("blink-left");
-  const blinkRightParameterIds = asymmetricParameterIds("blink-right");
+  const { blinkLeftParameterIds, blinkRightParameterIds } = featureGateIndex(project);
   const explicitBlinkLeft = asymmetricControlIsExplicit(blinkLeftParameterIds, "blinkLeft");
   const explicitBlinkRight = asymmetricControlIsExplicit(blinkRightParameterIds, "blinkRight");
   const blink = project.runtime.features.blink ? resolved.blink : 0;

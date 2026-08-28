@@ -89,10 +89,9 @@ export interface ModelAgentCapability {
   reason?: string;
 }
 
-export interface CommittedModelAgentProposal {
-  result: CalibrationSaveResult;
-  reportPath: string;
-}
+export type CommittedModelAgentProposal =
+  | { changed: true; result: CalibrationSaveResult; reportPath: string }
+  | { changed: false; project: PuppetLoomProject; revision: number };
 
 export function modelAgentCapabilities(project: PuppetLoomProject): ModelAgentCapability[] {
   return modelAgentPartDefinitions.map((definition) => {
@@ -165,6 +164,9 @@ export async function commitModelAgentProposal(projectDirectory: string, baseRev
   const [project, calibration] = await Promise.all([loadProject(root), loadCalibration(root)]);
   if (calibration.revision !== baseRevision) throw new PuppetLoomError("REVISION_CONFLICT", `Agent 基线已从 ${baseRevision} 更新到 ${calibration.revision}，本次修改没有写入。`);
   const proposed = validateProposal(project, proposal);
+  if (JSON.stringify(proposed) === JSON.stringify(project)) {
+    return { changed: false, project, revision: baseRevision };
+  }
   const overrides: CalibrationOverrides = { ...proposal.overrides, model: proposed.model };
   const authoring = proposal.operations.length > 0
     ? buildAuthoringAudit({ version: 1, baseRevision, label: proposal.label, operations: proposal.operations, previews: proposal.previews }, project, proposed)
@@ -177,5 +179,5 @@ export async function commitModelAgentProposal(projectDirectory: string, baseRev
   });
   const focusDirectory = join(root, "reports", "agent", result.session.id, "evidence");
   const focusEvidence = await renderAgentFocusEvidence(root, project, proposed, proposal.targetLayerIds, proposal.previews, focusDirectory);
-  return { result, reportPath: await writeAgentReport(root, proposal, result, focusEvidence) };
+  return { changed: true, result, reportPath: await writeAgentReport(root, proposal, result, focusEvidence) };
 }

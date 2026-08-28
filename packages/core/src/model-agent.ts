@@ -11,7 +11,7 @@ import { planPrimaryPartAgent, runPrimaryPartAgent, type PrimaryModelAgentPart }
 import { evaluateModelAgentCoherence, modelAgentConstraints, type ModelAgentConstraint } from "./model-agent-coherence.js";
 import { clearCalibrationDraft, loadCalibration, loadCalibrationDraft, loadProject, loadProjectRevision, saveCalibrationPatch } from "./project.js";
 import { planSecondaryPartAgent, runSecondaryPartAgent, type SecondaryModelAgentPart } from "./secondary-part-agent.js";
-import type { AssetRequest, CalibrationDraftDocument, PuppetLoomProject, VerifyResult } from "./types.js";
+import type { AssetRequest, CalibrationDraftDocument, LayerCalibrationOverride, PuppetLoomProject, VerifyResult } from "./types.js";
 import { verifyProject } from "./verify.js";
 
 export type ModelAgentRequestScope = ModelAgentPart | "whole";
@@ -54,6 +54,7 @@ export interface ModelAgentPlan {
 }
 
 export interface ModelAgentPartRunSummary extends ModelAgentPartPlanSummary {
+  changed?: boolean;
   fromRevision?: number;
   toRevision?: number;
   reportPath?: string;
@@ -77,6 +78,7 @@ export interface ModelAgentRunResult {
   fromRevision: number;
   toRevision: number;
   adoptedDraftRevision?: number;
+  anatomyRevision?: number;
   status: "completed" | "needs-assets" | "blocked";
   blockers: string[];
   parts: ModelAgentPartRunSummary[];
@@ -101,6 +103,54 @@ function labelFor(part: ModelAgentPart): string {
 function partOrder(parts: ModelAgentPart[]): ModelAgentPart[] {
   const requested = new Set(parts);
   return modelAgentPartDefinitions.map((definition) => definition.part).filter((part) => requested.has(part));
+}
+
+function completePhysicsRelease(project: PuppetLoomProject, layerId: string, override: LayerCalibrationOverride | undefined): boolean {
+  const layer = project.layers.find((candidate) => candidate.id === layerId);
+  const release = override?.vertexInfluences?.physicsRelease;
+  return Boolean(layer && release && Object.keys(release).length === layer.mesh.points.length);
+}
+
+function anatomyCoverageBlockers(project: PuppetLoomProject, specification: ModelAgentSpecification): string[] {
+  const anatomy = specification.anatomy;
+  if (!anatomy) return [];
+  const capabilities = new Map(modelAgentCapabilities(project).map((capability) => [capability.part, capability]));
+  const blockers: string[] = [];
+  for (const part of specification.parts) {
+    const targetIds = part.layerIds ?? capabilities.get(part.part)?.targetLayerIds ?? [];
+    const overrides = targetIds.map((id) => [id, anatomy.layers?.[id]] as const);
+    if (["frontHair", "backHair", "ears", "headwear", "topCloth"].includes(part.part) && targetIds.length === 0) {
+      blockers.push(`${labelFor(part.part)}没有在规格中绑定实际图层。`);
+      continue;
+    }
+    if (part.part === "headFace") {
+      const required = ["eyeLeft", "eyeRight", "nose", "mouth", "chin"] as const;
+      const missing = required.filter((id) => !anatomy.semanticPoints?.[id]);
+      if (missing.length > 0) blockers.push(`头脸 anatomy 缺少实际控制点：${missing.join("、")}。`);
+    }
+    if (part.part === "mouth") {
+      const missing = (["mouthLeft", "mouth", "mouthRight"] as const).filter((id) => !anatomy.semanticPoints?.[id]);
+      if (missing.length > 0) blockers.push(`嘴部 anatomy 缺少实际斜轴控制点：${missing.join("、")}。`);
+      const hasGeometry = overrides.some(([, override]) => Boolean(override?.mesh || Object.keys(override?.meshPointDeltas ?? {}).length > 0));
+      if (!hasGeometry) blockers.push("嘴部 anatomy 没有为实际嘴型图层提供网格或网格顶点修正。");
+    }
+    if (part.part === "frontHair" || part.part === "backHair") {
+      for (const [id, override] of overrides) {
+        const layer = project.layers.find((candidate) => candidate.id === id);
+        const completeStrands = Boolean(layer && override?.hairStrands?.length && override.hairStrands.every((strand) => strand.weights.length === layer.mesh.points.length && strand.release.length === layer.mesh.points.length));
+        if (!override?.pivot) blockers.push(`${labelFor(part.part)}图层 ${id} 缺少实际根部轴心。`);
+        if (!completeStrands && !completePhysicsRelease(project, id, override)) blockers.push(`${labelFor(part.part)}图层 ${id} 缺少覆盖全部网格顶点的发束或释放权重。`);
+      }
+    }
+    if (part.part === "ears" || part.part === "headwear" || part.part === "topCloth") {
+      for (const [id, override] of overrides) {
+        if (!override?.pivot) blockers.push(`${labelFor(part.part)}图层 ${id} 缺少实际连接轴心。`);
+        if (!completePhysicsRelease(project, id, override)) blockers.push(`${labelFor(part.part)}图层 ${id} 缺少覆盖全部网格顶点的固定/释放权重。`);
+        if (part.part === "headwear" && override?.headwearPerspective === undefined) blockers.push(`头饰图层 ${id} 必须明确选择 crown 或 null，不能再按外形猜测。`);
+      }
+    }
+  }
+  return blockers;
 }
 
 function wholeDraftAssessment(project: PuppetLoomProject, draft: CalibrationDraftDocument | undefined): ModelAgentPlan["draft"] {
@@ -131,49 +181,52 @@ function isSecondarySpecification(specification: ModelAgentPartSpecification | u
   return Boolean(specification && specification.part !== "frontHair" && !["headFace", "eyes", "mouth", "body"].includes(specification.part));
 }
 
-function frontHairOptions(instruction: string, specification: ModelAgentPartSpecification | undefined) {
-  if (!specification || specification.part !== "frontHair") return { instruction };
+function frontHairOptions(instruction: string, specification: ModelAgentPartSpecification | undefined, previewProject?: PuppetLoomProject) {
+  if (!specification || specification.part !== "frontHair") return { instruction, ...(previewProject ? { previewProject } : {}) };
   return {
     instruction,
     ...(specification.layerIds?.[0] ? { layerId: specification.layerIds[0] } : {}),
-    intent: { ...specification.intent, explanation: rationale(specification) }
+    intent: { ...specification.intent, explanation: rationale(specification) },
+    ...(previewProject ? { previewProject } : {})
   };
 }
 
-function primaryOptions(part: PrimaryModelAgentPart, instruction: string, specification: ModelAgentPartSpecification | undefined) {
+function primaryOptions(part: PrimaryModelAgentPart, instruction: string, specification: ModelAgentPartSpecification | undefined, previewProject?: PuppetLoomProject) {
   const selected = isPrimarySpecification(specification) ? specification : undefined;
   return {
     part,
     instruction,
     ...(selected?.layerIds ? { layerIds: selected.layerIds } : {}),
-    ...(selected ? { intent: { ...selected.intent, explanation: rationale(selected) } } : {})
+    ...(selected ? { intent: { ...selected.intent, explanation: rationale(selected) } } : {}),
+    ...(previewProject ? { previewProject } : {})
   };
 }
 
-function secondaryOptions(part: SecondaryModelAgentPart, instruction: string, specification: ModelAgentPartSpecification | undefined) {
+function secondaryOptions(part: SecondaryModelAgentPart, instruction: string, specification: ModelAgentPartSpecification | undefined, previewProject?: PuppetLoomProject) {
   const selected = isSecondarySpecification(specification) ? specification : undefined;
   return {
     part,
     instruction,
     ...(selected?.layerIds ? { layerIds: selected.layerIds } : {}),
-    ...(selected ? { intent: { ...selected.intent, explanation: rationale(selected) } } : {})
+    ...(selected ? { intent: { ...selected.intent, explanation: rationale(selected) } } : {}),
+    ...(previewProject ? { previewProject } : {})
   };
 }
 
-async function planOne(root: string, part: ModelAgentPart, instruction: string, specification?: ModelAgentPartSpecification): Promise<ModelAgentPartPlanSummary> {
+async function planOne(root: string, part: ModelAgentPart, instruction: string, specification?: ModelAgentPartSpecification, previewProject?: PuppetLoomProject): Promise<ModelAgentPartPlanSummary> {
   const base = { part, label: labelFor(part), targetLayerIds: [] as string[], checks: [] as ModelAgentCheck[], repairs: [] as ModelAgentRepair[], blockers: [] as string[], assetRequests: [] as AssetRequest[] };
   try {
     if (part === "frontHair") {
-      const plan = await planFrontHairAgent(root, frontHairOptions(instruction, specification));
+      const plan = await planFrontHairAgent(root, frontHairOptions(instruction, specification, previewProject));
       const blockers = withoutDraftBlockers(plan.blockers, undefined);
       return { ...base, targetLayerIds: [plan.layer.id], checks: plan.checks, blockers, status: blockers.length > 0 ? "blocked" : "ready" };
     }
     if (secondaryParts.has(part)) {
-      const plan = await planSecondaryPartAgent(root, secondaryOptions(part as SecondaryModelAgentPart, instruction, specification));
+      const plan = await planSecondaryPartAgent(root, secondaryOptions(part as SecondaryModelAgentPart, instruction, specification, previewProject));
       const blockers = withoutDraftBlockers(plan.blockers, plan.draft.blockers);
       return { ...base, targetLayerIds: plan.targetLayers.map((layer) => layer.id), checks: plan.checks, repairs: plan.repairs, blockers, status: blockers.length > 0 ? "blocked" : "ready" };
     }
-    const plan = await planPrimaryPartAgent(root, primaryOptions(part as PrimaryModelAgentPart, instruction, specification));
+    const plan = await planPrimaryPartAgent(root, primaryOptions(part as PrimaryModelAgentPart, instruction, specification, previewProject));
     const blockers = withoutDraftBlockers(plan.blockers, plan.draft.blockers).filter((blocker) => !blocker.startsWith("缺少 "));
     const status: ModelAgentPartStatus = plan.assetRequests.length > 0 ? "needs-assets" : blockers.length > 0 ? "blocked" : "ready";
     return { ...base, targetLayerIds: plan.targetLayers.map((layer) => layer.id), checks: plan.checks, repairs: plan.repairs, blockers, assetRequests: plan.assetRequests, status };
@@ -198,8 +251,18 @@ export async function planModelAgent(projectDirectory: string, options: ModelAge
     : requestScope === "whole"
       ? modelAgentPartDefinitions.map((definition) => definition.part)
       : requestedModelAgentParts(project, requestScope);
+  const anatomyBlockers: string[] = [];
+  let planningProject = project;
+  if (specification?.anatomy) {
+    try {
+      planningProject = applyCalibrationOverrides(project, specification.anatomy);
+    } catch (error) {
+      anatomyBlockers.push(`角色专属 anatomy 无法应用：${error instanceof Error ? error.message : String(error)}`);
+    }
+    anatomyBlockers.push(...anatomyCoverageBlockers(planningProject, specification));
+  }
   const partSpecifications = new Map(specification?.parts.map((part) => [part.part, part]) ?? []);
-  const capabilities = new Map(modelAgentCapabilities(project).map((capability) => [capability.part, capability]));
+  const capabilities = new Map(modelAgentCapabilities(planningProject).map((capability) => [capability.part, capability]));
   const parts: ModelAgentPartPlanSummary[] = [];
   for (const part of partOrder(requested)) {
     const capability = capabilities.get(part)!;
@@ -222,13 +285,17 @@ export async function planModelAgent(projectDirectory: string, options: ModelAge
       });
       continue;
     }
-    parts.push(await planOne(root, part, instruction, partSpecification));
+    parts.push(await planOne(root, part, instruction, partSpecification, planningProject));
   }
   const draftState = wholeDraftAssessment(project, draft);
+  if (specification?.anatomy && draftState.found) {
+    draftState.willAdopt = false;
+    draftState.blockers.push("制作规格已经包含角色专属 anatomy，不能同时接管编辑器草稿；请先明确保留哪一份结构数据。");
+  }
   const revisionBlockers = specification && specification.baseRevision !== calibration.revision
     ? [`制作规格基于 revision ${specification.baseRevision}，当前项目已经是 revision ${calibration.revision}。请重新检查画面并生成新规格。`]
     : [];
-  const blockers = [...revisionBlockers, ...draftState.blockers, ...parts.filter((part) => part.status === "blocked").flatMap((part) => part.blockers.map((blocker) => `${part.label}：${blocker}`))];
+  const blockers = [...revisionBlockers, ...anatomyBlockers, ...draftState.blockers, ...parts.filter((part) => part.status === "blocked").flatMap((part) => part.blockers.map((blocker) => `${part.label}：${blocker}`))];
   return {
     version: 1,
     task: "model-agent",
@@ -262,14 +329,14 @@ async function runOne(root: string, part: ModelAgentPart, instruction: string, s
     };
     if (part === "frontHair") {
       const result = await runFrontHairAgent(root, frontHairOptions(instruction, specification));
-      return { ...planned, status: "completed", fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
+      return { ...planned, status: "completed", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
     }
     if (secondaryParts.has(part)) {
       const result = await runSecondaryPartAgent(root, secondaryOptions(part as SecondaryModelAgentPart, instruction, specification));
-      return { ...planned, status: "completed", fromRevision: result.fromRevision, toRevision: result.toRevision, reportPath: result.reportPath, comparisonSheet: result.comparisonSheet, differenceImage: result.differenceImage, ...(await focus(result.reportPath)) };
+      return { ...planned, status: "completed", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
     }
     const result = await runPrimaryPartAgent(root, primaryOptions(part as PrimaryModelAgentPart, instruction, specification));
-    return { ...planned, status: "completed", fromRevision: result.fromRevision, toRevision: result.toRevision, reportPath: result.reportPath, comparisonSheet: result.comparisonSheet, differenceImage: result.differenceImage, ...(await focus(result.reportPath)) };
+    return { ...planned, status: "completed", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
   } catch (error) {
     return { ...planned, status: "blocked", blockers: [error instanceof Error ? error.message : String(error)] };
   }
@@ -285,6 +352,9 @@ async function writeTaskReport(root: string, result: Omit<ModelAgentRunResult, "
 
 /** Runs every present part in deterministic order. Each part remains an independently reversible revision. */
 export async function runModelAgent(projectDirectory: string, options: ModelAgentOptions): Promise<ModelAgentRunResult> {
+  if (!options.specification) {
+    throw new PuppetLoomError("INVALID_INPUT", "正式应用必须使用 --spec 提交结构化制作规格。自然语言兼容入口只允许 plan 预览，不能创建 revision。" );
+  }
   const root = resolve(projectDirectory);
   const initial = await planModelAgent(root, options);
   if (initial.blockers.length > 0 || (!initial.canApply && !initial.parts.some((part) => part.status === "needs-assets"))) {
@@ -293,6 +363,20 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
   const beforeProject = await loadProjectRevision(root, initial.baseRevision);
   let revision = initial.baseRevision;
   let adoptedDraftRevision: number | undefined;
+  let anatomyRevision: number | undefined;
+  if (initial.specification?.anatomy) {
+    const current = await loadProject(root);
+    const authored = applyCalibrationOverrides(current, initial.specification.anatomy);
+    if (JSON.stringify(authored) !== JSON.stringify(current)) {
+      const anatomy = await saveCalibrationPatch(root, {
+        baseRevision: revision,
+        label: `Agent · 角色专属结构 · ${initial.specification.goal}`,
+        overrides: clone(initial.specification.anatomy)
+      });
+      revision = anatomy.calibration.revision;
+      anatomyRevision = revision;
+    }
+  }
   const draft = await loadCalibrationDraft(root);
   if (draft && initial.draft.willAdopt) {
     const adoption = await saveCalibrationPatch(root, { baseRevision: revision, label: `Agent · 接管整模草稿 · ${draft.label ?? "未命名草稿"}`, overrides: clone(draft.overrides) });
@@ -340,6 +424,7 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
     fromRevision: initial.baseRevision,
     toRevision: calibration.revision,
     ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
+    ...(anatomyRevision !== undefined ? { anatomyRevision } : {}),
     status,
     blockers,
     parts,

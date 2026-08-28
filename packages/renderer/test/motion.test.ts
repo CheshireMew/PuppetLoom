@@ -23,6 +23,20 @@ describe("calm autonomous timeline", () => {
     expect(times.map((time) => left.sample(time))).toEqual(times.map((time) => right.sample(time)));
   });
 
+  it("reuses secondary-chain buffers only on the renderer hot path", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    const firstRender = controller.sampleForRender(0);
+    const firstRenderChain = firstRender.secondary!.frontHairLeft;
+    const secondRender = controller.sampleForRender(1 / 60);
+    expect(secondRender.secondary!.frontHairLeft).toBe(firstRenderChain);
+
+    const firstSnapshot = controller.sample(2 / 60);
+    const firstSnapshotValues = [...firstSnapshot.secondary!.frontHairLeft.x];
+    const secondSnapshot = controller.sample(3 / 60);
+    expect(secondSnapshot.secondary!.frontHairLeft).not.toBe(firstSnapshot.secondary!.frontHairLeft);
+    expect(firstSnapshot.secondary!.frontHairLeft.x).toEqual(firstSnapshotValues);
+  });
+
   it("keeps mouth motion disabled and uses correlated movement", () => {
     const project = fixtureProject();
     const controller = new CalmMotionController(project);
@@ -181,6 +195,13 @@ describe("calm autonomous timeline", () => {
     const strongEars = states.map((state) => Math.abs(state.earY) > 0.008);
     const strongFlapStarts = strongEars.filter((active, index) => active && !strongEars[index - 1]).length;
     expect(strongFlapStarts).toBeGreaterThanOrEqual(6);
+  });
+
+  it("drives the two anatomical ears independently instead of mirroring one shared twitch", () => {
+    const controller = new CalmMotionController(fixtureProject());
+    const states = Array.from({ length: 900 }, (_, index) => controller.sample(index / 60));
+    expect(states.every((state) => Number.isFinite(state.earLeftY) && Number.isFinite(state.earRightY))).toBe(true);
+    expect(states.some((state) => Math.abs((state.earLeftY ?? 0) - (state.earRightY ?? 0)) > 0.002)).toBe(true);
   });
 
   it("moves the gaze first while the connected upper body starts with the head", () => {

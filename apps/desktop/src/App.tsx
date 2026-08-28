@@ -123,7 +123,10 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
   useEffect(() => {
     if (output) return;
     let disposed = false;
-    const refresh = () => void window.puppetloom.spoutOutput("status").then((status) => { if (!disposed) setSpoutStatus(status); }).catch(() => undefined);
+    const refresh = () => void window.puppetloom.spoutOutput("status").then((status) => {
+      if (disposed) return;
+      setSpoutStatus((current) => current && JSON.stringify(current) === JSON.stringify(status) ? current : status);
+    }).catch(() => undefined);
     refresh();
     const timer = window.setInterval(refresh, spoutStatus?.active ? 1000 : 4000);
     return () => { disposed = true; window.clearInterval(timer); };

@@ -833,7 +833,7 @@ function applyHeadwearCrownPerspective(
   yaw: number,
   pitch: number
 ): Point {
-  if (layer.role !== "headwear") return posed;
+  if (layer.role !== "headwear" || layer.headwearPerspective !== "crown") return posed;
   const crownPivot = {
     x: layer.bounds.x + layer.bounds.width * 0.5,
     y: layer.bounds.y + layer.bounds.height * 0.28
