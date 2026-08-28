@@ -118,10 +118,33 @@ export function opacityFor(layer: LayerBinding, state: MotionState): number {
   return layer.opacity * smoothstep((openness - 0.42) / 0.58);
 }
 
+function projectOpacityFor(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): number {
+  if (layer.role === "mouth" && (layer.mouthVariant === "closed" || layer.mouthVariant === "open")) {
+    const activeMouthVariants = mouthVariantsFor(project);
+    if (activeMouthVariants.has("closed") && activeMouthVariants.has("open") && !activeMouthVariants.has("slight")) {
+      const open = state.mouthOpen >= 0.5;
+      return layer.opacity * (layer.mouthVariant === "open" ? Number(open) : Number(!open));
+    }
+  }
+  return opacityFor(layer, state);
+}
+
+const mouthVariantCache = new WeakMap<PuppetLoomProject, Set<string>>();
+
+function mouthVariantsFor(project: PuppetLoomProject): Set<string> {
+  const cached = mouthVariantCache.get(project);
+  if (cached) return cached;
+  const variants = new Set(project.layers
+    .filter((candidate) => candidate.role === "mouth" && candidate.visible !== false)
+    .map((candidate) => candidate.mouthVariant ?? "closed"));
+  mouthVariantCache.set(project, variants);
+  return variants;
+}
+
 /** Authoring-aware opacity used by all renderers. */
 export function authoredOpacityFor(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): number {
   const resolved = featureGatedMotionState(project, state);
-  return Math.max(0, Math.min(1, opacityFor(layer, resolved) * evaluateLayerAuthoring(project, layer, resolved).opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
+  return Math.max(0, Math.min(1, projectOpacityFor(project, layer, resolved) * evaluateLayerAuthoring(project, layer, resolved).opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
 }
 
 export interface AuthoredRenderFrameLayer {
@@ -144,15 +167,16 @@ export interface AuthoredRenderFrameReuse {
 
 /** Resolves parameters and expensive authored geometry once for an entire render frame. */
 export function authoredRenderFrame(project: PuppetLoomProject, state: MotionState, previous?: AuthoredRenderFrameReuse): AuthoredRenderFrame {
-  const canReuse = previous?.inputState === state
+  const canReuseResolvedState = previous?.inputState === state
     && previous.project.model === project.model
     && previous.project.runtime === project.runtime;
-  const resolved = canReuse ? previous.frame.state : featureGatedMotionState(project, state);
-  const previousLayers = canReuse ? new Map(previous.project.layers.map((layer) => [layer.id, layer])) : undefined;
-  const authoringByLayerId = new Map(project.layers.map((layer) => {
-    const reusable = previousLayers?.get(layer.id) === layer ? previous?.frame.authoringByLayerId.get(layer.id) : undefined;
-    return [layer.id, reusable ?? evaluateLayerAuthoringResolved(project, layer, resolved)];
-  }));
+  const canReuseBuffers = previous?.project === project;
+  const resolved = canReuseResolvedState ? previous.frame.state : featureGatedMotionState(project, state);
+  const authoringByLayerId = canReuseBuffers ? previous.frame.authoringByLayerId : new Map<string, EvaluatedLayerAuthoring>();
+  for (const layer of project.layers) {
+    const reusable = canReuseBuffers ? authoringByLayerId.get(layer.id) : undefined;
+    authoringByLayerId.set(layer.id, evaluateLayerAuthoringResolved(project, layer, resolved, reusable));
+  }
   const authoredOrder = (layer: LayerBinding): number => layer.order + (authoringByLayerId.get(layer.id)?.drawOrderOffset ?? 0);
   const face = project.layers.find((layer) => layer.role === "face");
   const faceOrder = face ? authoredOrder(face) : undefined;
@@ -167,7 +191,7 @@ export function authoredRenderFrame(project: PuppetLoomProject, state: MotionSta
     authoringByLayerId,
     layers: ordered.map((layer) => {
       const authoring = authoringByLayerId.get(layer.id)!;
-      const opacity = Math.max(0, Math.min(1, opacityFor(layer, resolved) * authoring.opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
+      const opacity = Math.max(0, Math.min(1, projectOpacityFor(project, layer, resolved) * authoring.opacityMultiplier * poseDependentOpacity(project, layer, resolved)));
       return { layer, authoring, opacity };
     })
   };

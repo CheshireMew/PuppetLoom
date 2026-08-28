@@ -2,6 +2,7 @@ node_modules/
 dist/
 .vite/
 coverage/
+/artifacts/
 test/artifacts/*
 !test/artifacts/.gitkeep
 *.log

@@ -79,10 +79,10 @@ export function makeAssetRequests(project: PuppetLoomProject, options: AssetRequ
     const crop = { x, y, width: cropWidth, height: cropHeight };
     // The imported mouth is already the authoritative closed pose. Requesting
     // another closed drawing would duplicate it and can alter the neutral face.
-    for (const variant of ["slight", "open"] as const) {
+    for (const variant of ["open"] as const) {
       if (project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant)) continue;
-      const id = variant === "slight" ? "mouth-slight" : "mouth-open-small";
-      const description = variant === "slight" ? "slightly open with the same subtle smile" : "open a small, natural amount with the same subtle smile";
+      const id = "mouth-open-small";
+      const description = "clearly open but restrained, preserving the same subtle smile";
       requests.push({
         id,
         kind: "mouth-shape",
@@ -208,7 +208,19 @@ function supplementalLayer(request: AssetRequest, project: PuppetLoomProject, ex
 
 export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceResult> {
   const projectDirectory = resolve(options.project);
-  const { project, requests } = await loadProjectAndRequests(projectDirectory);
+  const loaded = await loadProjectAndRequests(projectDirectory);
+  const project = loaded.project;
+  let requests = loaded.requests;
+  const activeRequests = requests.requests.filter((request) => !(request.kind === "mouth-shape" && request.variant === "slight" && !project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === "slight")));
+  if (activeRequests.length !== requests.requests.length) {
+    const requestsPath = join(projectDirectory, "requests", "asset-requests.json");
+    const backup = join(projectDirectory, "requests", "asset-requests.pre-two-state.json");
+    try { await writeFile(backup, `${JSON.stringify(requests, null, 2)}\n`, { encoding: "utf8", flag: "wx" }); } catch { /* Preserve the first migration backup. */ }
+    requests = { ...requests, requests: activeRequests };
+    const temporary = `${requestsPath}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(requests, null, 2)}\n`, "utf8");
+    await rename(temporary, requestsPath);
+  }
   const accepted: string[] = [];
   const rejected: Array<{ requestId: string; reason: string }> = [];
   const layers = [...project.layers];
@@ -250,7 +262,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
   }
 
   const blinkEnabled = ["left", "right"].every((side) => layers.some((layer) => layer.role === "eyeClosed" && layer.side === side));
-  const mouthMotionEnabled = ["closed", "slight", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && (layer.mouthVariant ?? "closed") === variant && layer.opacity > 0));
+  const mouthMotionEnabled = ["closed", "open"].every((variant) => layers.some((layer) => layer.role === "mouth" && (layer.mouthVariant ?? "closed") === variant && layer.opacity > 0));
   const visemesEnabled = ["a", "i", "u", "e", "o"].every((variant) => layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === variant && layer.opacity > 0));
   const nextProject: PuppetLoomProject = {
     ...project,
@@ -266,7 +278,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
         visemes: visemesEnabled
       }
     },
-    disabledReasons: project.disabledReasons.filter((reason) => !(blinkEnabled && reason.includes("闭眼图层")) && !(mouthMotionEnabled && reason.includes("三态嘴形")))
+    disabledReasons: project.disabledReasons.filter((reason) => !(blinkEnabled && reason.includes("闭眼图层")) && !(mouthMotionEnabled && reason.includes("嘴部开合")))
   };
 
   if (accepted.length > 0) {

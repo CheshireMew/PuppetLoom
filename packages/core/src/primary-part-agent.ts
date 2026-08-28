@@ -105,7 +105,7 @@ const roles: Record<PrimaryModelAgentPart, SemanticRole[]> = {
 const labels: Record<PrimaryModelAgentPart, string> = {
   headFace: "头部与脸部九向",
   eyes: "眼神与眨眼",
-  mouth: "三态嘴型",
+  mouth: "嘴型开合",
   body: "身体跟随与呼吸"
 };
 
@@ -242,31 +242,37 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
   return { layers: patches };
 }
 
-function operationsFor(part: PrimaryModelAgentPart): AuthoringOperation[] {
+function operationsFor(part: PrimaryModelAgentPart, project: PuppetLoomProject): AuthoringOperation[] {
   if (part === "eyes") return [{
     op: "upsert-expression",
     expression: { id: "agent-eyes-closed", name: "自然闭眼", parameters: { "param-blink": 1 } }
   }];
-  if (part === "mouth") return [
-    { op: "upsert-expression", expression: { id: "agent-mouth-neutral", name: "嘴型 · 闭合", parameters: { "param-mouth-open": 0 } } },
-    { op: "upsert-expression", expression: { id: "agent-mouth-slight", name: "嘴型 · 微张", parameters: { "param-mouth-open": 0.42 } } },
-    { op: "upsert-expression", expression: { id: "agent-mouth-open", name: "嘴型 · 张开", parameters: { "param-mouth-open": 1 } } }
-  ];
+  if (part === "mouth") {
+    const hasSlight = project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === "slight" && layer.visible !== false);
+    return [
+      { op: "upsert-expression", expression: { id: "agent-mouth-neutral", name: "嘴型 · 闭合", parameters: { "param-mouth-open": 0 } } },
+      ...(hasSlight ? [{ op: "upsert-expression" as const, expression: { id: "agent-mouth-slight", name: "嘴型 · 微张", parameters: { "param-mouth-open": 0.42 } } }] : []),
+      { op: "upsert-expression", expression: { id: "agent-mouth-open", name: "嘴型 · 张开", parameters: { "param-mouth-open": 1 } } }
+    ];
+  }
   return [];
 }
 
-function previewsFor(part: PrimaryModelAgentPart): AuthoringPreview[] {
+function previewsFor(part: PrimaryModelAgentPart, project: PuppetLoomProject): AuthoringPreview[] {
   if (part === "eyes") return [
     { id: "eyes-left", label: "眼神 · 左", parameters: { "param-gaze-x": -1 } },
     { id: "eyes-neutral", label: "眼神 · 中立", parameters: { "param-gaze-x": 0, "param-gaze-y": 0 } },
     { id: "eyes-right", label: "眼神 · 右", parameters: { "param-gaze-x": 1 } },
     { id: "eyes-blink", label: "眼睛 · 闭眼", parameters: { "param-blink": 1 } }
   ];
-  if (part === "mouth") return [
-    { id: "mouth-closed", label: "嘴型 · 闭合", parameters: { "param-mouth-open": 0 } },
-    { id: "mouth-slight", label: "嘴型 · 微张", parameters: { "param-mouth-open": 0.42 } },
-    { id: "mouth-open", label: "嘴型 · 张开", parameters: { "param-mouth-open": 1 } }
-  ];
+  if (part === "mouth") {
+    const hasSlight = project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === "slight" && layer.visible !== false);
+    return [
+      { id: "mouth-closed", label: "嘴型 · 闭合", parameters: { "param-mouth-open": 0 } },
+      ...(hasSlight ? [{ id: "mouth-slight", label: "嘴型 · 微张", parameters: { "param-mouth-open": 0.42 } }] : []),
+      { id: "mouth-open", label: "嘴型 · 张开", parameters: { "param-mouth-open": 1 } }
+    ];
+  }
   if (part === "body") return [
     { id: "body-left", label: "身体 · 左跟随", parameters: { "param-body-sway": -0.8, "param-body-roll": -0.45 } },
     { id: "body-breath", label: "身体 · 呼吸", parameters: { "param-breath": 1 } },
@@ -404,7 +410,7 @@ function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, propo
       details: { faceLayerCount, requestedYawDegrees: rounded(requestedYawDegrees, 4), materialYawLimit }
     });
     checks.push({ id: "head-turn-visible", label: "头脸九向变化可见且不过量", passed: movement >= 0.002 && movement <= 0.085, details: { maximumMovement: rounded(movement, 8) } });
-    checks.push({ id: "nine-pose", label: "九向头部检查全部通过", passed: previewsFor(part).every((preview) => validatePose(proposed, preview.id, {
+    checks.push({ id: "nine-pose", label: "九向头部检查全部通过", passed: previewsFor(part, proposed).every((preview) => validatePose(proposed, preview.id, {
       ...neutralMotionState,
       headYaw: preview.parameters?.["param-head-yaw"] ?? 0,
       headPitch: preview.parameters?.["param-head-pitch"] ?? 0
@@ -455,9 +461,20 @@ function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, propo
   }
   if (part === "mouth") {
     const variants = new Set(layers.filter((layer) => layer.opacity > 0).map((layer) => layer.mouthVariant ?? "closed"));
-    const dominant = ([0, 0.42, 1] as const).map((value) => layers.filter((layer) => authoredOpacityFor(proposed, layer, { ...neutralMotionState, mouthOpen: value }) > 0.5).map((layer) => layer.mouthVariant ?? "closed"));
-    checks.push({ id: "mouth-assets", label: "闭合、微张和张开嘴型素材完整", passed: assets.length === 0 && ["closed", "slight", "open"].every((variant) => variants.has(variant as "closed" | "slight" | "open")) && proposed.runtime.features.mouthMotion, details: { missingAssetCount: assets.length, variants: [...variants].join(",") } });
-    checks.push({ id: "mouth-composite", label: "嘴型参数会依次切换三态素材", passed: dominant[0]!.includes("closed") && dominant[1]!.includes("slight") && dominant[2]!.includes("open"), details: { closed: dominant[0]!.join(","), slight: dominant[1]!.join(","), open: dominant[2]!.join(",") } });
+    const hasSlight = variants.has("slight");
+    const sampleValues = hasSlight ? [0, 0.42, 1] : [0, 0.49, 0.5, 1];
+    const dominant = sampleValues.map((value) => layers.filter((layer) => authoredOpacityFor(proposed, layer, { ...neutralMotionState, mouthOpen: value }) > 0.5).map((layer) => layer.mouthVariant ?? "closed"));
+    checks.push({ id: "mouth-assets", label: "闭合与张开嘴型素材完整", passed: assets.length === 0 && variants.has("closed") && variants.has("open") && proposed.runtime.features.mouthMotion, details: { missingAssetCount: assets.length, variants: [...variants].join(",") } });
+    checks.push({
+      id: "mouth-composite",
+      label: hasSlight ? "嘴型参数会依次切换三态素材" : "嘴型参数会直接切换闭口与张口素材",
+      passed: hasSlight
+        ? dominant[0]!.includes("closed") && dominant[1]!.includes("slight") && dominant[2]!.includes("open")
+        : dominant[0]!.includes("closed") && dominant[1]!.includes("closed") && dominant[2]!.includes("open") && dominant[3]!.includes("open"),
+      details: hasSlight
+        ? { closed: dominant[0]!.join(","), slight: dominant[1]!.join(","), open: dominant[2]!.join(",") }
+        : { closed: dominant[0]!.join(","), beforeSwitch: dominant[1]!.join(","), atSwitch: dominant[2]!.join(","), open: dominant[3]!.join(",") }
+    });
   }
   if (part === "body") {
     const moving = stateMovement(proposed, layers.filter((layer) => !["leg", "foot"].includes(layer.role)), { ...neutralMotionState, bodySway: 1, bodyRoll: 0.5, breath: 1 });
@@ -473,7 +490,7 @@ function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, propo
 export function createPrimaryPartAgentProposal(project: PuppetLoomProject, options: PrimaryPartAgentOptions): PreparedPrimaryProposal {
   const layers = targetLayers(project, options.part, options.layerIds);
   const intent = options.intent ? clone(options.intent) : intentFor(options.instruction);
-  const operations = operationsFor(options.part);
+  const operations = operationsFor(options.part, project);
   const overrides = layerOverrides(options.part, project, layers, intent);
   const proposed = applyCalibrationOverrides(applyAuthoringOperations(project, operations), overrides);
   const assetRequests = requestedAssets(project, options.part);
@@ -483,7 +500,7 @@ export function createPrimaryPartAgentProposal(project: PuppetLoomProject, optio
     instruction: options.instruction.trim() || `自动完成${labels[options.part]}`,
     intent,
     operations,
-    previews: previewsFor(options.part),
+    previews: previewsFor(options.part, proposed),
     overrides,
     checks: checksFor(options.part, project, proposed, layers, assetRequests),
     repairs: [],

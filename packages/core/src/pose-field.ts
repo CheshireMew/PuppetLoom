@@ -102,6 +102,10 @@ type SemanticCageMapping =
   | { kind: "triangle"; ids: [SemanticCagePointId, SemanticCagePointId, SemanticCagePointId]; weights: Barycentric }
   | { kind: "weighted"; entries: Array<{ id: SemanticCagePointId; weight: number }>; total: number };
 
+type SemanticCageTopology =
+  | { kind: "triangle"; ids: [SemanticCagePointId, SemanticCagePointId, SemanticCagePointId] }
+  | { kind: "weighted"; ids: SemanticCagePointId[] };
+
 interface SemanticCageMappingCache {
   face: SemanticCageRegionMappingCache;
   skull: SemanticCageRegionMappingCache;
@@ -110,6 +114,7 @@ interface SemanticCageMappingCache {
 interface SemanticCageRegionMappingCache {
   byIdentity: WeakMap<Point, SemanticCageMapping>;
   byCoordinates: Map<number, Map<number, SemanticCageMapping>>;
+  byTopologyIdentity: WeakMap<Point, SemanticCageTopology>;
   coordinateCount: number;
 }
 
@@ -131,8 +136,10 @@ interface PoseEvaluationCache {
 let poseEvaluationCache: PoseEvaluationCache | undefined;
 let angleCache: { yawAngle: number; pitchAngle: number; cosYaw: number; sinYaw: number; cosPitch: number; sinPitch: number } | undefined;
 const semanticCageMappingCaches = new WeakMap<CoherentPoseField, WeakMap<SemanticControlCage, SemanticCageMappingCache>>();
-const faceDepthCaches = new WeakMap<CoherentPoseField, WeakMap<Point, number>>();
+const faceDepthCaches = new WeakMap<CoherentPoseField, WeakMap<Point, { x: number; y: number; depth: number }>>();
 interface SurfaceProjectionProfile {
+  sourceX: number;
+  sourceY: number;
   surface: Surface;
   nx: number;
   ny: number;
@@ -158,7 +165,7 @@ let surfaceProjectionFrame: SurfaceProjectionFrame | undefined;
 const MAX_SEMANTIC_CAGE_COORDINATE_MAPPINGS = 32_768;
 
 function emptySemanticCageRegionMappingCache(): SemanticCageRegionMappingCache {
-  return { byIdentity: new WeakMap(), byCoordinates: new Map(), coordinateCount: 0 };
+  return { byIdentity: new WeakMap(), byCoordinates: new Map(), byTopologyIdentity: new WeakMap(), coordinateCount: 0 };
 }
 
 function cachedSemanticCageMapping(cache: SemanticCageRegionMappingCache, point: Point): SemanticCageMapping | undefined {
@@ -189,9 +196,9 @@ function cachedFaceDepth(field: CoherentPoseField, base: Point, normalizedFaceY:
     faceDepthCaches.set(field, values);
   }
   const cached = values.get(base);
-  if (cached !== undefined) return cached;
+  if (cached && cached.x === base.x && cached.y === base.y) return cached.depth;
   const depth = faceDepthAt(field, normalizedFaceY);
-  values.set(base, depth);
+  values.set(base, { x: base.x, y: base.y, depth });
   return depth;
 }
 
@@ -274,7 +281,7 @@ function surfaceProjectionProfile(
     byRole.set(role, byPoint);
   }
   const cached = byPoint.get(base);
-  if (cached) return cached;
+  if (cached && cached.sourceX === base.x && cached.sourceY === base.y) return cached;
 
   const surface = surfaceFor(field, role);
   const nx = (base.x - surface.center.x) / surface.radiusX;
@@ -283,6 +290,8 @@ function surfaceProjectionProfile(
   const surfaceDepth = Math.sqrt(Math.max(0, 1 - Math.min(1, radial)));
   const authoredDepth = faceDepthRoles.has(role) ? cachedFaceDepth(field, base, (ny + 1) * 0.5) : 0;
   const profile: SurfaceProjectionProfile = {
+    sourceX: base.x,
+    sourceY: base.y,
     surface,
     nx,
     ny,
@@ -461,29 +470,47 @@ function semanticCageMapping(
   cage: SemanticControlCage,
   base: Point,
   region: "face" | "skull",
-  mappings = semanticCageMappingCacheFor(field, cage)
+  mappings = semanticCageMappingCacheFor(field, cage),
+  topologyKey?: Point
 ): SemanticCageMapping {
   const cache = mappings[region];
-  const cached = cachedSemanticCageMapping(cache, base);
-  if (cached) return cached;
-
   const triangles = region === "face" ? cage.faceTriangles : cage.skullTriangles;
+  const weightedMapping = (ids: SemanticCagePointId[]): SemanticCageMapping => {
+    const softening = Math.max(1e-6, field.radiusX * field.radiusX * 0.0036);
+    const entries = ids.map((id) => {
+      const source = cage.points[id];
+      const distanceSquared = (base.x - source.position.x) ** 2 + (base.y - source.position.y) ** 2;
+      return { id, weight: source.confidence / (distanceSquared + softening) };
+    });
+    return { kind: "weighted", entries, total: entries.reduce((sum, entry) => sum + entry.weight, 0) };
+  };
+
+  if (topologyKey) {
+    const topology = cache.byTopologyIdentity.get(topologyKey);
+    if (topology?.kind === "triangle") {
+      const [aId, bId, cId] = topology.ids;
+      const weights = barycentric(base, cage.points[aId].position, cage.points[bId].position, cage.points[cId].position);
+      if (weights && Math.min(weights.a, weights.b, weights.c) >= -0.015) return { kind: "triangle", ids: topology.ids, weights };
+      cache.byTopologyIdentity.delete(topologyKey);
+    } else if (topology?.kind === "weighted") return weightedMapping(topology.ids);
+  } else {
+    const cached = cachedSemanticCageMapping(cache, base);
+    if (cached) return cached;
+  }
+
   for (const [aId, bId, cId] of triangles) {
     const weights = barycentric(base, cage.points[aId].position, cage.points[bId].position, cage.points[cId].position);
     if (!weights || Math.min(weights.a, weights.b, weights.c) < -0.015) continue;
     const mapping: SemanticCageMapping = { kind: "triangle", ids: [aId, bId, cId], weights };
-    rememberSemanticCageMapping(cache, base, mapping);
+    if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { kind: "triangle", ids: mapping.ids });
+    else rememberSemanticCageMapping(cache, base, mapping);
     return mapping;
   }
 
-  const softening = Math.max(1e-6, field.radiusX * field.radiusX * 0.0036);
-  const entries = [...new Set(triangles.flat())].map((id) => {
-    const source = cage.points[id];
-    const distanceSquared = (base.x - source.position.x) ** 2 + (base.y - source.position.y) ** 2;
-    return { id, weight: source.confidence / (distanceSquared + softening) };
-  });
-  const mapping: SemanticCageMapping = { kind: "weighted", entries, total: entries.reduce((sum, entry) => sum + entry.weight, 0) };
-  rememberSemanticCageMapping(cache, base, mapping);
+  const ids = [...new Set(triangles.flat())];
+  const mapping = weightedMapping(ids);
+  if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { kind: "weighted", ids });
+  else rememberSemanticCageMapping(cache, base, mapping);
   return mapping;
 }
 
@@ -495,7 +522,8 @@ function mappedBySemanticCage(
   yawAngle: number,
   pitchAngle: number,
   yaw: number,
-  pitch: number
+  pitch: number,
+  topologyKey?: Point
 ): Point {
   const cache = evaluationCacheFor(field, cage, yawAngle, pitchAngle, yaw, pitch);
   const projected = region === "face" ? cache.projectedFace : cache.projectedSkull;
@@ -506,7 +534,7 @@ function mappedBySemanticCage(
     projected[id] = target;
     return target;
   };
-  const mapping = semanticCageMapping(field, cage, base, region, cache.semanticMappings);
+  const mapping = semanticCageMapping(field, cage, base, region, cache.semanticMappings, topologyKey);
   if (mapping.kind === "triangle") {
     const [aId, bId, cId] = mapping.ids;
     const { weights } = mapping;
@@ -543,6 +571,8 @@ function cageBlendFor(role: SemanticRole): number {
 }
 
 interface FrontHairStrandProfile {
+  sourceX: number;
+  sourceY: number;
   faceFollow: number;
   rootLock: number;
   strandRelease: number;
@@ -556,6 +586,8 @@ interface FrontHairBangProfile {
 }
 
 interface FrontHairAttachmentProfile {
+  sourceX: number;
+  sourceY: number;
   anchor: Point;
 }
 
@@ -599,7 +631,7 @@ function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, 
     byLayer.set(layer, byPoint);
   }
   const cached = byPoint.get(base);
-  if (cached) return cached;
+  if (cached && cached.sourceX === base.x && cached.sourceY === base.y) return cached;
   const forehead = cage.points.forehead.position;
   const eyeY = (cage.points.eyeLeft.position.y + cage.points.eyeRight.position.y) * 0.5;
   const faceLeft = cage.points.faceLeft.position.x;
@@ -646,7 +678,7 @@ function frontHairStrandProfile(cage: SemanticControlCage, layer: LayerBinding, 
   // ceiling keeps the transition continuous without replacing adjacent mesh
   // columns discontinuously.
   const strandRelease = strandMask * smoothstep01((progress - 0.015) / 0.56) * 0.94;
-  const profile = { faceFollow, rootLock, strandRelease, root: strandRoot };
+  const profile = { sourceX: base.x, sourceY: base.y, faceFollow, rootLock, strandRelease, root: strandRoot };
   byPoint.set(base, profile);
   return profile;
 }
@@ -663,10 +695,10 @@ function frontHairAttachmentProfile(cage: SemanticControlCage, layer: LayerBindi
     byLayer.set(layer, byPoint);
   }
   const cached = byPoint.get(base);
-  if (cached) return cached;
+  if (cached && cached.sourceX === base.x && cached.sourceY === base.y) return cached;
   const centerX = (cage.points.faceLeft.position.x + cage.points.faceRight.position.x) * 0.5;
   const edge = base.x < centerX ? cage.points.faceLeft.position : cage.points.faceRight.position;
-  const profile = { anchor: { x: edge.x, y: base.y } };
+  const profile = { sourceX: base.x, sourceY: base.y, anchor: { x: edge.x, y: base.y } };
   byPoint.set(base, profile);
   return profile;
 }
@@ -866,6 +898,8 @@ function applyHeadwearCrownPerspective(
 }
 
 interface BackHairPointProfile {
+  sourceX: number;
+  sourceY: number;
   pivot: Point;
   side: -1 | 1;
   geometricFreeLength: number;
@@ -890,12 +924,14 @@ function backHairPointProfile(field: CoherentPoseField, layer: LayerBinding, bas
     byLayer.set(layer, byPoint);
   }
   const cached = byPoint.get(base);
-  if (cached) return cached;
+  if (cached && cached.sourceX === base.x && cached.sourceY === base.y) return cached;
   const pivot = layer.role === "backHair" && field.skullCenter
     ? { x: field.skullCenter.x, y: field.skullCenter.y + (field.skullRadiusY ?? layer.bounds.height * 0.3) * 0.12 }
     : layer.pivot;
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
   const profile: BackHairPointProfile = {
+    sourceX: base.x,
+    sourceY: base.y,
     pivot,
     side: base.x < pivot.x ? -1 : 1,
     geometricFreeLength: smoothstep01((v - 0.28) / 0.62),
@@ -962,7 +998,8 @@ function applyFrontHairVolume(
   yaw: number,
   pitch: number,
   skullInfluence: number,
-  explicitAttachment?: number
+  explicitAttachment?: number,
+  topologyKey?: Point
 ): Point {
   const pivot = layer.secondaryAnchors?.frontHairRoot ?? layer.pivot;
   const cachedPivots = cage ? evaluationCacheFor(field, cage, yawAngle, pitchAngle, yaw, pitch).attachmentPivots.get(layer) : undefined;
@@ -974,7 +1011,7 @@ function applyFrontHairVolume(
   const blend = cage ? cageBlendFor("frontHair") * clamp(skullInfluence, 0, 1) : 0;
   const surfaceScalp = projectSurface(field, layer, base, yawAngle, pitchAngle);
   const cageScalp = cage
-    ? mappedBySemanticCage(field, cage, base, "skull", yawAngle, pitchAngle, yaw, pitch)
+    ? mappedBySemanticCage(field, cage, base, "skull", yawAngle, pitchAngle, yaw, pitch, topologyKey)
     : surfaceScalp;
   const posedScalp = {
     x: surfaceScalp.x + (cageScalp.x - surfaceScalp.x) * blend,
@@ -1176,7 +1213,7 @@ export function applyCoherentPoseField(
   yaw: number,
   pitch: number,
   semanticCage?: SemanticControlCage,
-  cageInfluence: { face?: number; skull?: number; attachment?: number } = {}
+  cageInfluence: { face?: number; skull?: number; attachment?: number; topologyKey?: Point } = {}
 ): Point {
   const yawAngle = clamp(yaw, -1, 1) * field.maxYawRadians;
   const pitchLimit = pitch < 0
@@ -1195,7 +1232,8 @@ export function applyCoherentPoseField(
       yaw,
       pitch,
       cageInfluence.skull ?? 1,
-      cageInfluence.attachment
+      cageInfluence.attachment,
+      cageInfluence.topologyKey
     );
   }
   const surfacePosed = projectSurface(field, layer, base, yawAngle, pitchAngle);
@@ -1213,7 +1251,7 @@ export function applyCoherentPoseField(
   const regionInfluence = region === "face" ? cageInfluence.face ?? 1 : region === "skull" ? cageInfluence.skull ?? 1 : 1;
   const cageBlend = semanticCage && region ? cageBlendFor(layer.role) * clamp(regionInfluence, 0, 1) : 0;
   const cagePosed = semanticCage && region
-    ? mappedBySemanticCage(field, semanticCage, base, region, yawAngle, pitchAngle, yaw, pitch)
+    ? mappedBySemanticCage(field, semanticCage, base, region, yawAngle, pitchAngle, yaw, pitch, cageInfluence.topologyKey)
     : surfacePosed;
   let cagePivot = semanticCage && region ? cache?.cagePivots.get(layer) : surfacePivot;
   if (!cagePivot) {

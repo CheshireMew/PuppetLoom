@@ -1,6 +1,6 @@
 import type { PuppetLoomProject } from "@puppetloom/core/browser";
 import { describe, expect, it } from "vitest";
-import { CalmMotionController } from "../src/motion.js";
+import { CalmMotionController, eventValue } from "../src/motion.js";
 import { activeElapsedSeconds, layersInRenderOrder, opacityFor } from "../src/renderer.js";
 
 function fixtureProject(seed = 42, mouthMotion = false): PuppetLoomProject {
@@ -66,6 +66,17 @@ describe("calm autonomous timeline", () => {
     expect(phrase[3]!.start).toBeLessThan(15);
   });
 
+  it("keeps deliberate looks continuously settling instead of freezing during the pause", () => {
+    const event = new CalmMotionController(fixtureProject()).events[0]!;
+    const holdStart = event.start + event.transition;
+    const samples = Array.from({ length: 9 }, (_, index) => eventValue(event, holdStart + event.hold * index / 8, "yaw"));
+    expect(samples[0]).toBeCloseTo(event.yaw, 10);
+    expect(new Set(samples.map((value) => value.toFixed(8))).size).toBe(samples.length);
+    expect(Math.abs(samples.at(-1)!)).toBeLessThan(Math.abs(samples[0]!));
+    const returnStart = eventValue(event, holdStart + event.hold, "yaw");
+    expect(returnStart).toBeCloseTo(samples.at(-1)!, 10);
+  });
+
   it("keeps secondary parts gently moving between deliberate head turns", () => {
     const controller = new CalmMotionController(fixtureProject());
     const states = Array.from({ length: 105 }, (_, index) => controller.sample(index / 60));
@@ -73,6 +84,7 @@ describe("calm autonomous timeline", () => {
     expect(Math.max(...states.map((state) => Math.abs(state.backHairX)))).toBeGreaterThan(0.006);
     expect(Math.max(...states.map((state) => Math.abs(state.ahogeX)))).toBeGreaterThan(0.008);
     expect(Math.max(...states.map((state) => Math.abs(state.ahogeY)))).toBeGreaterThan(0.0004);
+    expect(Math.max(...states.map((state) => Math.abs(state.headwearX)))).toBeGreaterThan(0.004);
     expect(states.some((state) => Math.abs(state.clothX) > 0.001)).toBe(true);
     expect(states.some((state) => Math.abs(state.tailY) > 0.001)).toBe(true);
     expect(states.filter((state) => state.hairX * state.backHairX < 0)).toHaveLength(states.length);

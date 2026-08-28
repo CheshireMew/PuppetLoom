@@ -80,6 +80,17 @@ describe("primary model Agent", () => {
     expect(mouth.operations.filter((operation) => operation.op === "upsert-expression")).toHaveLength(3);
   });
 
+  it("accepts the default closed/open mouth pair without inventing a slight mouth", () => {
+    const value = project();
+    value.layers = value.layers.filter((candidate) => candidate.mouthVariant !== "slight");
+    const proposal = createPrimaryPartAgentProposal(value, { part: "mouth", instruction: "保留原闭口，只补一个完整张口态" });
+
+    expect(proposal.assetRequests).toHaveLength(0);
+    expect(proposal.operations.filter((operation) => operation.op === "upsert-expression")).toHaveLength(2);
+    expect(proposal.operations.some((operation) => operation.op === "upsert-expression" && operation.expression.id === "agent-mouth-slight")).toBe(false);
+    expect(proposal.checks.every((check) => check.passed)).toBe(true);
+  });
+
   it("reports the exact failed pose ids and reasons instead of only a count", () => {
     const value = project();
     const iris = value.layers.find((candidate) => candidate.id === "iris-left")!;

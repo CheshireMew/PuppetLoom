@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { modelAgentCapabilities, requestedModelAgentParts } from "../src/agent.js";
-import { assessAgentMesh } from "../src/agent-mesh.js";
+import { assessAgentMesh, rebuildAgentMesh } from "../src/agent-mesh.js";
+import { buildArtMesh, traceArtMeshSource } from "../src/art-mesh.js";
 import { createFrontHairAgentProposal } from "../src/front-hair-agent.js";
 import { frontHairSideGeometry } from "../src/front-hair-geometry.js";
 import { createSecondaryPartAgentProposal } from "../src/secondary-part-agent.js";
@@ -8,6 +9,7 @@ import { neutralMotionState, deformedPoints } from "../src/deform.js";
 import { makeGridMesh } from "../src/mesh.js";
 import { createDefaultAuthoringModel } from "../src/model.js";
 import type { LayerBinding, PuppetLoomProject } from "../src/types.js";
+import type { PixelBuffer } from "../src/psd.js";
 
 function frontHairLayer(): LayerBinding {
   const bounds = { x: 0.3, y: 0.12, width: 0.4, height: 0.4 };
@@ -35,6 +37,36 @@ function frontHairLayer(): LayerBinding {
     weights: { head: 1, body: 0, gaze: 0, physics: 1 },
     parentGroup: "head"
   };
+}
+
+function seededHairPixels(seed: number): PixelBuffer {
+  const width = 96;
+  const height = 128;
+  let value = seed >>> 0;
+  const random = (): number => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 0x100000000;
+  };
+  const lobes = Array.from({ length: 15 }, (_, index) => ({
+    cx: 48 + (random() - 0.5) * 52,
+    cy: 22 + index * 5.4 + (random() - 0.5) * 12,
+    rx: 18 + random() * 25,
+    ry: 13 + random() * 24
+  }));
+  const notches = Array.from({ length: 10 }, () => ({
+    cx: 48 + (random() - 0.5) * 62,
+    cy: 38 + random() * 76,
+    rx: 5 + random() * 12,
+    ry: 6 + random() * 18
+  }));
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const index = (y * width + x) * 4;
+    const opaque = lobes.some((lobe) => ((x - lobe.cx) / lobe.rx) ** 2 + ((y - lobe.cy) / lobe.ry) ** 2 <= 1)
+      && !notches.some((notch) => ((x - notch.cx) / notch.rx) ** 2 + ((y - notch.cy) / notch.ry) ** 2 <= 1);
+    data[index + 3] = opaque ? 255 : 0;
+  }
+  return { width, height, data };
 }
 
 function project(): PuppetLoomProject {
@@ -110,6 +142,22 @@ describe("front hair Agent", () => {
       shouldRebuild: true,
       issues: expect.arrayContaining(["仍是矩形网格，未贴合 Alpha 轮廓"])
     });
+  });
+
+  it("selects a nearby detail that clears the shared Agent mesh contract", () => {
+    const texture = seededHairPixels(14);
+    const layer = frontHairLayer();
+    layer.role = "backHair";
+    layer.mesh = buildArtMesh(layer.bounds, traceArtMeshSource(texture, 8, 12), 12);
+    expect(assessAgentMesh(layer)).toMatchObject({
+      shouldRebuild: true,
+      issues: expect.arrayContaining([expect.stringContaining("微小网格碎片")])
+    });
+
+    const rebuilt = rebuildAgentMesh(layer, texture);
+    expect(rebuilt.topology).toBe("art");
+    expect(rebuilt.art?.detail).toBe(9);
+    expect(assessAgentMesh({ ...layer, mesh: rebuilt })).toMatchObject({ shouldRebuild: false, issues: [] });
   });
 
   it("uses the shared whole-model task registry instead of a front-hair-only protocol", () => {

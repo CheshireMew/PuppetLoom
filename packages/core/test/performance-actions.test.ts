@@ -86,6 +86,24 @@ describe("standard performance action library", () => {
     expect(deformedPoints(after, tail, { ...neutralMotionState, behavior: { id: "action-tail-wag", timeSeconds: 1.9 } })).toEqual(tail.mesh.points);
   });
 
+  it("moves separate ear layers even when a previous Agent revision disabled their procedural physics", () => {
+    const before = project();
+    before.layers = [
+      ...before.layers.filter((value) => value.id !== "ear-headwear"),
+      layer("ear-left", "ear", "left", 0.56, 0.08, { weights: { head: 1, body: 0, gaze: 0, physics: 0 } }),
+      layer("ear-right", "ear", "right", 0.32, 0.08, { weights: { head: 1, body: 0, gaze: 0, physics: 0 } })
+    ];
+    const plan = planStandardPerformanceActions(before, 0);
+    const after = applyAuthoringOperations(before, plan.patch!.operations);
+    const activeState = { ...neutralMotionState, behavior: { id: "action-ear-flick", timeSeconds: 0.12 } };
+    for (const id of ["ear-left", "ear-right"]) {
+      const ear = after.layers.find((value) => value.id === id)!;
+      expect(deformedPoints(after, ear, activeState)).not.toEqual(ear.mesh.points);
+    }
+    expect(after.model.parameters.find((value) => value.id === "param-performance-ear-y")?.semantic).toBeUndefined();
+    expect(planStandardPerformanceActions(after, 1).changed).toBe(false);
+  });
+
   it("reports absent parts and missing expression assets without fabricating actions", () => {
     const incomplete = project();
     incomplete.layers = incomplete.layers.filter((value) => !["eye-closed-left", "eye-closed-right", "mouth-slight", "mouth-open", "ear-headwear", "tail"].includes(value.id));

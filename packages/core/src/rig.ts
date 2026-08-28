@@ -90,6 +90,10 @@ function pivotFor(role: SemanticRole, bounds: Rect, side: LayerBinding["side"], 
     const x = side === "left" ? bounds.x : side === "right" ? bounds.x + bounds.width : bounds.x + bounds.width * 0.5;
     return roundPoint({ x, y: bounds.y + bounds.height * 0.42 });
   }
+  if (role === "headwear" && !secondaryAnchors?.earHingeLeft && !secondaryAnchors?.earHingeRight) {
+    const hanging = bounds.height > bounds.width * 1.15;
+    return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * (hanging ? 0.04 : 0.84) });
+  }
   if (role === "tail") return roundPoint({ x: bounds.x + bounds.width * 0.03, y: bounds.y + bounds.height * 0.08 });
   if (role === "topWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.18 });
   if (role === "bottomWear") return roundPoint({ x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.12 });
@@ -347,7 +351,7 @@ function disabledReasons(features: RuntimeFeatures, imported: ImportedPsd, level
   if (!features.gaze) reasons.push("缺少成对眼白或虹膜，已关闭视线移动。" );
   if (!features.hairPhysics) reasons.push("没有可用的头发、耳朵、衣摆、尾巴或饰品图层，已关闭次级运动。" );
   if (!features.blink) reasons.push("缺少闭眼图层，当前结果不启用眨眼。" );
-  if (!features.mouthMotion) reasons.push("缺少闭合、微张和张开三态嘴形，当前结果不启用嘴部开合。" );
+  if (!features.mouthMotion) reasons.push("缺少闭合与张开两态嘴形，当前结果不启用嘴部开合。" );
   if (!features.bodyFollow) reasons.push("没有识别到脖子或上身，已关闭身体跟随。" );
   if (imported.layers.some((layer) => layer.role === "unknown")) reasons.push("未识别图层保持原样，不参与专用变形。" );
   return reasons;

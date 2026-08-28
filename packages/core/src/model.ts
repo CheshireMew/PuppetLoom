@@ -88,14 +88,51 @@ export function createDefaultAuthoringModel(): AuthoringModel {
   };
 }
 
+interface ModelIndex {
+  model: AuthoringModel;
+  parametersById: Map<string, ModelParameter>;
+  behaviorsById: Map<string, ModelBehavior>;
+  bindingsByTarget: Map<string, ModelBinding[]>;
+}
+
+const normalizedModelCache = new WeakMap<PuppetLoomProject, { source: PuppetLoomProject["model"]; model: AuthoringModel }>();
+const modelIndexCache = new WeakMap<AuthoringModel, ModelIndex>();
+const emptyBindings: ModelBinding[] = [];
+
 function modelFor(project: PuppetLoomProject): AuthoringModel {
-  const model = project.model ?? createDefaultAuthoringModel();
-  return {
-    ...model,
-    expressions: model.expressions ?? [],
-    physics: model.physics ?? [],
-    behaviors: model.behaviors ?? []
+  const source = project.model;
+  const cached = normalizedModelCache.get(project);
+  if (cached && cached.source === source) return cached.model;
+  const model = source
+    ? { ...source, expressions: source.expressions ?? [], physics: source.physics ?? [], behaviors: source.behaviors ?? [] }
+    : createDefaultAuthoringModel();
+  normalizedModelCache.set(project, { source, model });
+  return model;
+}
+
+function bindingTargetKey(kind: "layer" | "deformer", id: string): string {
+  return `${kind}:${id}`;
+}
+
+function modelIndexFor(project: PuppetLoomProject): ModelIndex {
+  const model = modelFor(project);
+  const cached = modelIndexCache.get(model);
+  if (cached) return cached;
+  const bindingsByTarget = new Map<string, ModelBinding[]>();
+  for (const binding of model.bindings) {
+    const key = bindingTargetKey(binding.target.kind, binding.target.id);
+    const bindings = bindingsByTarget.get(key);
+    if (bindings) bindings.push(binding);
+    else bindingsByTarget.set(key, [binding]);
+  }
+  const index = {
+    model,
+    parametersById: new Map(model.parameters.map((parameter) => [parameter.id, parameter])),
+    behaviorsById: new Map(model.behaviors.map((behavior) => [behavior.id, behavior])),
+    bindingsByTarget
   };
+  modelIndexCache.set(model, index);
+  return index;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -139,13 +176,14 @@ function activeBehaviorValues(project: PuppetLoomProject, state: MotionState): {
   expressions: Record<string, number>;
 } {
   const values = { parameters: {} as Record<string, number>, expressions: { ...(state.expressions ?? {}) } };
-  const model = modelFor(project);
+  const index = modelIndexFor(project);
+  const model = index.model;
   const active: Array<{ behavior: ModelBehavior; timeSeconds: number; weight: number }> = [];
   if (state.timeSeconds !== undefined) {
     for (const behavior of model.behaviors) if (behavior.autoplay) active.push({ behavior, timeSeconds: state.timeSeconds, weight: 1 });
   }
   if (state.behavior) {
-    const behavior = model.behaviors.find((candidate) => candidate.id === state.behavior!.id);
+    const behavior = index.behaviorsById.get(state.behavior.id);
     if (behavior) active.push({ behavior, timeSeconds: state.behavior.timeSeconds, weight: clamp(state.behavior.weight ?? 1, 0, 1) });
   }
   for (const entry of active) {
@@ -153,7 +191,7 @@ function activeBehaviorValues(project: PuppetLoomProject, state: MotionState): {
     for (const track of entry.behavior.tracks) {
       const value = trackValue(track, local);
       if (track.target.kind === "parameter") {
-        const parameter = model.parameters.find((candidate) => candidate.id === track.target.id);
+        const parameter = index.parametersById.get(track.target.id);
         values.parameters[track.target.id] = parameter ? parameter.default + (value - parameter.default) * entry.weight : value;
       } else values.expressions[track.target.id] = clamp(value * entry.weight, 0, 1);
     }
@@ -163,7 +201,8 @@ function activeBehaviorValues(project: PuppetLoomProject, state: MotionState): {
 
 export function resolveParameterValues(project: PuppetLoomProject, state: MotionState): Record<string, number> {
   const resolved: Record<string, number> = {};
-  const model = modelFor(project);
+  const index = modelIndexFor(project);
+  const model = index.model;
   const behaviorValues = activeBehaviorValues(project, state);
   for (const parameter of model.parameters) {
     const semanticField = parameter.semantic ? semanticFields[parameter.semantic] : undefined;
@@ -180,17 +219,17 @@ export function resolveParameterValues(project: PuppetLoomProject, state: Motion
     const weight = clamp(behaviorValues.expressions[expression.id] ?? 0, 0, 1);
     if (weight <= 0) continue;
     for (const [parameterId, target] of Object.entries(expression.parameters)) {
-      const parameter = model.parameters.find((candidate) => candidate.id === parameterId);
+      const parameter = index.parametersById.get(parameterId);
       if (!parameter) continue;
       resolved[parameterId] = wrapped((resolved[parameterId] ?? parameter.default) + (target - parameter.default) * weight, parameter);
     }
   }
   for (const [parameterId, value] of Object.entries(behaviorValues.parameters)) {
-    const parameter = model.parameters.find((candidate) => candidate.id === parameterId);
+    const parameter = index.parametersById.get(parameterId);
     if (parameter) resolved[parameterId] = wrapped(value, parameter);
   }
   for (const [parameterId, value] of Object.entries(state.parameters ?? {})) {
-    const parameter = model.parameters.find((candidate) => candidate.id === parameterId);
+    const parameter = index.parametersById.get(parameterId);
     if (parameter) resolved[parameterId] = wrapped(value, parameter);
   }
   return resolved;
@@ -230,14 +269,15 @@ export class ModelPhysicsController {
   }
 
   sample(state: MotionState, timeSeconds = state.timeSeconds ?? 0): MotionState {
-    const model = modelFor(this.project);
+    const index = modelIndexFor(this.project);
+    const model = index.model;
     if (model.physics.length === 0) return { ...state, timeSeconds };
     const delta = this.lastTime === undefined ? 1 / 60 : clamp(timeSeconds - this.lastTime, 1 / 240, 0.05);
     this.lastTime = timeSeconds;
     const parameters = resolveParameterValues(this.project, { ...state, timeSeconds });
     for (const group of orderedPhysics(model.physics)) {
-      const input = model.parameters.find((parameter) => parameter.id === group.inputParameterId)!;
-      const output = model.parameters.find((parameter) => parameter.id === group.outputParameterId)!;
+      const input = index.parametersById.get(group.inputParameterId)!;
+      const output = index.parametersById.get(group.outputParameterId)!;
       const axis = this.axes.get(group.id)!;
       const target = ((parameters[input.id] ?? input.default) - input.default) * group.inputScale;
       const acceleration = (target - axis.value) * group.response * group.response - 2 * group.damping * group.response * axis.velocity;
@@ -266,6 +306,28 @@ interface WeightedKeyform {
   weight: number;
 }
 
+interface BindingKeyformIndex {
+  xs: number[];
+  ys: number[];
+  byX: Map<number, ModelKeyform>;
+  byCoordinate: Map<string, ModelKeyform>;
+}
+
+const bindingKeyformIndexCache = new WeakMap<ModelBinding, BindingKeyformIndex>();
+
+function bindingKeyformIndex(binding: ModelBinding): BindingKeyformIndex {
+  const cached = bindingKeyformIndexCache.get(binding);
+  if (cached) return cached;
+  const index = {
+    xs: [...new Set(binding.keyforms.map((keyform) => keyform.values[0]))].sort((left, right) => left - right),
+    ys: [...new Set(binding.keyforms.map((keyform) => keyform.values[1] ?? 0))].sort((left, right) => left - right),
+    byX: new Map(binding.keyforms.map((keyform) => [keyform.values[0], keyform])),
+    byCoordinate: new Map(binding.keyforms.map((keyform) => [`${keyform.values[0]}:${keyform.values[1] ?? 0}`, keyform]))
+  };
+  bindingKeyformIndexCache.set(binding, index);
+  return index;
+}
+
 function interval(values: number[], current: number): [number, number, number] {
   if (values.length === 0) return [0, 0, 0];
   if (current <= values[0]!) return [values[0]!, values[0]!, 0];
@@ -280,20 +342,18 @@ function interval(values: number[], current: number): [number, number, number] {
 
 function weightedKeyforms(binding: ModelBinding, parameters: Record<string, number>): WeightedKeyform[] {
   const x = parameters[binding.parameterIds[0]] ?? 0;
+  const index = bindingKeyformIndex(binding);
   if (binding.parameterIds.length === 1) {
-    const ordered = [...binding.keyforms].sort((left, right) => left.values[0] - right.values[0]);
-    const [lower, upper, amount] = interval(ordered.map((keyform) => keyform.values[0]), x);
-    const low = ordered.find((keyform) => keyform.values[0] === lower)!;
+    const [lower, upper, amount] = interval(index.xs, x);
+    const low = index.byX.get(lower)!;
     if (lower === upper) return [{ keyform: low, weight: 1 }];
-    const high = ordered.find((keyform) => keyform.values[0] === upper)!;
+    const high = index.byX.get(upper)!;
     return [{ keyform: low, weight: 1 - amount }, { keyform: high, weight: amount }];
   }
   const y = parameters[binding.parameterIds[1]] ?? 0;
-  const xs = [...new Set(binding.keyforms.map((keyform) => keyform.values[0]))].sort((left, right) => left - right);
-  const ys = [...new Set(binding.keyforms.map((keyform) => keyform.values[1] ?? 0))].sort((left, right) => left - right);
-  const [x0, x1, tx] = interval(xs, x);
-  const [y0, y1, ty] = interval(ys, y);
-  const at = (keyX: number, keyY: number): ModelKeyform => binding.keyforms.find((keyform) => keyform.values[0] === keyX && keyform.values[1] === keyY)!;
+  const [x0, x1, tx] = interval(index.xs, x);
+  const [y0, y1, ty] = interval(index.ys, y);
+  const at = (keyX: number, keyY: number): ModelKeyform => index.byCoordinate.get(`${keyX}:${keyY}`)!;
   if (x0 === x1 && y0 === y1) return [{ keyform: at(x0, y0), weight: 1 }];
   if (x0 === x1) return [{ keyform: at(x0, y0), weight: 1 - ty }, { keyform: at(x0, y1), weight: ty }];
   if (y0 === y1) return [{ keyform: at(x0, y0), weight: 1 - tx }, { keyform: at(x1, y0), weight: tx }];
@@ -311,10 +371,8 @@ function addPoint(target: Point, source: Point | undefined, weight: number): voi
   target.y += source.y * weight;
 }
 
-function sampledPoint(weights: WeightedKeyform[], property: "meshPointDeltas" | "warpPointDeltas", index: number): Point {
-  const result = { x: 0, y: 0 };
-  for (const entry of weights) addPoint(result, entry.keyform[property]?.[String(index)], entry.weight);
-  return result;
+function addSampledPoint(target: Point, weights: WeightedKeyform[], property: "meshPointDeltas" | "warpPointDeltas", index: number): void {
+  for (const entry of weights) addPoint(target, entry.keyform[property]?.[String(index)], entry.weight);
 }
 
 function sampledNumber(weights: WeightedKeyform[], property: "opacityMultiplier" | "drawOrderOffset", fallback: number): number {
@@ -363,7 +421,7 @@ function warpPoint(point: Point, deformer: WarpDeformer, controlPoints: Point[])
 }
 
 function bindingsFor(project: PuppetLoomProject, kind: "layer" | "deformer", id: string): ModelBinding[] {
-  return modelFor(project).bindings.filter((binding) => binding.target.kind === kind && binding.target.id === id);
+  return modelIndexFor(project).bindingsByTarget.get(bindingTargetKey(kind, id)) ?? emptyBindings;
 }
 
 function applyDeformer(project: PuppetLoomProject, deformer: ModelDeformer, point: Point, parameters: Record<string, number>): Point {
@@ -374,7 +432,7 @@ function applyDeformer(project: PuppetLoomProject, deformer: ModelDeformer, poin
   } else {
     const controlPoints = deformer.controlPoints.map((base, index) => {
       const next = { ...base };
-      for (const weights of bindingWeights) addPoint(next, sampledPoint(weights, "warpPointDeltas", index), 1);
+      for (const weights of bindingWeights) addSampledPoint(next, weights, "warpPointDeltas", index);
       return next;
     });
     current = warpPoint(current, deformer, controlPoints);
@@ -394,25 +452,47 @@ export interface EvaluatedLayerAuthoring {
   drawOrderOffset: number;
 }
 
-function evaluateLayerAuthoringParameters(project: PuppetLoomProject, layer: LayerBinding, parameters: Record<string, number>): EvaluatedLayerAuthoring {
+function evaluateLayerAuthoringParameters(project: PuppetLoomProject, layer: LayerBinding, parameters: Record<string, number>, reusable?: EvaluatedLayerAuthoring): EvaluatedLayerAuthoring {
   const bindings = bindingsFor(project, "layer", layer.id);
-  if (bindings.length === 0 && !layer.deformerId) return { points: layer.mesh.points, opacityMultiplier: 1, drawOrderOffset: 0 };
+  if (bindings.length === 0 && !layer.deformerId) {
+    if (reusable) {
+      reusable.points = layer.mesh.points;
+      reusable.opacityMultiplier = 1;
+      reusable.drawOrderOffset = 0;
+      return reusable;
+    }
+    return { points: layer.mesh.points, opacityMultiplier: 1, drawOrderOffset: 0 };
+  }
   const bindingWeights = bindings.map((binding) => weightedKeyforms(binding, parameters));
-  const points = layer.mesh.points.map((base, index) => {
-    let current = { ...base };
-    for (const weights of bindingWeights) addPoint(current, sampledPoint(weights, "meshPointDeltas", index), 1);
-    for (const weights of bindingWeights) current = transformPoint(current, layer.pivot, sampledTransform(weights));
+  const points = reusable?.points !== layer.mesh.points && reusable?.points.length === layer.mesh.points.length
+    ? reusable.points
+    : new Array<Point>(layer.mesh.points.length);
+  for (let index = 0; index < layer.mesh.points.length; index += 1) {
+    const base = layer.mesh.points[index]!;
+    let current = points[index] ?? { x: base.x, y: base.y };
+    current.x = base.x;
+    current.y = base.y;
+    for (const weights of bindingWeights) addSampledPoint(current, weights, "meshPointDeltas", index);
+    for (const weights of bindingWeights) {
+      const transformed = transformPoint(current, layer.pivot, sampledTransform(weights));
+      current.x = transformed.x;
+      current.y = transformed.y;
+    }
     if (layer.deformerId) {
       const deformer = modelFor(project).deformers.find((candidate) => candidate.id === layer.deformerId);
-      if (deformer) current = applyDeformer(project, deformer, current, parameters);
+      if (deformer) {
+        const deformed = applyDeformer(project, deformer, current, parameters);
+        current.x = deformed.x;
+        current.y = deformed.y;
+      }
     }
-    return current;
-  });
-  return {
-    points,
-    opacityMultiplier: bindingWeights.reduce((value, weights) => value * sampledNumber(weights, "opacityMultiplier", 1), 1),
-    drawOrderOffset: bindingWeights.reduce((value, weights) => value + sampledNumber(weights, "drawOrderOffset", 0), 0)
-  };
+    points[index] = current;
+  }
+  const result = reusable ?? { points, opacityMultiplier: 1, drawOrderOffset: 0 };
+  result.points = points;
+  result.opacityMultiplier = bindingWeights.reduce((value, weights) => value * sampledNumber(weights, "opacityMultiplier", 1), 1);
+  result.drawOrderOffset = bindingWeights.reduce((value, weights) => value + sampledNumber(weights, "drawOrderOffset", 0), 0);
+  return result;
 }
 
 export function evaluateLayerAuthoring(project: PuppetLoomProject, layer: LayerBinding, state: MotionState): EvaluatedLayerAuthoring {
@@ -420,6 +500,6 @@ export function evaluateLayerAuthoring(project: PuppetLoomProject, layer: LayerB
 }
 
 /** Hot-path variant for a state already returned by resolveMotionState. */
-export function evaluateLayerAuthoringResolved(project: PuppetLoomProject, layer: LayerBinding, resolvedState: MotionState): EvaluatedLayerAuthoring {
-  return evaluateLayerAuthoringParameters(project, layer, resolvedState.parameters ?? resolveParameterValues(project, resolvedState));
+export function evaluateLayerAuthoringResolved(project: PuppetLoomProject, layer: LayerBinding, resolvedState: MotionState, reusable?: EvaluatedLayerAuthoring): EvaluatedLayerAuthoring {
+  return evaluateLayerAuthoringParameters(project, layer, resolvedState.parameters ?? resolveParameterValues(project, resolvedState), reusable);
 }
