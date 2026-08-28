@@ -108,7 +108,7 @@ describe("rig attachment pivots", () => {
     expect(project.layers.find((layer) => layer.role === "bottomWear")?.pivot.y).toBeCloseTo(0.686, 6);
   });
 
-  it("derives two ear hinges from the face edges for merged headwear", () => {
+  it("does not guess merged ears from a decorative headwear silhouette", () => {
     const imported: ImportedPsd = {
       input: "fixture.psd",
       fileName: "fixture.psd",
@@ -125,10 +125,10 @@ describe("rig attachment pivots", () => {
       seed: 42,
       source: { originalFileName: "fixture.psd", psdSha256: "fixture", psdPath: "source/source.psd" }
     });
-    expect(project.layers.find((layer) => layer.role === "headwear")?.secondaryAnchors).toEqual({
-      earHingeLeft: { x: 0.406, y: 0.33 },
-      earHingeRight: { x: 0.594, y: 0.33 }
-    });
+    const headwear = project.layers.find((layer) => layer.role === "headwear")!;
+    expect(headwear.secondaryAnchors).toBeUndefined();
+    expect(headwear.pivot).toEqual({ x: 0.5, y: 0.27 });
+    expect(headwear.weights.physics).toBe(0);
   });
 
   it("does not treat headwear side details as merged ears when separate ear layers exist", () => {
@@ -152,8 +152,8 @@ describe("rig attachment pivots", () => {
     });
 
     expect(project.layers.find((layer) => layer.role === "headwear")?.secondaryAnchors).toBeUndefined();
-    expect(project.layers.find((layer) => layer.role === "headwear")?.pivot).toEqual({ x: 0.5, y: 0.372 });
-    expect(project.layers.find((layer) => layer.id === "ear-left")?.pivot).toEqual({ x: 0.6, y: 0.2852 });
-    expect(project.layers.find((layer) => layer.id === "ear-right")?.pivot).toEqual({ x: 0.4, y: 0.2852 });
+    expect(project.layers.find((layer) => layer.role === "headwear")?.pivot).toEqual({ x: 0.5, y: 0.27 });
+    expect(project.layers.find((layer) => layer.id === "ear-left")?.pivot).toEqual({ x: 0.65, y: 0.29 });
+    expect(project.layers.find((layer) => layer.id === "ear-right")?.pivot).toEqual({ x: 0.35, y: 0.29 });
   });
 });

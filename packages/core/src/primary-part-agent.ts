@@ -28,6 +28,8 @@ export interface PrimaryPartAgentOptions {
   instruction: string;
   layerIds?: string[];
   intent?: PrimaryPartIntent;
+  /** Read-only project snapshot used by the whole-model Agent to validate pending anatomy before it is committed. */
+  previewProject?: PuppetLoomProject;
 }
 
 export interface PrimaryPartIntent {
@@ -68,6 +70,7 @@ export interface PrimaryPartAgentPlan {
 
 export interface PrimaryPartAgentRunResult {
   ok: true;
+  changed: boolean;
   task: PrimaryModelAgentPart;
   project: string;
   projectDirectory: string;
@@ -77,9 +80,9 @@ export interface PrimaryPartAgentRunResult {
   adoptedDraftRevision?: number;
   checks: ModelAgentCheck[];
   repairs: ModelAgentRepair[];
-  reportPath: string;
-  comparisonSheet: string;
-  differenceImage: string;
+  reportPath?: string;
+  comparisonSheet?: string;
+  differenceImage?: string;
 }
 
 interface PreparedPrimaryProposal {
@@ -309,7 +312,7 @@ function stateMovement(project: PuppetLoomProject, layers: LayerBinding[], state
 function headPoseGeometry(project: PuppetLoomProject): {
   available: boolean;
   crownAvailable: boolean;
-  mirrorError: number;
+  turnBalanceError: number;
   nearFarEyeRatio: number;
   upLowerFaceRatio: number;
   downLowerFaceRatio: number;
@@ -320,14 +323,16 @@ function headPoseGeometry(project: PuppetLoomProject): {
   const field = project.runtime.poseField;
   const face = project.layers.find((layer) => layer.role === "face");
   if (!cage || !field || !face) {
-    return { available: false, crownAvailable: false, mirrorError: 0, nearFarEyeRatio: 1, upLowerFaceRatio: 1, downLowerFaceRatio: 1, upCrownRatio: 1, downCrownRatio: 1 };
+    return { available: false, crownAvailable: false, turnBalanceError: 0, nearFarEyeRatio: 1, upLowerFaceRatio: 1, downLowerFaceRatio: 1, upCrownRatio: 1, downCrownRatio: 1 };
   }
   const posePoint = (layer: LayerBinding, point: { x: number; y: number }, headYaw = 0, headPitch = 0) =>
     deformPoint(project, layer, point, { ...neutralMotionState, headYaw, headPitch });
   const nose = cage.points.nose.position;
   const noseRight = posePoint(face, nose, 1, 0);
   const noseLeft = posePoint(face, nose, -1, 0);
-  const mirrorError = Math.abs((noseRight.x - nose.x) - (nose.x - noseLeft.x)) + Math.abs(noseRight.y - noseLeft.y);
+  const rightTurn = Math.hypot(noseRight.x - nose.x, noseRight.y - nose.y);
+  const leftTurn = Math.hypot(noseLeft.x - nose.x, noseLeft.y - nose.y);
+  const turnBalanceError = Math.abs(rightTurn - leftTurn) / Math.max(1e-6, rightTurn, leftTurn);
 
   const eyes = project.layers.filter((layer) => layer.role === "eyeWhite");
   const eyeWidth = (layer: LayerBinding, yaw: number) => {
@@ -346,7 +351,7 @@ function headPoseGeometry(project: PuppetLoomProject): {
   };
   const neutralLower = lowerHeight(0);
 
-  const crown = project.layers.find((layer) => layer.role === "headwear");
+  const crown = project.layers.find((layer) => layer.role === "headwear" && layer.headwearPerspective === "crown");
   const crownHeight = (pitch: number) => {
     if (!crown) return 1;
     const x = crown.bounds.x + crown.bounds.width * 0.5;
@@ -358,7 +363,7 @@ function headPoseGeometry(project: PuppetLoomProject): {
   return {
     available: true,
     crownAvailable: Boolean(crown),
-    mirrorError,
+    turnBalanceError,
     nearFarEyeRatio,
     upLowerFaceRatio: lowerHeight(-1) / neutralLower,
     downLowerFaceRatio: lowerHeight(1) / neutralLower,
@@ -417,10 +422,10 @@ function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, propo
     }).passed), details: { poseCount: 9 } });
     if (geometry.available) {
       checks.push({
-        id: "head-pose-mirror",
-        label: "左右转头使用同一几何规则并保持镜像关系",
-        passed: geometry.mirrorError <= proposed.runtime.poseField!.radiusX * 0.035,
-        details: { mirrorError: rounded(geometry.mirrorError, 8), nearFarEyeRatio: rounded(geometry.nearFarEyeRatio, 6) }
+        id: "head-turn-balance",
+        label: "左右转头幅度平衡，同时保留角色原本的不对称",
+        passed: geometry.turnBalanceError <= 0.18,
+        details: { turnBalanceError: rounded(geometry.turnBalanceError, 8), nearFarEyeRatio: rounded(geometry.nearFarEyeRatio, 6) }
       });
       checks.push({
         id: "head-yaw-perspective",
@@ -535,9 +540,10 @@ function operationId(operation: AuthoringOperation): string {
 export async function planPrimaryPartAgent(projectDirectory: string, options: PrimaryPartAgentOptions): Promise<PrimaryPartAgentPlan> {
   const root = resolve(projectDirectory);
   const [project, calibration, draft] = await Promise.all([loadProject(root), loadCalibration(root), loadCalibrationDraft(root)]);
-  const layers = targetLayers(project, options.part, options.layerIds);
+  const planningProject = options.previewProject ?? project;
+  const layers = targetLayers(planningProject, options.part, options.layerIds);
   const draftState = draftAssessment(draft, options.part, layers.map((layer) => layer.id));
-  const effective = draftState.compatible && draft ? applyCalibrationOverrides(project, clone(draft.overrides)) : project;
+  const effective = draftState.compatible && draft ? applyCalibrationOverrides(planningProject, clone(draft.overrides)) : planningProject;
   const proposal = createPrimaryPartAgentProposal(effective, { ...options, layerIds: layers.map((layer) => layer.id) });
   const failed = proposal.checks.filter((check) => !check.passed).map((check) => `自检未通过：${check.label}`);
   const assetBlockers = proposal.assetRequests.length > 0 ? [`缺少 ${proposal.assetRequests.length} 项必要素材，已生成素材请求。`] : [];
@@ -591,8 +597,22 @@ export async function runPrimaryPartAgent(projectDirectory: string, options: Pri
     reportDetails: { intent: proposal.intent, assetRequests: proposal.assetRequests, adoptedDraftRevision }
   });
   await clearCalibrationDraft(root);
+  if (!committed.changed) return {
+    ok: true,
+    changed: adoptedDraftRevision !== undefined,
+    task: options.part,
+    project: committed.project.name,
+    projectDirectory: root,
+    fromRevision: plan.baseRevision,
+    toRevision: committed.revision,
+    targetLayerIds: proposal.layers.map((layer) => layer.id),
+    ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
+    checks: proposal.checks,
+    repairs: proposal.repairs
+  };
   return {
     ok: true,
+    changed: true,
     task: options.part,
     project: committed.result.project.name,
     projectDirectory: root,

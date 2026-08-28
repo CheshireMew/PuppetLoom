@@ -4,6 +4,8 @@ import type { ModelAgentPart } from "./agent.js";
 import { modelAgentCapabilities, modelAgentPartDefinitions } from "./agent.js";
 import { PuppetLoomError } from "./errors.js";
 import { loadCalibration, loadProject } from "./project.js";
+import { calibrationOverridesSchema } from "./schema.js";
+import type { CalibrationOverrides } from "./types.js";
 
 export interface PrimaryPartIntentSpecification {
   amplitude: number;
@@ -79,11 +81,14 @@ export interface ModelAgentSpecification {
   scope: "whole" | "selected";
   baseRevision: number;
   goal: string;
+  /** Exact character-specific geometry authored after inspecting revision-pinned evidence. */
+  anatomy?: CalibrationOverrides;
   parts: ModelAgentPartSpecification[];
 }
 
 const primaryParts = new Set<ModelAgentPart>(["headFace", "eyes", "mouth", "body"]);
 const secondaryParts = new Set<ModelAgentPart>(["backHair", "ahoge", "ears", "headwear", "topCloth", "skirt", "tail", "accessory"]);
+const geometrySensitiveParts = new Set<ModelAgentPart>(["headFace", "mouth", "frontHair", "backHair", "ears", "headwear", "topCloth"]);
 const templateGoal = "由外部 Agent 看图、理解用户目标后填写；不要原样执行模板。";
 const templateRationaleMarker = "外部 Agent 应在看图后调整。";
 const defaultSecondaryAmplitude: Record<SecondaryPartSpecification["part"], number> = {
@@ -227,7 +232,18 @@ export function parseModelAgentSpecification(value: unknown): ModelAgentSpecific
   const parts = value.parts.map(partSpecification);
   const ids = parts.map((part) => part.part);
   if (new Set(ids).size !== ids.length) throw new PuppetLoomError("INVALID_INPUT", "Agent 制作规格不能重复包含同一部位。" );
-  return { version: 1, kind: "puppetloom-rig-spec", scope: value.scope, baseRevision: Number(value.baseRevision), goal: value.goal.trim(), parts };
+  let anatomy: CalibrationOverrides | undefined;
+  if (value.anatomy !== undefined) {
+    try {
+      anatomy = calibrationOverridesSchema.parse(value.anatomy) as CalibrationOverrides;
+    } catch (error) {
+      throw new PuppetLoomError("INVALID_INPUT", `Agent 制作规格的 anatomy 无效：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (ids.some((part) => geometrySensitiveParts.has(part)) && (!anatomy || Object.keys(anatomy).length === 0)) {
+    throw new PuppetLoomError("INVALID_INPUT", "规格包含脸、嘴、头发、耳朵、头饰或上衣等结构敏感部位时，必须提供 anatomy，明确实际控制点、轴心、网格或逐顶点固定/释放权重。" );
+  }
+  return { version: 1, kind: "puppetloom-rig-spec", scope: value.scope, baseRevision: Number(value.baseRevision), goal: value.goal.trim(), ...(anatomy ? { anatomy } : {}), parts };
 }
 
 export async function readModelAgentSpecification(path: string): Promise<ModelAgentSpecification> {
@@ -287,7 +303,9 @@ function defaultPartSpecification(part: ModelAgentPart): ModelAgentPartSpecifica
 export async function createModelAgentSpecificationTemplate(projectDirectory: string, requested: ModelAgentPart[] | "whole" = "whole"): Promise<ModelAgentSpecification> {
   const root = resolve(projectDirectory);
   const [project, calibration] = await Promise.all([loadProject(root), loadCalibration(root)]);
-  const available = new Set(modelAgentCapabilities(project).filter((capability) => capability.available).map((capability) => capability.part));
+  const capabilities = modelAgentCapabilities(project);
+  const available = new Set(capabilities.filter((capability) => capability.available).map((capability) => capability.part));
+  const targetLayerIds = new Map(capabilities.map((capability) => [capability.part, capability.targetLayerIds]));
   const selected = requested === "whole" ? modelAgentPartDefinitions.map((definition) => definition.part).filter((part) => available.has(part)) : requested;
   if (selected.length === 0) throw new PuppetLoomError("INVALID_INPUT", "当前项目没有可生成制作规格的部位。" );
   const unavailable = selected.filter((part) => !available.has(part));
@@ -298,6 +316,7 @@ export async function createModelAgentSpecificationTemplate(projectDirectory: st
     scope: requested === "whole" ? "whole" : "selected",
     baseRevision: calibration.revision,
     goal: templateGoal,
-    parts: selected.map(defaultPartSpecification)
+    anatomy: {},
+    parts: selected.map((part) => ({ ...defaultPartSpecification(part), layerIds: targetLayerIds.get(part) ?? [] }))
   };
 }

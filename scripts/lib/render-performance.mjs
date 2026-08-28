@@ -39,10 +39,17 @@ function aggregate(trials) {
 async function measureTrial(viewer, warmupFrames, measuredFrames) {
   return viewer.evaluate(async ({ warmupFrames: warmup, measuredFrames: measured }) => {
     const intervals = [];
+    const longFrames = [];
+    const memory = performance.memory;
+    const heapBefore = typeof memory?.usedJSHeapSize === "number" ? memory.usedJSHeapSize : undefined;
     let previous = performance.now();
     for (let frame = 0; frame < warmup + measured; frame += 1) {
       const now = await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
-      if (frame >= warmup) intervals.push(now - previous);
+      if (frame >= warmup) {
+        const durationMs = now - previous;
+        intervals.push(durationMs);
+        if (durationMs > 40) longFrames.push({ frame: frame - warmup, durationMs, ...(typeof memory?.usedJSHeapSize === "number" ? { usedJSHeapSize: memory.usedJSHeapSize } : {}) });
+      }
       previous = now;
     }
     const sorted = [...intervals].sort((left, right) => left - right);
@@ -54,6 +61,8 @@ async function measureTrial(viewer, warmupFrames, measuredFrames) {
       p99FrameMs: at(0.99),
       worstFrameMs: sorted.at(-1) ?? 0,
       longFramesOver40Ms: intervals.filter((value) => value > 40).length,
+      longFrames,
+      ...(heapBefore === undefined ? {} : { heapBefore, heapAfter: memory.usedJSHeapSize }),
       intervals
     };
   }, { warmupFrames, measuredFrames });

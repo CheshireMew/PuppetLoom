@@ -245,26 +245,47 @@ export function planStandardPerformanceActions(project: PuppetLoomProject, baseR
 
   const earLayers = project.layers.filter((layer) => layer.visible !== false && (layer.role === "ear" || (layer.role === "headwear" && Boolean(layer.secondaryAnchors?.earHingeLeft || layer.secondaryAnchors?.earHingeRight))));
   if (earLayers.length > 0) {
-    const mergedEarLayers = earLayers.filter((layer) => layer.role === "headwear");
     const separateEarLayers = earLayers.filter((layer) => layer.role === "ear");
-    const earX = parameter("param-performance-ear-x", "表演 · 耳部侧摆", -0.005, 0.005, mergedEarLayers.length > 0 ? "ear-x" : undefined);
-    const earY = parameter("param-performance-ear-y", "表演 · 耳部抬落", -0.012, 0.012, mergedEarLayers.length > 0 ? "ear-y" : undefined);
-    pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earX });
-    pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earY });
-    for (const layer of separateEarLayers) {
-      const mirror = layer.side === "left" ? 1 : layer.side === "right" ? -1 : 1;
-      pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-ear-x-${layer.id}`, earX.id, layer, [
-        { value: -0.005, rotation: -1 }, { value: 0 }, { value: 0.005, rotation: 1 }
-      ]) });
-      pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-ear-y-${layer.id}`, earY.id, layer, [
-        { value: -0.012, rotation: 8 * mirror }, { value: 0 }, { value: 0.012, rotation: -5 * mirror }
-      ]) });
+    const mergedEarLayers = separateEarLayers.length > 0 ? [] : earLayers.filter((layer) => layer.role === "headwear");
+    const earTracks: BehaviorTrack[] = [];
+    if (separateEarLayers.length > 0) {
+      for (const side of ["left", "right"] as const) {
+        const layers = separateEarLayers.filter((layer) => layer.side === side);
+        if (layers.length === 0) continue;
+        const earX = parameter(`param-performance-ear-${side}-x`, `表演 · ${side === "left" ? "左" : "右"}耳侧摆`, -0.005, 0.005);
+        const earY = parameter(`param-performance-ear-${side}-y`, `表演 · ${side === "left" ? "左" : "右"}耳抬落`, -0.012, 0.012);
+        pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earX });
+        pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earY });
+        for (const layer of layers) {
+          const outward = side === "left" ? 1 : -1;
+          pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-ear-${side}-x-${layer.id}`, earX.id, layer, [
+            { value: -0.005, rotation: -1.2 * outward }, { value: 0 }, { value: 0.005, rotation: 1.2 * outward }
+          ]) });
+          pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-ear-${side}-y-${layer.id}`, earY.id, layer, [
+            { value: -0.012, rotation: 8 * outward }, { value: 0 }, { value: 0.012, rotation: -5 * outward }
+          ]) });
+        }
+        earTracks.push(
+          track(earX.id, side === "left"
+            ? [[0, 0], [0.1, -0.0028], [0.24, 0.003], [0.4, -0.0014], [0.62, 0]]
+            : [[0, 0], [0.22, 0], [0.32, 0.0022], [0.48, -0.0026], [0.67, 0.001], [0.82, 0]]),
+          track(earY.id, side === "left"
+            ? [[0, 0], [0.09, -0.009], [0.23, 0.005], [0.39, -0.006], [0.62, 0]]
+            : [[0, 0], [0.2, 0], [0.31, -0.007], [0.47, 0.004], [0.66, -0.003], [0.82, 0]])
+        );
+      }
+    } else {
+      const earX = parameter("param-performance-ear-x", "表演 · 耳部侧摆", -0.005, 0.005, "ear-x");
+      const earY = parameter("param-performance-ear-y", "表演 · 耳部抬落", -0.012, 0.012, "ear-y");
+      pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earX });
+      pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earY });
+      earTracks.push(
+        track(earX.id, [[0, 0], [0.12, -0.0025], [0.26, 0.003], [0.42, -0.0015], [0.62, 0.0008], [0.82, 0]]),
+        track(earY.id, [[0, 0], [0.1, -0.009], [0.24, 0.005], [0.39, -0.007], [0.58, 0.002], [0.82, 0]])
+      );
     }
-    behaviors.push(behavior("action-ear-flick", "动作 · 耳朵轻弹", 0.82, [
-      track(earX.id, [[0, 0], [0.12, -0.0025], [0.26, 0.003], [0.42, -0.0015], [0.62, 0.0008], [0.82, 0]]),
-      track(earY.id, [[0, 0], [0.1, -0.009], [0.24, 0.005], [0.39, -0.007], [0.58, 0.002], [0.82, 0]])
-    ]));
-    parts.push({ part: "ears", status: "completed", layerIds: earLayers.map((layer) => layer.id), behaviorIds: ["action-ear-flick"], message: "已用真实耳部图层或头饰耳部铰点建立局部轻弹动作。" });
+    behaviors.push(behavior("action-ear-flick", "动作 · 耳朵轻弹", 0.82, earTracks));
+    parts.push({ part: "ears", status: "completed", layerIds: [...separateEarLayers, ...mergedEarLayers].map((layer) => layer.id), behaviorIds: ["action-ear-flick"], message: separateEarLayers.length > 0 ? "已按左右耳各自图层、轴心和不同节奏建立轻弹动作。" : "已用明确标注的合并耳部铰点建立局部轻弹动作。" });
   } else parts.push({ part: "ears", status: "not-present", layerIds: [], message: "项目没有独立耳朵图层或可定位的耳部铰点，未伪造耳朵动作。" });
 
   const tailLayers = project.layers.filter((layer) => layer.role === "tail" && layer.visible !== false);

@@ -8,6 +8,7 @@ function validSpecification() {
     scope: "selected",
     baseRevision: 3,
     goal: "让前发更克制，并保留自然回弹",
+    anatomy: { layers: { "front-hair": { pivot: { x: 0.5, y: 0.22 } } } },
     parts: [{
       part: "frontHair",
       layerIds: ["front-hair"],
@@ -69,6 +70,7 @@ describe("external Agent rig specification", () => {
   it("accepts explicit head contour, depth and far-side occlusion decisions", () => {
     const head = {
       version: 1, kind: "puppetloom-rig-spec", scope: "selected", baseRevision: 8, goal: "收紧远侧轮廓并保留双眼可读性",
+      anatomy: { semanticPoints: { nose: { x: 0.502, y: 0.31 }, mouthLeft: { x: 0.47, y: 0.38 }, mouthRight: { x: 0.535, y: 0.376 } } },
       parts: [{
         part: "headFace", rationale: ["右转证据中远侧眼接近脸缘，但仍应保留约七成可见度。"],
         intent: {
@@ -81,6 +83,12 @@ describe("external Agent rig specification", () => {
     expect(parseModelAgentSpecification(head)).toEqual(head);
     head.parts[0]!.intent.contourStrength = 3;
     expect(() => parseModelAgentSpecification(head)).toThrow("contourStrength");
+  });
+
+  it("rejects geometry-sensitive work that omits character-specific anatomy", () => {
+    const missing = validSpecification();
+    delete (missing as { anatomy?: unknown }).anatomy;
+    expect(() => parseModelAgentSpecification(missing)).toThrow("必须提供 anatomy");
   });
 
   it("accepts an explicit supported-skirt decision and rejects unknown structures", () => {

@@ -131,6 +131,8 @@ export interface LayerBinding {
   garmentStructure?: "soft" | "supported";
   /** Controlled lower-shell give for supported garments. Zero is rigid; 0.5 is the safe maximum. */
   garmentFlexibility?: number;
+  /** Enables the specialised wide-crown perspective model. Absent means the artwork keeps its authored silhouette. */
+  headwearPerspective?: "crown";
   secondaryAnchors?: LayerSecondaryAnchors;
   hairStrands?: HairStrandSpec[];
   mesh: MeshBinding;
@@ -609,6 +611,7 @@ export interface LayerCalibrationOverride {
   pivot?: Point;
   garmentStructure?: LayerBinding["garmentStructure"];
   garmentFlexibility?: number;
+  headwearPerspective?: LayerBinding["headwearPerspective"] | null;
   secondaryAnchors?: LayerSecondaryAnchors;
   /** Complete replacement so roots, ownership, release and physics remain revision-consistent. */
   hairStrands?: HairStrandSpec[];
@@ -1202,6 +1205,11 @@ export interface MotionState {
   headwearY: number;
   earX: number;
   earY: number;
+  /** Independent anatomical ear controls. Legacy callers may omit them and use earX/earY for both sides. */
+  earLeftX?: number;
+  earLeftY?: number;
+  earRightX?: number;
+  earRightY?: number;
   clothX: number;
   clothY: number;
   tailX: number;

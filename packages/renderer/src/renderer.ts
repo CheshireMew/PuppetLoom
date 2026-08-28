@@ -516,7 +516,7 @@ export class PuppetRenderer {
     this.pausedAt = undefined;
     const loop = (now: number) => {
       if (!this.paused) {
-        this.render(this.controller.sample(activeElapsedSeconds(this.startedAt, now, this.pausedDuration, this.pausedAt), { lookTarget: this.lookTarget, ...(this.runtimeControl ? { runtimeControl: this.runtimeControl } : {}), nowMs: Date.now() }));
+        this.render(this.controller.sampleForRender(activeElapsedSeconds(this.startedAt, now, this.pausedDuration, this.pausedAt), { lookTarget: this.lookTarget, ...(this.runtimeControl ? { runtimeControl: this.runtimeControl } : {}), nowMs: Date.now() }));
       } else {
         const { width, height } = this.drawingBufferTarget();
         if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -557,7 +557,7 @@ export class PuppetRenderer {
     this.startedAt = now;
     this.pausedDuration = 0;
     this.pausedAt = this.paused ? now : undefined;
-    const state = this.controller.sample(0, {
+    const state = this.controller.sampleForRender(0, {
       lookTarget: this.lookTarget,
       ...(this.runtimeControl ? { runtimeControl: this.runtimeControl } : {}),
       nowMs: Date.now()

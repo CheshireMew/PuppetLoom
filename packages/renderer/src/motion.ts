@@ -1,4 +1,4 @@
-import { ModelPhysicsController, type MotionState, type MotionTuning, type PuppetLoomProject, type RuntimeControlSnapshot, type SecondaryMotionPart, type SemanticRole } from "@puppetloom/core/browser";
+import { ModelPhysicsController, type MotionState, type MotionTuning, type PuppetLoomProject, type RuntimeControlSnapshot, type SecondaryMotionPart, type SecondaryMotionState, type SemanticRole } from "@puppetloom/core/browser";
 import type { PointerLookTarget } from "./pointer.js";
 import { controlledMotionValue, resolveRuntimeControl, runtimeAuthoredState } from "./runtime-control.js";
 import { SegmentedSpringChain } from "./secondary-motion.js";
@@ -118,10 +118,6 @@ function advanceRateLimited(axis: TrackingAxis, target: number, delta: number, m
   axis.value += step;
 }
 
-function secondaryTuning(project: PuppetLoomProject, part: SecondaryMotionPart): MotionTuning {
-  return { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[part] ?? {}) };
-}
-
 function advanceChain(
   chain: SegmentedSpringChain,
   targetX: number,
@@ -175,8 +171,8 @@ function perkEnvelope(phase: number): number {
   return 1 - smoothstep((phase - 0.38) / 0.62);
 }
 
-function earTwitchValue(time: number, seed: number): { x: number; y: number } {
-  const random = mulberry32(seed ^ 0x3c6ef372);
+function earTwitchValue(time: number, seed: number, side: "left" | "right"): { x: number; y: number } {
+  const random = mulberry32(seed ^ (side === "left" ? 0x3c6ef372 : 0xa54ff53a));
   let cursor = 1.35 + random() * 1.55;
   while (cursor < time + 0.8) {
     const flapDuration = 0.22 + random() * 0.055;
@@ -226,8 +222,10 @@ export class CalmMotionController {
   private readonly trackedLookX: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedLookY: TrackingAxis = { value: 0, velocity: 0 };
   private readonly trackedLookStrength: TrackingAxis = { value: 0, velocity: 0 };
-  private readonly trackedEarX: TrackingAxis = { value: 0, velocity: 0 };
-  private readonly trackedEarY: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedEarLeftX: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedEarLeftY: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedEarRightX: TrackingAxis = { value: 0, velocity: 0 };
+  private readonly trackedEarRightY: TrackingAxis = { value: 0, velocity: 0 };
   private readonly frontHairLeft = new SegmentedSpringChain({ segments: 4, stiffness: 31, damping: 10.2, propagation: 1.08, maxDisplacement: 0.075 });
   private readonly frontHairRight = new SegmentedSpringChain({ segments: 4, stiffness: 28, damping: 9.4, propagation: 1.1, maxDisplacement: 0.075 });
   private readonly backHairLeft = new SegmentedSpringChain({ segments: 5, stiffness: 23, damping: 7.4, propagation: 1.09, maxDisplacement: 0.105 });
@@ -240,11 +238,16 @@ export class CalmMotionController {
   private readonly accessory = new SegmentedSpringChain({ segments: 4, stiffness: 11, damping: 4.9, propagation: 1.1, maxDisplacement: 0.09 });
   private readonly hairStrandChains = new Map<string, RuntimeHairStrand>();
   private readonly modelPhysics: ModelPhysicsController;
+  private renderSecondary: SecondaryMotionState | undefined;
+  private readonly secondaryTunings = new Map<SecondaryMotionPart, MotionTuning>();
 
   constructor(project: PuppetLoomProject) {
     this.project = project;
     this.events = makeEvents(project.runtime.seed);
     this.modelPhysics = new ModelPhysicsController(project);
+    for (const part of ["frontHair", "backHair", "ahoge", "headwear", "ears", "topCloth", "skirt", "tail", "accessory"] satisfies SecondaryMotionPart[]) {
+      this.secondaryTunings.set(part, { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[part] ?? {}) });
+    }
     for (const layer of project.layers ?? []) {
       if (layer.role !== "frontHair" && layer.role !== "backHair" && layer.role !== "sideHair") continue;
       for (const [order, strand] of (layer.hairStrands ?? []).entries()) {
@@ -270,7 +273,7 @@ export class CalmMotionController {
     this.previousPitch = 0;
     this.previousRoll = 0;
     this.previousBody = 0;
-    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyPitch, this.trackedBodyRoll, this.trackedLookX, this.trackedLookY, this.trackedLookStrength, this.trackedEarX, this.trackedEarY]) {
+    for (const axis of [this.trackedYaw, this.trackedPitch, this.trackedRoll, this.trackedBody, this.trackedBodyPitch, this.trackedBodyRoll, this.trackedLookX, this.trackedLookY, this.trackedLookStrength, this.trackedEarLeftX, this.trackedEarLeftY, this.trackedEarRightX, this.trackedEarRightY]) {
       axis.value = 0;
       axis.velocity = 0;
     }
@@ -280,6 +283,15 @@ export class CalmMotionController {
   }
 
   sample(timeSeconds: number, options: MotionSampleOptions = {}): MotionState {
+    return this.sampleInternal(timeSeconds, options, false);
+  }
+
+  /** Hot-path sample whose secondary-chain arrays are reused by the renderer after each frame has been consumed. */
+  sampleForRender(timeSeconds: number, options: MotionSampleOptions = {}): MotionState {
+    return this.sampleInternal(timeSeconds, options, true);
+  }
+
+  private sampleInternal(timeSeconds: number, options: MotionSampleOptions, reuseSecondary: boolean): MotionState {
     const primaryMotion = options.primaryMotion ?? true;
     const active = primaryMotion ? this.events.find((event) => timeSeconds >= event.start - 0.42 && timeSeconds <= event.start + event.transition + event.hold + event.returnDuration) : undefined;
     const phase = (this.project.runtime.seed % 97) / 97 * Math.PI * 2;
@@ -356,7 +368,8 @@ export class CalmMotionController {
     const backHairWind = Math.sin(timeSeconds * 0.68 + phase * 0.92 + Math.PI) * 0.29 + Math.sin(timeSeconds * 0.33 + phase * 1.58) * 0.13;
     const backHairLift = Math.sin(timeSeconds * 0.56 + phase * 0.27) * 0.11;
     const headwearWobble = Math.sin(timeSeconds * 0.39 + phase * 1.73) * 0.055;
-    const earTwitch = earTwitchValue(timeSeconds, this.project.runtime.seed);
+    const earLeftTwitch = earTwitchValue(timeSeconds, this.project.runtime.seed, "left");
+    const earRightTwitch = earTwitchValue(timeSeconds, this.project.runtime.seed, "right");
     const clothWind = Math.sin(timeSeconds * 0.36 + phase * 1.09) * 0.19;
     const tailWind = Math.sin(timeSeconds * 0.27 + phase * 1.87) * 0.14 + Math.sin(timeSeconds * 0.62 + phase * 0.52) * 0.05;
     const accessoryWind = Math.sin(timeSeconds * 0.66 + phase * 1.31) * 0.09;
@@ -364,13 +377,13 @@ export class CalmMotionController {
     const hairVertical = pitchVelocity * 0.6 + this.trackedBodyPitch.velocity * 0.4;
     const frontTargetX = -hairLateral * 0.02 + frontHairWind * 0.027;
     const frontTargetY = -hairVertical * 0.013 + frontHairLift * 0.019;
-    const frontTuning = secondaryTuning(this.project, "frontHair");
+    const frontTuning = this.secondaryTunings.get("frontHair")!;
     advanceChain(this.frontHairLeft, frontTargetX + Math.sin(timeSeconds * 0.53 + phase * 1.91) * 0.0045, frontTargetY, delta, frontTuning);
     advanceChain(this.frontHairRight, frontTargetX + Math.sin(timeSeconds * 0.61 + phase * 0.31) * 0.004, frontTargetY * 0.92, delta, frontTuning);
 
     const backTargetX = -hairLateral * 0.034 + backHairWind * 0.072;
     const backTargetY = -hairVertical * 0.023 + backHairLift * 0.028;
-    const backTuning = secondaryTuning(this.project, "backHair");
+    const backTuning = this.secondaryTunings.get("backHair")!;
     advanceChain(this.backHairLeft, backTargetX + Math.sin(timeSeconds * 0.33 + phase * 0.43) * 0.008, backTargetY, delta, backTuning);
     advanceChain(this.backHairRight, backTargetX + Math.sin(timeSeconds * 0.41 + phase * 1.37) * 0.0075, backTargetY * 1.06, delta, backTuning);
 
@@ -386,7 +399,7 @@ export class CalmMotionController {
         baseX + independentWind,
         baseY + independentLift,
         delta,
-        secondaryTuning(this.project, front ? "frontHair" : "backHair")
+        this.secondaryTunings.get(front ? "frontHair" : "backHair")!
       );
     }
 
@@ -394,17 +407,17 @@ export class CalmMotionController {
       -hairLateral * 0.026 + ahogeWind * 0.1,
       -hairVertical * 0.011 + frontHairLift * 0.016 - ahogePerk * 0.08,
       delta,
-      secondaryTuning(this.project, "ahoge")
+      this.secondaryTunings.get("ahoge")!
     );
     advanceChain(this.headwear,
       -(headVelocity * 0.4 + bodyVelocity * 0.6 + rollVelocity * 0.28) * 0.01 + headwearWobble * 0.24,
       -(pitchVelocity * 0.4 + this.trackedBodyPitch.velocity * 0.6) * 0.006,
       delta,
-      secondaryTuning(this.project, "headwear")
+      this.secondaryTunings.get("headwear")!
     );
     const bodyLateral = bodyVelocity + this.trackedBodyRoll.velocity * 0.35;
     const bodyVertical = this.trackedBodyPitch.velocity;
-    advanceChain(this.topCloth, -bodyLateral * 0.021 + clothWind * 0.032, -bodyVertical * 0.008, delta, secondaryTuning(this.project, "topCloth"));
+    advanceChain(this.topCloth, -bodyLateral * 0.021 + clothWind * 0.032, -bodyVertical * 0.008, delta, this.secondaryTunings.get("topCloth")!);
     const skirtSway = Math.sin(timeSeconds * 0.95 + phase * 0.74) * 0.25 + Math.sin(timeSeconds * 1.65 + phase * 0.29) * 0.07;
     const supportedSkirt = this.project.layers?.some((layer) => layer.role === "bottomWear" && layer.garmentStructure === "supported") ?? false;
     advanceChain(
@@ -412,36 +425,44 @@ export class CalmMotionController {
       -bodyLateral * (supportedSkirt ? 0.032 : 0.031) + skirtSway * (supportedSkirt ? 0.085 : 0.115),
       -bodyVertical * (supportedSkirt ? 0.007 : 0.008),
       delta,
-      secondaryTuning(this.project, "skirt")
+      this.secondaryTunings.get("skirt")!
     );
     const tailSwing = Math.sin(timeSeconds * 1.35 + phase * 0.76) * 0.056 + Math.sin(timeSeconds * 0.63 + phase * 1.32) * 0.012;
-    advanceChain(this.tail, -bodyLateral * 0.01 + tailWind * 0.008, -bodyVertical * 0.015 + tailSwing, delta, secondaryTuning(this.project, "tail"));
-    advanceChain(this.accessory, -hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta, secondaryTuning(this.project, "accessory"));
+    advanceChain(this.tail, -bodyLateral * 0.01 + tailWind * 0.008, -bodyVertical * 0.015 + tailSwing, delta, this.secondaryTunings.get("tail")!);
+    advanceChain(this.accessory, -hairLateral * 0.023 + accessoryWind * 0.028, -hairVertical * 0.014 + Math.sin(timeSeconds * 0.51 + phase * 1.61) * 0.008, delta, this.secondaryTunings.get("accessory")!);
     const configuredEarTuning = this.project.runtime.secondaryMotionTuning?.ears;
     if (configuredEarTuning) {
-      const earTuning = secondaryTuning(this.project, "ears");
-      advanceTracking(this.trackedEarX, earTwitch.x * earTuning.amplitude, delta, earTuning.response, earTuning.stability);
-      advanceTracking(this.trackedEarY, earTwitch.y * earTuning.amplitude, delta, earTuning.response, earTuning.stability);
+      const earTuning = this.secondaryTunings.get("ears")!;
+      advanceTracking(this.trackedEarLeftX, earLeftTwitch.x * earTuning.amplitude, delta, earTuning.response, earTuning.stability);
+      advanceTracking(this.trackedEarLeftY, earLeftTwitch.y * earTuning.amplitude, delta, earTuning.response, earTuning.stability);
+      advanceTracking(this.trackedEarRightX, earRightTwitch.x * earTuning.amplitude, delta, earTuning.response, earTuning.stability);
+      advanceTracking(this.trackedEarRightY, earRightTwitch.y * earTuning.amplitude, delta, earTuning.response, earTuning.stability);
     } else {
-      this.trackedEarX.value = earTwitch.x;
-      this.trackedEarY.value = earTwitch.y;
-      this.trackedEarX.velocity = 0;
-      this.trackedEarY.velocity = 0;
+      this.trackedEarLeftX.value = earLeftTwitch.x;
+      this.trackedEarLeftY.value = earLeftTwitch.y;
+      this.trackedEarRightX.value = earRightTwitch.x;
+      this.trackedEarRightY.value = earRightTwitch.y;
+      this.trackedEarLeftX.velocity = this.trackedEarLeftY.velocity = 0;
+      this.trackedEarRightX.velocity = this.trackedEarRightY.velocity = 0;
     }
 
-    const secondary = {
-      frontHairLeft: this.frontHairLeft.sample(),
-      frontHairRight: this.frontHairRight.sample(),
-      backHairLeft: this.backHairLeft.sample(),
-      backHairRight: this.backHairRight.sample(),
-      ahoge: this.ahoge.sample(),
-      headwear: this.headwear.sample(),
-      topCloth: this.topCloth.sample(),
-      skirt: this.skirt.sample(),
-      tail: this.tail.sample(),
-      accessory: this.accessory.sample(),
-      hairStrands: Object.fromEntries([...this.hairStrandChains].map(([id, strand]) => [id, strand.chain.sample()]))
+    const reusable = reuseSecondary ? this.renderSecondary : undefined;
+    const hairStrands = reusable?.hairStrands ?? {};
+    for (const [id, strand] of this.hairStrandChains) hairStrands[id] = strand.chain.sample(reuseSecondary ? hairStrands[id] : undefined);
+    const secondary: SecondaryMotionState = {
+      frontHairLeft: this.frontHairLeft.sample(reusable?.frontHairLeft),
+      frontHairRight: this.frontHairRight.sample(reusable?.frontHairRight),
+      backHairLeft: this.backHairLeft.sample(reusable?.backHairLeft),
+      backHairRight: this.backHairRight.sample(reusable?.backHairRight),
+      ahoge: this.ahoge.sample(reusable?.ahoge),
+      headwear: this.headwear.sample(reusable?.headwear),
+      topCloth: this.topCloth.sample(reusable?.topCloth),
+      skirt: this.skirt.sample(reusable?.skirt),
+      tail: this.tail.sample(reusable?.tail),
+      accessory: this.accessory.sample(reusable?.accessory),
+      hairStrands
     };
+    if (reuseSecondary) this.renderSecondary = secondary;
     const tip = (values: number[]): number => values.at(-1) ?? 0;
     const pairTip = (left: number[], right: number[]): number => (tip(left) + tip(right)) * 0.5;
 
@@ -467,8 +488,12 @@ export class CalmMotionController {
       backHairY: this.project.runtime.features.hairPhysics ? pairTip(secondary.backHairLeft.y, secondary.backHairRight.y) : 0,
       headwearX: this.project.runtime.features.hairPhysics ? tip(secondary.headwear.x) : 0,
       headwearY: this.project.runtime.features.hairPhysics ? tip(secondary.headwear.y) : 0,
-      earX: this.project.runtime.features.hairPhysics ? this.trackedEarX.value : 0,
-      earY: this.project.runtime.features.hairPhysics ? this.trackedEarY.value : 0,
+      earX: this.project.runtime.features.hairPhysics ? (this.trackedEarLeftX.value + this.trackedEarRightX.value) * 0.5 : 0,
+      earY: this.project.runtime.features.hairPhysics ? (this.trackedEarLeftY.value + this.trackedEarRightY.value) * 0.5 : 0,
+      earLeftX: this.project.runtime.features.hairPhysics ? this.trackedEarLeftX.value : 0,
+      earLeftY: this.project.runtime.features.hairPhysics ? this.trackedEarLeftY.value : 0,
+      earRightX: this.project.runtime.features.hairPhysics ? this.trackedEarRightX.value : 0,
+      earRightY: this.project.runtime.features.hairPhysics ? this.trackedEarRightY.value : 0,
       clothX: this.project.runtime.features.hairPhysics ? tip(secondary.skirt.x) : 0,
       clothY: this.project.runtime.features.hairPhysics ? tip(secondary.skirt.y) : 0,
       tailX: this.project.runtime.features.hairPhysics ? tip(secondary.tail.x) : 0,

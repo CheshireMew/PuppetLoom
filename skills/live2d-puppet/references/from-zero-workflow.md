@@ -105,7 +105,7 @@
 & <skill>\scripts\invoke_puppetloom.ps1 agent apply --project E:\Puppets\Character --spec E:\Puppets\front-hair-spec-r0.json --json
 ```
 
-模板不能原样执行。外部 Agent 必须根据用户目标和实际基线填写 `goal`、选择 `parts`、调整每个部位的数值 `intent` 并写出基于画面的 `rationale`。`plan` 只读，先核对 `inputMode: structured-specification`、`baseRevision`、`requestedParts`、草稿、目标 layer、各部位 `checks/repairs/assetRequests`、`canApply` 和 `blockers`。存在不兼容草稿、自检失败或 revision 冲突时停止，不清空用户的其它工作。`apply` 按确定顺序处理存在的部位，每个成功部位形成独立可回滚 revision、session、前后证据和 Agent 报告；最后返回整模 `verification` 和汇总报告。`not-present` 表示项目没有相应图层，`needs-assets` 表示闭眼或嘴形等素材还需补充，`blocked` 才是本轮无法继续的问题。不得伪造缺失图层，也不得把这三种状态冒充 `completed`。
+模板不能原样执行。外部 Agent 必须根据用户目标和实际基线填写 `goal`、角色专属 `anatomy`、选择 `parts`、调整每个部位的数值 `intent` 并写出基于画面的 `rationale`。先逐层检查模板列出的当前 `layerIds`；结构敏感部位必须按本项目写实：头脸和嘴保留实际斜轴，前后发写实际发束与根部，左右耳、头饰和上衣写实际轴心及覆盖全部网格顶点的固定/释放权重，头饰显式选择 `crown` 或 `null`。不能复制旧角色的发束数量、耳根、镜像方向、头饰长宽比规则或对称脸点。`plan` 只读，先核对 `inputMode: structured-specification`、`baseRevision`、`requestedParts`、草稿、目标 layer、anatomy 覆盖、各部位 `checks/repairs/assetRequests`、`canApply` 和 `blockers`。存在不兼容草稿、结构覆盖不全、自检失败或 revision 冲突时停止，不清空用户的其它工作。`apply` 只接受 `--spec`，按确定顺序处理存在的部位，每个成功部位形成独立可回滚 revision、session、前后证据和 Agent 报告；最后返回整模 `verification` 和汇总报告。`not-present` 表示项目没有相应图层，`needs-assets` 表示闭眼或嘴形等素材还需补充，`blocked` 才是本轮无法继续的问题。不得伪造缺失图层，也不得把这三种状态冒充 `completed`。
 
 整模 `apply` 不是整体事务。它逐部位提交，前面已完成的 revision 不会因为后续部位 `blocked` 自动回滚；返回后逐项核对 `status`、实际 from/to revision、session、报告路径和 `history`。当前只有前发 Agent 能在提案等价时明确返回无变化，其它主运动和次级部位可能仍提交 revision，所以成熟项目不能用整模 `apply` 代替只读审查。`coherenceChecks` 只覆盖软件当前声明的跨部位规则，不能替代对全部历史 accepted 结果的视觉保护清单。若整模最终阻断且已落盘的候选没有被接受，标记所有受影响 session 为 `rejected`，恢复最后接受的 revision 并复核。
 

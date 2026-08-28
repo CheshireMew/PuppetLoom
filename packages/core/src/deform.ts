@@ -14,13 +14,14 @@ import {
 } from "./clothing-geometry.js";
 import type { HairStrandSpec, LayerBinding, MeshBinding, MeshInfluenceChannel, MotionChainState, MotionState, Point, PuppetLoomProject, TorsoVolumeProfile } from "./types.js";
 
-function rotate(point: Point, pivot: Point, radians: number): Point {
-  if (Math.abs(radians) < 1e-8) return point;
+function rotateInPlace(point: Point, pivot: Point, radians: number): void {
+  if (Math.abs(radians) < 1e-8) return;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   const x = point.x - pivot.x;
   const y = point.y - pivot.y;
-  return { x: pivot.x + x * cos - y * sin, y: pivot.y + x * sin + y * cos };
+  point.x = pivot.x + x * cos - y * sin;
+  point.y = pivot.y + x * sin + y * cos;
 }
 
 function featureParallax(layer: LayerBinding): number {
@@ -131,7 +132,9 @@ function bodyMotionInfluence(layer: LayerBinding, base: Point): number {
   return 0.75;
 }
 
-function secondaryFree(layer: LayerBinding, base: Point): number {
+function secondaryFree(layer: LayerBinding, base: Point, vertexIndex?: number): number {
+  const authored = vertexIndex === undefined ? undefined : layer.mesh.influences?.physicsRelease?.[vertexIndex];
+  if (authored !== undefined) return clamp(authored, 0, 1);
   const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
   const v = clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1);
   if (layer.role === "frontHair") {
@@ -155,7 +158,13 @@ function secondaryFree(layer: LayerBinding, base: Point): number {
     const belowBand = smoothstep01((v - 0.18) / 0.72);
     return outer * belowBand;
   }
-  if (layer.role === "ear") return smoothstep01(v) ** 2;
+  if (layer.role === "ear") {
+    const distance = Math.hypot(
+      (base.x - layer.pivot.x) / Math.max(1e-6, layer.bounds.width),
+      (base.y - layer.pivot.y) / Math.max(1e-6, layer.bounds.height)
+    );
+    return smoothstep01((distance - 0.04) / 0.72);
+  }
   if (layer.role === "tail") {
     const distanceFromRoot = Math.hypot((u - 0.03) * 0.9, (v - 0.08) * 0.74);
     return smoothstep01((distanceFromRoot - 0.05) / 0.38);
@@ -176,9 +185,13 @@ function addLocalBend(point: Point, base: Point, pivot: Point, radians: number, 
 
 function addLocalRotation(point: Point, base: Point, pivot: Point, radians: number, free: number): void {
   if (Math.abs(radians) < 1e-8 || free <= 0) return;
-  const rotated = rotate(base, pivot, radians * free);
-  point.x += rotated.x - base.x;
-  point.y += rotated.y - base.y;
+  const angle = radians * free;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const x = base.x - pivot.x;
+  const y = base.y - pivot.y;
+  point.x += pivot.x + x * cos - y * sin - base.x;
+  point.y += pivot.y + x * sin + y * cos - base.y;
 }
 
 function addLocalStretch(point: Point, base: Point, pivot: Point, amount: number, free: number): void {
@@ -200,6 +213,15 @@ function earHingeFor(layer: LayerBinding, base: Point): { pivot: Point; mirror: 
     return { pivot: layer.pivot, mirror };
   }
   return undefined;
+}
+
+function earMotionFor(layer: LayerBinding, base: Point, state: MotionState): { x: number; y: number } {
+  const anatomicalSide = layer.role === "ear"
+    ? layer.side
+    : base.x < layer.bounds.x + layer.bounds.width * 0.5 ? "right" : "left";
+  if (anatomicalSide === "left") return { x: state.earLeftX ?? state.earX, y: state.earLeftY ?? state.earY };
+  if (anatomicalSide === "right") return { x: state.earRightX ?? state.earX, y: state.earRightY ?? state.earY };
+  return { x: state.earX, y: state.earY };
 }
 
 function hasSidePerspective(layer: LayerBinding): boolean {
@@ -300,7 +322,6 @@ export interface DeformationFrameContext {
   pitch: number;
   headRoll: number;
   bodyRoll: number;
-  hasSeparateEarLayers: boolean;
   hairLayerMotion: WeakMap<LayerBinding, PreparedHairLayerMotion | null>;
 }
 
@@ -318,7 +339,6 @@ export function createDeformationFrameContext(project: PuppetLoomProject, resolv
     pitch: clamp(resolvedState.headPitch, -1, 1) * envelope.headPitch,
     headRoll: (clamp(resolvedState.headRoll, -1, 1) * envelope.headRollDegrees * Math.PI) / 180,
     bodyRoll: (clamp(resolvedState.bodyRoll, -1, 1) * envelope.bodyRollDegrees * Math.PI) / 180,
-    hasSeparateEarLayers: project.layers?.some((layer) => layer.visible !== false && layer.role === "ear") ?? false,
     hairLayerMotion: new WeakMap()
   };
 }
@@ -376,9 +396,7 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       const side = layer.side === "left" ? 1 : -1;
       point.x += bodyTurn * side * faceWidth * 0.006 * bodyWeight;
     }
-    const rotated = rotate(point, bodyPivot, bodyRoll * bodyWeight);
-    point.x = rotated.x;
-    point.y = rotated.y;
+    rotateInPlace(point, bodyPivot, bodyRoll * bodyWeight);
   }
 
   if (headLayerWeight > 0) {
@@ -424,9 +442,7 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       }
       point.y += pitch * faceHeight * (0.012 + upperHeadLever * 0.009 + pitchParallax(layer) * 0.011) * headWeight;
     }
-    const rotated = rotate(point, headPivot, headRoll * headWeight);
-    point.x = rotated.x;
-    point.y = rotated.y;
+    rotateInPlace(point, headPivot, headRoll * headWeight);
   }
 
   if (gazeLayerWeight > 0) {
@@ -438,7 +454,7 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
 
   if (physicsLayerWeight > 0) {
     const u = clamp((base.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width), 0, 1);
-    const free = secondaryFree(layer, base);
+    const free = secondaryFree(layer, base, vertexIndex);
     const weight = physicsLayerWeight;
     if (layer.role === "frontHair") {
       if (!applyAuthoredHairStrands(point, base, layer, frame, vertexIndex, faceHeight, weight)) {
@@ -473,21 +489,20 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
         point.y += state.backHairY * faceHeight * 0.5 * weight * free;
       }
     } else if (layer.role === "headwear") {
-      const headwearX = state.secondary ? chainValue(state.secondary.headwear, "x", Math.max(0.35, free)) : state.headwearX;
-      const headwearY = state.secondary ? chainValue(state.secondary.headwear, "y", Math.max(0.35, free)) : state.headwearY;
-      addLocalBend(point, base, layer.pivot, headwearX * 1.8 * weight, 1);
-      addLocalStretch(point, base, layer.pivot, headwearY * 0.32 * weight, 1);
+      const headwearX = state.secondary ? chainValue(state.secondary.headwear, "x", free) : state.headwearX * free;
+      const headwearY = state.secondary ? chainValue(state.secondary.headwear, "y", free) : state.headwearY * free;
+      addLocalBend(point, base, layer.pivot, headwearX * 1.8 * weight, free);
+      addLocalStretch(point, base, layer.pivot, headwearY * 0.32 * weight, free);
       const hinge = earHingeFor(layer, base);
       if (hinge) {
-        const flap = state.earY * hinge.mirror * 20 + state.earX * 6;
+        const ear = earMotionFor(layer, base, state);
+        const flap = ear.y * hinge.mirror * 20 + ear.x * 6;
         addLocalBend(point, base, hinge.pivot, flap * weight, free);
-      } else if (!frame.hasSeparateEarLayers) {
-        point.y += state.earY * faceHeight * 2.8 * weight * free;
-        addLocalBend(point, base, layer.pivot, state.earX * 0.72 * weight, free);
       }
     } else if (layer.role === "ear") {
       const hinge = earHingeFor(layer, base);
-      if (hinge) addLocalBend(point, base, hinge.pivot, (state.earY * hinge.mirror * 20 + state.earX * 6) * weight, free);
+      const ear = earMotionFor(layer, base, state);
+      if (hinge) addLocalBend(point, base, hinge.pivot, (ear.y * hinge.mirror * 20 + ear.x * 6) * weight, free);
     } else if (layer.role === "bottomWear" && layer.garmentStructure === "supported") {
       const clothChain = state.secondary?.skirt;
       const shellX = clothChain ? chainValue(clothChain, "x", 0.82) : state.clothX;
@@ -599,7 +614,6 @@ interface DeformedPointCacheEntry {
   layer: LayerBinding;
   authoredPoints: Point[];
   points: Point[];
-  hasSeparateEarLayers: boolean;
 }
 
 const previewDeformedPointCache = new WeakMap<MotionState, Map<string, DeformedPointCacheEntry>>();
@@ -632,6 +646,7 @@ function sameLayerDeformationInputs(left: LayerBinding, right: LayerBinding): bo
     && left.deformerId === right.deformerId
     && left.garmentStructure === right.garmentStructure
     && left.garmentFlexibility === right.garmentFlexibility
+    && left.headwearPerspective === right.headwearPerspective
     && left.secondaryAnchors === right.secondaryAnchors
     && left.hairStrands === right.hairStrands
     && left.mesh.points.length === right.mesh.points.length
@@ -653,11 +668,9 @@ function deformedPointsWithCache(
     cache.set(cacheState, byLayer);
   }
   const previous = byLayer.get(layer.id);
-  const hasSeparateEarLayers = project.layers.some((candidate) => candidate.visible !== false && candidate.role === "ear");
   const reusable = previous
     && previous.project.runtime === project.runtime
     && previous.project.anchors === project.anchors
-    && previous.hasSeparateEarLayers === hasSeparateEarLayers
     && sameLayerDeformationInputs(previous.layer, layer)
     && previous.authoredPoints.length === authoredPoints.length;
   let points: Point[];
@@ -671,7 +684,7 @@ function deformedPointsWithCache(
   } else {
     points = authoredPoints.map((point, index) => deformResolvedPoint(project, layer, point, frame, index));
   }
-  byLayer.set(layer.id, { project, layer, authoredPoints, points, hasSeparateEarLayers });
+  byLayer.set(layer.id, { project, layer, authoredPoints, points });
   return points;
 }
 

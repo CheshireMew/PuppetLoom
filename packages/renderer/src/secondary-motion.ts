@@ -67,10 +67,14 @@ export class SegmentedSpringChain {
     }
   }
 
-  sample(): MotionChainState {
-    return {
-      x: this.particles.map((particle) => particle.x),
-      y: this.particles.map((particle) => particle.y)
-    };
+  sample(reusable?: MotionChainState): MotionChainState {
+    const x = reusable?.x.length === this.particles.length ? reusable.x : new Array<number>(this.particles.length);
+    const y = reusable?.y.length === this.particles.length ? reusable.y : new Array<number>(this.particles.length);
+    for (let index = 0; index < this.particles.length; index += 1) {
+      x[index] = this.particles[index]!.x;
+      y[index] = this.particles[index]!.y;
+    }
+    if (reusable && reusable.x === x && reusable.y === y) return reusable;
+    return { x, y };
   }
 }

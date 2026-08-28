@@ -9,6 +9,13 @@ export interface ResolvedRuntimeControl {
   characterState?: CharacterStateSelection;
 }
 
+const emptyResolvedRuntimeControl: ResolvedRuntimeControl = { sources: [], motion: {}, parameters: {}, expressions: {} };
+const emptyRuntimeAuthoredState = {};
+const nonnegativeMotionKeys = new Set<RuntimeMotionInputKey>([
+  "blink", "mouthOpen", "blinkLeft", "blinkRight", "smile", "cheekPuff",
+  "mouthA", "mouthI", "mouthU", "mouthE", "mouthO", "handLeftOpen", "handRightOpen"
+]);
+
 function blendValue(current: number, target: number, blend: number): number {
   return current + (target - current) * Math.max(0, Math.min(1, blend));
 }
@@ -22,7 +29,9 @@ function activeSources(snapshot: RuntimeControlSnapshot | undefined, nowMs: numb
 
 /** Resolves all live sources deterministically; higher priority sources are applied last. */
 export function resolveRuntimeControl(snapshot: RuntimeControlSnapshot | undefined, nowMs = Date.now()): ResolvedRuntimeControl {
+  if (!snapshot || snapshot.sources.length === 0) return emptyResolvedRuntimeControl;
   const sources = activeSources(snapshot, nowMs);
+  if (sources.length === 0) return emptyResolvedRuntimeControl;
   const motion: Partial<Record<RuntimeMotionInputKey, number>> = {};
   const parameters: Record<string, number> = {};
   const expressions: Record<string, number> = {};
@@ -48,7 +57,7 @@ export function controlledMotionValue(base: number, key: RuntimeMotionInputKey, 
     if (target === undefined) continue;
     value = blendValue(value, target, source.blend);
   }
-  const minimum = ["blink", "mouthOpen", "blinkLeft", "blinkRight", "smile", "cheekPuff", "mouthA", "mouthI", "mouthU", "mouthE", "mouthO", "handLeftOpen", "handRightOpen"].includes(key) ? 0 : -1;
+  const minimum = nonnegativeMotionKeys.has(key) ? 0 : -1;
   return Math.max(minimum, Math.min(1, value));
 }
 
@@ -60,7 +69,7 @@ export function runtimeAuthoredState(project: PuppetLoomProject, control: Resolv
 } {
   // Runtime callers normally receive a migrated v4 project, but pure motion consumers and
   // older embedded fixtures may intentionally provide only runtime settings and layers.
-  if (!project.model) return {};
+  if (!project.model || (control.sources.length === 0 && !control.behavior && !control.characterState)) return emptyRuntimeAuthoredState;
   const parameters: Record<string, number> = {};
   for (const parameter of project.model.parameters) {
     let value = parameter.default;

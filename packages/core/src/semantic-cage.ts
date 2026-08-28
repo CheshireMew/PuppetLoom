@@ -20,6 +20,12 @@ interface HorizontalExtent {
   count: number;
 }
 
+interface AlphaAxis {
+  center: Point;
+  left: Point;
+  right: Point;
+}
+
 const faceRoles: SemanticRole[] = ["face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth"];
 const skullRoles: SemanticRole[] = ["frontHair", "backHair", "sideHair", "headwear", "ear"];
 
@@ -90,6 +96,42 @@ function alphaRect(layer: ImportedLayer): AlphaRect | undefined {
     width: maxX - minX + 1,
     height: maxY - minY + 1,
     count
+  };
+}
+
+function alphaAxis(layer: ImportedLayer): AlphaAxis | undefined {
+  const points: Point[] = [];
+  for (let y = 0; y < layer.pixels.height; y += 1) {
+    for (let x = 0; x < layer.pixels.width; x += 1) {
+      if ((layer.pixels.data[(y * layer.pixels.width + x) * 4 + 3] ?? 0) <= 8) continue;
+      points.push({ x: layer.bounds.x + x, y: layer.bounds.y + y });
+    }
+  }
+  if (points.length < 4) return undefined;
+  const center = {
+    x: points.reduce((sum, value) => sum + value.x, 0) / points.length,
+    y: points.reduce((sum, value) => sum + value.y, 0) / points.length
+  };
+  let xx = 0;
+  let xy = 0;
+  let yy = 0;
+  for (const value of points) {
+    const dx = value.x - center.x;
+    const dy = value.y - center.y;
+    xx += dx * dx;
+    xy += dx * dy;
+    yy += dy * dy;
+  }
+  const angle = 0.5 * Math.atan2(2 * xy, xx - yy);
+  let axis = { x: Math.cos(angle), y: Math.sin(angle) };
+  if (axis.x < 0) axis = { x: -axis.x, y: -axis.y };
+  const projections = points.map((value) => (value.x - center.x) * axis.x + (value.y - center.y) * axis.y);
+  const minimum = Math.min(...projections);
+  const maximum = Math.max(...projections);
+  return {
+    center,
+    left: { x: center.x + axis.x * minimum, y: center.y + axis.y * minimum },
+    right: { x: center.x + axis.x * maximum, y: center.y + axis.y * maximum }
   };
 }
 
@@ -212,6 +254,12 @@ export function buildSemanticControlCage(imported: ImportedPsd): SemanticControl
   };
   const directEyes = Boolean(eyeLeftLayer && eyeRightLayer);
   const eyeY = clamp((center(leftEyeRect).y + center(rightEyeRect).y) * 0.5, face.y + face.height * 0.26, face.y + face.height * 0.52);
+  const eyeDeltaX = center(rightEyeRect).x - center(leftEyeRect).x;
+  const faceSlope = directEyes && Math.abs(eyeDeltaX) > 1e-6
+    ? clamp((center(rightEyeRect).y - center(leftEyeRect).y) / eyeDeltaX, -0.3, 0.3)
+    : 0;
+  const faceRowY = (x: number, rowCenterY: number): number => rowCenterY + (x - centerX) * faceSlope;
+  const faceAxisX = (y: number): number => centerX - (y - eyeY) * faceSlope;
 
   const noseLayer = imported.layers.find((layer) => layer.role === "nose");
   const noseRect = noseLayer ? alphaRect(noseLayer) : undefined;
@@ -224,7 +272,8 @@ export function buildSemanticControlCage(imported: ImportedPsd): SemanticControl
 
   const mouthLayer = imported.layers.find((layer) => layer.role === "mouth" && !layer.sourcePath.some((entry) => /closed|slight|open/i.test(entry)));
   const mouthRectPx = mouthLayer ? alphaRect(mouthLayer) : undefined;
-  const mouthCandidate = mouthRectPx ? normalized(center(mouthRectPx), imported) : { x: centerX, y: face.y + face.height * 0.75 };
+  const mouthAxisPx = mouthLayer ? alphaAxis(mouthLayer) : undefined;
+  const mouthCandidate = mouthAxisPx ? normalized(mouthAxisPx.center, imported) : mouthRectPx ? normalized(center(mouthRectPx), imported) : { x: faceAxisX(face.y + face.height * 0.75), y: face.y + face.height * 0.75 };
   const mouthPosition = {
     x: clamp(mouthCandidate.x, centerX - face.width * 0.1, centerX + face.width * 0.1),
     y: clamp(mouthCandidate.y, nosePosition.y + face.height * 0.08, face.y + face.height * 0.86)
@@ -243,6 +292,8 @@ export function buildSemanticControlCage(imported: ImportedPsd): SemanticControl
   const chinY = bottom - Math.min(face.height * 0.025, 2 / canvas.height);
   const jawY = mouthPosition.y + (chinY - mouthPosition.y) * 0.58;
   const jawExtent = faceExtentPx(jawY, face.x + face.width * 0.13, face.x + face.width * 0.87);
+  const chinExtent = faceExtentPx(chinY, centerX - face.width * 0.08, centerX + face.width * 0.08);
+  const chinX = chinExtent.count > 0 ? (chinExtent.left + chinExtent.right) * 0.5 / canvas.width : faceAxisX(chinY);
 
   const headLayers = imported.layers.filter((layer) => layer.role === "frontHair" || layer.role === "backHair" || layer.role === "sideHair" || layer.role === "face");
   const detectedHeadTopPx = robustHeadTop(headLayers, facePixels);
@@ -263,13 +314,15 @@ export function buildSemanticControlCage(imported: ImportedPsd): SemanticControl
     : { x: centerX - face.width * 0.13, y: bottom, width: face.width * 0.26, height: face.height * 0.2 };
 
   const eyeConfidence = directEyes ? 0.96 : 0.56;
+  const mouthLeftPosition = mouthAxisPx ? normalized(mouthAxisPx.left, imported) : { x: mouthPosition.x - mouthHalfWidth, y: faceRowY(mouthPosition.x - mouthHalfWidth, mouthPosition.y) };
+  const mouthRightPosition = mouthAxisPx ? normalized(mouthAxisPx.right, imported) : { x: mouthPosition.x + mouthHalfWidth, y: faceRowY(mouthPosition.x + mouthHalfWidth, mouthPosition.y) };
   const points: Record<SemanticCagePointId, SemanticCagePoint> = {
-    headTop: point({ x: centerX, y: headTop }, detectedHeadTopPx === undefined ? 0.58 : 0.86, detectedHeadTopPx === undefined ? "inferred" : "head-alpha"),
-    forehead: point({ x: centerX, y: foreheadY }, 0.78, "face-alpha"),
+    headTop: point({ x: faceAxisX(headTop), y: headTop }, detectedHeadTopPx === undefined ? 0.58 : 0.86, detectedHeadTopPx === undefined ? "inferred" : "head-alpha"),
+    forehead: point({ x: faceAxisX(foreheadY), y: foreheadY }, 0.78, "face-alpha"),
     skullLeft: point({ x: skullLeftX, y: (foreheadY + eyeY) * 0.5 }, skullExtentPx ? 0.84 : 0.56, skullExtentPx ? "head-alpha" : "inferred"),
     skullRight: point({ x: skullRightX, y: (foreheadY + eyeY) * 0.5 }, skullExtentPx ? 0.84 : 0.56, skullExtentPx ? "head-alpha" : "inferred"),
-    faceLeft: point({ x: templeExtent.left / canvas.width, y: eyeY }, templeExtent.count > 0 ? 0.92 : 0.58, templeExtent.count > 0 ? "face-alpha" : "inferred"),
-    faceRight: point({ x: templeExtent.right / canvas.width, y: eyeY }, templeExtent.count > 0 ? 0.92 : 0.58, templeExtent.count > 0 ? "face-alpha" : "inferred"),
+    faceLeft: point({ x: templeExtent.left / canvas.width, y: faceRowY(templeExtent.left / canvas.width, eyeY) }, templeExtent.count > 0 ? 0.92 : 0.58, templeExtent.count > 0 ? "face-alpha" : "inferred"),
+    faceRight: point({ x: templeExtent.right / canvas.width, y: faceRowY(templeExtent.right / canvas.width, eyeY) }, templeExtent.count > 0 ? 0.92 : 0.58, templeExtent.count > 0 ? "face-alpha" : "inferred"),
     eyeLeftOuter: point({ x: leftEyeRect.x, y: center(leftEyeRect).y }, eyeConfidence, directEyes ? "layer-alpha" : "inferred"),
     eyeLeft: point(center(leftEyeRect), eyeConfidence, directEyes ? "layer-alpha" : "inferred"),
     eyeLeftInner: point({ x: leftEyeRect.x + leftEyeRect.width, y: center(leftEyeRect).y }, eyeConfidence, directEyes ? "layer-alpha" : "inferred"),
@@ -277,14 +330,14 @@ export function buildSemanticControlCage(imported: ImportedPsd): SemanticControl
     eyeRight: point(center(rightEyeRect), eyeConfidence, directEyes ? "layer-alpha" : "inferred"),
     eyeRightOuter: point({ x: rightEyeRect.x + rightEyeRect.width, y: center(rightEyeRect).y }, eyeConfidence, directEyes ? "layer-alpha" : "inferred"),
     nose: point(nosePosition, noseRect ? 0.94 : 0.62, noseRect ? "layer-alpha" : "inferred"),
-    cheekLeft: point({ x: cheekExtent.left / canvas.width, y: cheekY }, cheekExtent.count > 0 ? 0.9 : 0.58, cheekExtent.count > 0 ? "face-alpha" : "inferred"),
-    cheekRight: point({ x: cheekExtent.right / canvas.width, y: cheekY }, cheekExtent.count > 0 ? 0.9 : 0.58, cheekExtent.count > 0 ? "face-alpha" : "inferred"),
-    mouthLeft: point({ x: mouthPosition.x - mouthHalfWidth, y: mouthPosition.y }, mouthRectPx ? 0.9 : 0.58, mouthRectPx ? "layer-alpha" : "inferred"),
+    cheekLeft: point({ x: cheekExtent.left / canvas.width, y: faceRowY(cheekExtent.left / canvas.width, cheekY) }, cheekExtent.count > 0 ? 0.9 : 0.58, cheekExtent.count > 0 ? "face-alpha" : "inferred"),
+    cheekRight: point({ x: cheekExtent.right / canvas.width, y: faceRowY(cheekExtent.right / canvas.width, cheekY) }, cheekExtent.count > 0 ? 0.9 : 0.58, cheekExtent.count > 0 ? "face-alpha" : "inferred"),
+    mouthLeft: point(mouthLeftPosition, mouthRectPx ? 0.9 : 0.58, mouthRectPx ? "layer-alpha" : "inferred"),
     mouth: point(mouthPosition, mouthRectPx ? 0.94 : 0.62, mouthRectPx ? "layer-alpha" : "inferred"),
-    mouthRight: point({ x: mouthPosition.x + mouthHalfWidth, y: mouthPosition.y }, mouthRectPx ? 0.9 : 0.58, mouthRectPx ? "layer-alpha" : "inferred"),
-    jawLeft: point({ x: jawExtent.left / canvas.width, y: jawY }, jawExtent.count > 0 ? 0.88 : 0.56, jawExtent.count > 0 ? "face-alpha" : "inferred"),
-    jawRight: point({ x: jawExtent.right / canvas.width, y: jawY }, jawExtent.count > 0 ? 0.88 : 0.56, jawExtent.count > 0 ? "face-alpha" : "inferred"),
-    chin: point({ x: centerX, y: chinY }, 0.88, "face-alpha"),
+    mouthRight: point(mouthRightPosition, mouthRectPx ? 0.9 : 0.58, mouthRectPx ? "layer-alpha" : "inferred"),
+    jawLeft: point({ x: jawExtent.left / canvas.width, y: faceRowY(jawExtent.left / canvas.width, jawY) }, jawExtent.count > 0 ? 0.88 : 0.56, jawExtent.count > 0 ? "face-alpha" : "inferred"),
+    jawRight: point({ x: jawExtent.right / canvas.width, y: faceRowY(jawExtent.right / canvas.width, jawY) }, jawExtent.count > 0 ? 0.88 : 0.56, jawExtent.count > 0 ? "face-alpha" : "inferred"),
+    chin: point({ x: chinX, y: chinY }, 0.88, "face-alpha"),
     neckLeft: point({ x: neckRect.x, y: Math.max(chinY, neckRect.y) }, neckRectPx ? 0.88 : 0.5, neckRectPx ? "layer-alpha" : "inferred"),
     neckRight: point({ x: neckRect.x + neckRect.width, y: Math.max(chinY, neckRect.y) }, neckRectPx ? 0.88 : 0.5, neckRectPx ? "layer-alpha" : "inferred")
   };
@@ -297,8 +350,8 @@ export function buildSemanticControlCage(imported: ImportedPsd): SemanticControl
   points.eyeRightOuter = correctedPoint("eyeRightOuter", point({ x: points.eyeRightOuter.position.x, y: points.eyeRight.position.y }, points.eyeRightOuter.confidence, points.eyeRightOuter.source), { minX: points.eyeRight.position.x + face.width * 0.018, maxX: points.faceRight.position.x - face.width * 0.015 }, corrections);
   points.cheekLeft = correctedPoint("cheekLeft", points.cheekLeft, { maxX: nosePosition.x - face.width * 0.05, minY: eyeY, maxY: mouthPosition.y }, corrections);
   points.cheekRight = correctedPoint("cheekRight", points.cheekRight, { minX: nosePosition.x + face.width * 0.05, minY: eyeY, maxY: mouthPosition.y }, corrections);
-  points.mouthLeft = correctedPoint("mouthLeft", point({ x: points.mouthLeft.position.x, y: points.mouth.position.y }, points.mouthLeft.confidence, points.mouthLeft.source), { minX: points.cheekLeft.position.x + face.width * 0.04, maxX: points.mouth.position.x - face.width * 0.018 }, corrections);
-  points.mouthRight = correctedPoint("mouthRight", point({ x: points.mouthRight.position.x, y: points.mouth.position.y }, points.mouthRight.confidence, points.mouthRight.source), { minX: points.mouth.position.x + face.width * 0.018, maxX: points.cheekRight.position.x - face.width * 0.04 }, corrections);
+  points.mouthLeft = correctedPoint("mouthLeft", points.mouthLeft, { minX: points.cheekLeft.position.x + face.width * 0.04, maxX: points.mouth.position.x - face.width * 0.018 }, corrections);
+  points.mouthRight = correctedPoint("mouthRight", points.mouthRight, { minX: points.mouth.position.x + face.width * 0.018, maxX: points.cheekRight.position.x - face.width * 0.04 }, corrections);
   points.jawLeft = correctedPoint("jawLeft", points.jawLeft, { maxX: mouthPosition.x - face.width * 0.035, minY: mouthPosition.y, maxY: chinY }, corrections);
   points.jawRight = correctedPoint("jawRight", points.jawRight, { minX: mouthPosition.x + face.width * 0.035, minY: mouthPosition.y, maxY: chinY }, corrections);
 

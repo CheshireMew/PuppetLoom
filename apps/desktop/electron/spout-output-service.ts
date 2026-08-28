@@ -61,14 +61,16 @@ function senderName(value: string): string {
 export class SpoutOutputService {
   private readonly sessions = new Map<number, ActiveSpoutOutput>();
   private readonly log: NonNullable<SpoutOutputServiceOptions["log"]>;
+  private readonly platformSupported: boolean;
 
   constructor(private readonly options: SpoutOutputServiceOptions) {
     this.log = options.log ?? (() => undefined);
+    try { this.platformSupported = process.platform === "win32" && getPlatform().toLowerCase().includes("spout"); }
+    catch { this.platformSupported = false; }
   }
 
   supported(): boolean {
-    try { return process.platform === "win32" && getPlatform().toLowerCase().includes("spout"); }
-    catch { return false; }
+    return this.platformSupported;
   }
 
   status(sourceViewerId: number): SpoutOutputStatus {

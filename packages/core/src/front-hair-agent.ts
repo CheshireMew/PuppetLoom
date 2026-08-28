@@ -37,6 +37,8 @@ export interface FrontHairAgentOptions {
   instruction?: string;
   layerId?: string;
   intent?: FrontHairIntentProfile;
+  /** Read-only project snapshot used by the whole-model Agent to validate pending anatomy before it is committed. */
+  previewProject?: PuppetLoomProject;
 }
 
 export interface FrontHairIntentProfile {
@@ -776,9 +778,12 @@ function qualityChecks(
     },
     {
       id: "lag-rebound",
-      label: "转头时产生短暂滞后，随后收敛并保留轻微回弹",
-      passed: lag.peakError >= 0.08 && lag.settledTurnError <= 0.08 && lag.settledNeutralError <= 0.03 && lag.reboundObserved,
-      details: lag
+      label: "转头时产生短暂滞后并按阻尼设定平滑回正",
+      passed: lag.peakError >= 0.08
+        && lag.settledTurnError <= 0.08
+        && lag.settledNeutralError <= 0.03
+        && (profile.lagDamping >= 0.86 || lag.reboundObserved),
+      details: { ...lag, reboundRequired: profile.lagDamping < 0.86, configuredDamping: profile.lagDamping }
     },
     {
       id: "pose-safety",
@@ -919,16 +924,17 @@ function operationId(operation: AuthoringOperation): string {
 export async function planFrontHairAgent(projectDirectory: string, options: FrontHairAgentOptions = {}): Promise<FrontHairAgentPlan> {
   const root = resolve(projectDirectory);
   const [committed, calibration, draft] = await Promise.all([loadProject(root), loadCalibration(root), loadCalibrationDraft(root)]);
-  const committedLayer = selectFrontHairLayer(committed, options.layerId);
+  const planningProject = options.previewProject ?? committed;
+  const committedLayer = selectFrontHairLayer(planningProject, options.layerId);
   const blockers = draftBlockers(draft, committedLayer.id);
   const targetDraft = draft?.overrides.layers?.[committedLayer.id];
-  const effective = targetDraft ? applyCalibrationOverrides(committed, { layers: { [committedLayer.id]: targetDraft } }) : committed;
+  const effective = targetDraft ? applyCalibrationOverrides(planningProject, { layers: { [committedLayer.id]: targetDraft } }) : planningProject;
   const proposal = await prepareFrontHairAgentProposal(root, effective, options.instruction, committedLayer.id, options.intent);
   const { instruction } = instructionProfile(options.instruction, options.intent);
   const checks = proposal.checks;
   const failedChecks = checks.filter((check) => !check.passed);
   blockers.push(...failedChecks.map((check) => `自检未通过：${check.label}`));
-  const requiresChanges = Boolean(targetDraft) || JSON.stringify(proposal.project) !== JSON.stringify(committed);
+  const requiresChanges = Boolean(targetDraft) || JSON.stringify(proposal.project) !== JSON.stringify(planningProject);
   return {
     version: 1,
     task: "front-hair",
@@ -1027,6 +1033,23 @@ export async function runFrontHairAgent(projectDirectory: string, options: Front
       priorSessions: sessions
     }
   });
+  if (!committedProposal.changed) {
+    await clearCalibrationDraft(root);
+    return {
+      ok: true,
+      changed: sessions.length > 0,
+      task: "front-hair",
+      project: committedProposal.project.name,
+      projectDirectory: root,
+      instruction: initialPlan.instruction,
+      layerId: initialPlan.layer.id,
+      fromRevision: initialPlan.baseRevision,
+      toRevision: committedProposal.revision,
+      ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
+      sessions,
+      checks: proposal.checks
+    };
+  }
   const result = committedProposal.result;
   sessions.push(sessionSummary("front-hair-authoring", result));
   await clearCalibrationDraft(root);

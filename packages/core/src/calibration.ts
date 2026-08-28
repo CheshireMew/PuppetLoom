@@ -283,6 +283,8 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
   }
   if (override.garmentStructure) next.garmentStructure = override.garmentStructure;
   if (override.garmentFlexibility !== undefined) next.garmentFlexibility = override.garmentFlexibility;
+  if (override.headwearPerspective === null) delete next.headwearPerspective;
+  else if (override.headwearPerspective !== undefined) next.headwearPerspective = override.headwearPerspective;
   if (override.secondaryAnchors) {
     for (const [name, point] of Object.entries(override.secondaryAnchors)) if (point) assertNormalized(point, `${layer.sourceName} 的 ${name}`);
     next.secondaryAnchors = { ...(next.secondaryAnchors ?? {}), ...clone(override.secondaryAnchors) };
