@@ -486,16 +486,21 @@ describe("CLI contract", () => {
       rejected: [
         { requestId: "closed-eye-left" },
         { requestId: "closed-eye-right" },
-        { requestId: "mouth-slight" },
         { requestId: "mouth-open-small" }
       ]
     });
   });
 
   it("opens the transparent player through the play command", async () => {
-    const result = await cli(["play", "--project", cliProject, "--revision", "0"], { PUPPETLOOM_E2E_EXIT_AFTER_MS: "900" });
+    const applicationProfile = artifactPath(`cli-play-user-data-${process.pid}-${Date.now()}`);
+    const result = await cli(["play", "--project", cliProject, "--revision", "0"], {
+      PUPPETLOOM_E2E_EXIT_AFTER_MS: "900",
+      PUPPETLOOM_E2E_USER_DATA: applicationProfile
+    });
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
+    const recent = JSON.parse(await readFile(resolve(applicationProfile, "recent-projects.json"), "utf8")) as Array<{ directory: string }>;
+    expect(recent[0]?.directory).toBe(resolve(cliProject));
   }, 30_000);
 
   it("opens the project editor through the edit command", async () => {

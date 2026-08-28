@@ -334,14 +334,28 @@ export class UpperBodyInputMapper {
 export class MicrophoneInputMapper {
   private noiseFloor = 0.008;
   private envelope = 0;
+  private open = false;
 
   sample(samples: Float32Array, deltaMs = 33): number {
+    const frameMs = Math.max(1, Math.min(100, deltaMs));
     const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / Math.max(1, samples.length));
-    if (rms < this.noiseFloor * 1.8) this.noiseFloor = smooth(this.noiseFloor, Math.max(0.002, rms), deltaMs, 1800);
-    const gate = this.noiseFloor * 1.35;
-    const target = clamp(Math.sqrt(Math.max(0, rms - gate) / Math.max(0.025, this.noiseFloor * 7)), 0, 1);
-    this.envelope = smooth(this.envelope, target, deltaMs, target > this.envelope ? 38 : 145);
-    return this.envelope < 0.025 ? 0 : this.envelope;
+    if (!this.open && rms < this.noiseFloor * 1.8) {
+      this.noiseFloor = smooth(this.noiseFloor, Math.max(0.002, rms), frameMs, 2100);
+    }
+
+    const gate = Math.max(0.005, this.noiseFloor * 1.55);
+    const normalized = clamp((rms - gate) / Math.max(0.035, this.noiseFloor * 7), 0, 1);
+    const target = normalized === 0 ? 0 : normalized ** 0.65;
+    this.envelope = smooth(this.envelope, target, frameMs, target > this.envelope ? 65 : 75);
+
+    // Microphone puppeting intentionally emits only the authored closed/open
+    // endpoints. Hysteresis keeps the two sprites from flickering at the gate.
+    if (this.open) {
+      if (this.envelope <= 0.16) this.open = false;
+    } else if (this.envelope >= 0.3) {
+      this.open = true;
+    }
+    return this.open ? 1 : 0;
   }
 }
 
@@ -351,9 +365,10 @@ export class MicrophoneVisemeMapper {
   private output = { mouthA: 0, mouthI: 0, mouthU: 0, mouthE: 0, mouthO: 0 };
 
   sample(timeSamples: Float32Array, frequencyDb: Float32Array, sampleRate: number, deltaMs = 33): RuntimeMotionInput {
-    const mouthOpen = this.loudness.sample(timeSamples, deltaMs);
+    const frameMs = Math.max(1, Math.min(100, deltaMs));
+    const mouthOpen = this.loudness.sample(timeSamples, frameMs);
     if (mouthOpen <= 0 || frequencyDb.length === 0) {
-      for (const key of Object.keys(this.output) as Array<keyof typeof this.output>) this.output[key] = smooth(this.output[key], 0, deltaMs, 110);
+      for (const key of Object.keys(this.output) as Array<keyof typeof this.output>) this.output[key] = smooth(this.output[key], 0, frameMs, 180);
       return { mouthOpen, ...this.output };
     }
     const nyquist = sampleRate * 0.5;
@@ -376,7 +391,7 @@ export class MicrophoneVisemeMapper {
       mouthE: mouthOpen * clamp((mid + highMid) / total * 1.65, 0, 1),
       mouthO: mouthOpen * clamp((low + mid) / total * 1.7, 0, 1)
     };
-    for (const key of Object.keys(this.output) as Array<keyof typeof this.output>) this.output[key] = smooth(this.output[key], target[key], deltaMs, target[key] > this.output[key] ? 48 : 105);
+    for (const key of Object.keys(this.output) as Array<keyof typeof this.output>) this.output[key] = smooth(this.output[key], target[key], frameMs, target[key] > this.output[key] ? 75 : 180);
     return { mouthOpen, ...this.output };
   }
 }
@@ -501,7 +516,7 @@ export async function startMicrophoneInput(
     throw cause;
   }
   analyser.fftSize = 1024;
-  analyser.smoothingTimeConstant = 0;
+  analyser.smoothingTimeConstant = 0.42;
   source.connect(analyser);
   const samples = new Float32Array(analyser.fftSize);
   const frequencies = new Float32Array(analyser.frequencyBinCount);

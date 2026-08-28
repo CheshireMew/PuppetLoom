@@ -136,14 +136,17 @@ describe("desktop runtime input mapping", () => {
     }, 1400)).toMatchObject({ blink: 0, mouthOpen: 0 });
   });
 
-  it("gates room noise while following speech with fast attack and slower release", () => {
+  it("drives a stable two-state mouth without leaving it open after speech", () => {
     const mapper = new MicrophoneInputMapper();
     const silent = new Float32Array(1024).fill(0.002);
     expect(mapper.sample(silent)).toBe(0);
     const loud = Float32Array.from({ length: 1024 }, (_, index) => index % 2 ? 0.12 : -0.12);
-    const opened = Array.from({ length: 5 }, () => mapper.sample(loud)).at(-1)!;
-    expect(opened).toBeGreaterThan(0.7);
-    expect(mapper.sample(silent)).toBeGreaterThan(0.2);
+    const speaking = Array.from({ length: 5 }, () => mapper.sample(loud));
+    expect(speaking.at(-1)).toBe(1);
+    expect(speaking.every((value) => value === 0 || value === 1)).toBe(true);
+    const closing = Array.from({ length: 5 }, () => mapper.sample(silent));
+    expect(closing.at(-1)).toBe(0);
+    expect(closing.every((value) => value === 0 || value === 1)).toBe(true);
   });
 
   it("extracts deterministic local viseme weights from microphone spectrum", () => {

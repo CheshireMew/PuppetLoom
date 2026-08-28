@@ -62,7 +62,7 @@ export function torsoVolumeAt(profile: TorsoVolumeProfile, normalizedTorsoY: num
   return 0;
 }
 
-const torsoVolumeDepthCaches = new WeakMap<PuppetLoomProject, WeakMap<Point, number>>();
+const torsoVolumeDepthCaches = new WeakMap<PuppetLoomProject, WeakMap<Point, { x: number; y: number; depth: number }>>();
 
 function cachedTorsoVolumeDepth(project: PuppetLoomProject, base: Point, bodyPivot: Point, faceHeight: number): number {
   const profile = project.runtime.torsoVolumeProfile;
@@ -73,14 +73,14 @@ function cachedTorsoVolumeDepth(project: PuppetLoomProject, base: Point, bodyPiv
     torsoVolumeDepthCaches.set(project, values);
   }
   const cached = values.get(base);
-  if (cached !== undefined) return cached;
+  if (cached && cached.x === base.x && cached.y === base.y) return cached.depth;
   const shoulderY = project.anchors.shoulderLeft && project.anchors.shoulderRight
     ? (project.anchors.shoulderLeft.y + project.anchors.shoulderRight.y) * 0.5
     : project.anchors.neck?.y ?? bodyPivot.y - faceHeight * 0.55;
   const hipY = Math.max(shoulderY + faceHeight * 0.9, bodyPivot.y + faceHeight * 0.72);
   const torsoY = clamp((base.y - shoulderY) / Math.max(1e-6, hipY - shoulderY), 0, 1);
   const depth = torsoVolumeAt(profile, torsoY) * profile.strength;
-  values.set(base, depth);
+  values.set(base, { x: base.x, y: base.y, depth });
   return depth;
 }
 
@@ -323,14 +323,16 @@ export function createDeformationFrameContext(project: PuppetLoomProject, resolv
   };
 }
 
-export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, frame: DeformationFrameContext, vertexIndex?: number): Point {
+export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBinding, base: Point, frame: DeformationFrameContext, vertexIndex?: number, output?: Point): Point {
   const { state, envelope, faceWidth, faceHeight, headPivot, bodyPivot, yaw, pitch, headRoll, bodyRoll } = frame;
   const release = 1 - vertexInfluence(layer, "pin", vertexIndex, 0);
   const bodyLayerWeight = layer.weights.body * vertexInfluence(layer, "body", vertexIndex, 1) * release;
   const headLayerWeight = layer.weights.head * vertexInfluence(layer, "head", vertexIndex, 1) * release;
   const gazeLayerWeight = layer.weights.gaze * vertexInfluence(layer, "gaze", vertexIndex, 1) * release;
   const physicsLayerWeight = layer.weights.physics * vertexInfluence(layer, "physics", vertexIndex, 1) * release;
-  let point = { ...base };
+  let point = output ?? { x: base.x, y: base.y };
+  point.x = base.x;
+  point.y = base.y;
 
   const eyeBlink = layer.side === "left" ? state.blinkLeft ?? state.blink : layer.side === "right" ? state.blinkRight ?? state.blink : state.blink;
   if ((layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && eyeBlink > 0) {
@@ -375,7 +377,8 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       point.x += bodyTurn * side * faceWidth * 0.006 * bodyWeight;
     }
     const rotated = rotate(point, bodyPivot, bodyRoll * bodyWeight);
-    point = rotated;
+    point.x = rotated.x;
+    point.y = rotated.y;
   }
 
   if (headLayerWeight > 0) {
@@ -385,14 +388,20 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       const blinkModified = (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && eyeBlink > 0;
       // Static head-only vertices retain their project object identity here so
       // the semantic-cage lookup can reuse topology weights across frames.
-      const poseInput = bodyLayerWeight === 0 && !blinkModified ? base : point;
+      // A reused output point is mutable. Pose-field caches must only receive
+      // immutable project/authoring points, so take a snapshot when earlier
+      // body or blink deformation has already changed the coordinate.
+      const poseInput = bodyLayerWeight === 0 && !blinkModified ? base : { x: point.x, y: point.y };
       const attachment = vertexIndex === undefined ? undefined : layer.mesh.influences?.headAttachment?.[vertexIndex];
+      const topologyKey = vertexIndex === undefined ? undefined : layer.mesh.points[vertexIndex];
       const posed = applyCoherentPoseField(project.runtime.poseField, layer, poseInput, yaw, pitch, project.runtime.semanticCage, {
         face: vertexInfluence(layer, "face", vertexIndex, 1),
         skull: vertexInfluence(layer, "skull", vertexIndex, 1),
-        ...(attachment === undefined ? {} : { attachment: clamp(attachment, 0, 1) })
+        ...(attachment === undefined ? {} : { attachment: clamp(attachment, 0, 1) }),
+        ...(topologyKey === undefined ? {} : { topologyKey })
       });
-      point = { x: point.x + (posed.x - poseInput.x) * headWeight, y: point.y + (posed.y - poseInput.y) * headWeight };
+      point.x += (posed.x - poseInput.x) * headWeight;
+      point.y += (posed.y - poseInput.y) * headWeight;
     }
     else {
       if (layer.side !== "center" && hasSidePerspective(layer)) {
@@ -415,7 +424,9 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       }
       point.y += pitch * faceHeight * (0.012 + upperHeadLever * 0.009 + pitchParallax(layer) * 0.011) * headWeight;
     }
-    point = rotate(point, headPivot, headRoll * headWeight);
+    const rotated = rotate(point, headPivot, headRoll * headWeight);
+    point.x = rotated.x;
+    point.y = rotated.y;
   }
 
   if (gazeLayerWeight > 0) {
@@ -665,8 +676,19 @@ function deformedPointsWithCache(
 }
 
 /** Deforms one cached authoring result with a state already returned by resolveMotionState. */
-export function deformedAuthoredPoints(project: PuppetLoomProject, layer: LayerBinding, authoredPoints: Point[], resolvedState: MotionState, frame = createDeformationFrameContext(project, resolvedState)): Point[] {
-  return applyLayerCollisionConstraints(project, layer, authoredPoints.map((point, index) => deformResolvedPoint(project, layer, point, frame, index)));
+export function deformedAuthoredPoints(
+  project: PuppetLoomProject,
+  layer: LayerBinding,
+  authoredPoints: Point[],
+  resolvedState: MotionState,
+  frame = createDeformationFrameContext(project, resolvedState),
+  reusable?: Point[]
+): Point[] {
+  const points = reusable?.length === authoredPoints.length ? reusable : new Array<Point>(authoredPoints.length);
+  for (let index = 0; index < authoredPoints.length; index += 1) {
+    points[index] = deformResolvedPoint(project, layer, authoredPoints[index]!, frame, index, points[index]);
+  }
+  return applyLayerCollisionConstraints(project, layer, points);
 }
 
 /** Incremental authored deformation used by paused editor renderers. */

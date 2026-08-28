@@ -5,6 +5,7 @@ import { reprojectMeshInfluences } from "./mesh.js";
 import { artMeshDetailForRole } from "./rig.js";
 import { frontHairPhysicsMask } from "./front-hair-geometry.js";
 import type { ModelAgentRepair } from "./agent.js";
+import type { PixelBuffer } from "./psd.js";
 import type { AuthoringModel, LayerBinding, MeshBinding, Point, PuppetLoomProject } from "./types.js";
 
 export interface AgentMeshAssessment {
@@ -150,20 +151,71 @@ export function assessAgentMesh(layer: LayerBinding): AgentMeshAssessment {
   };
 }
 
-function rebuiltMesh(layer: LayerBinding, pixels: Awaited<ReturnType<typeof loadProjectTextureSources>> extends Map<string, infer P> ? P : never): MeshBinding {
+function meshDetailCandidates(layer: LayerBinding): number[] {
   const detail = Math.max(artMeshDetailForRole(layer.role), layer.mesh.art?.detail ?? 0);
-  const mesh = pixels
-    ? makeAdaptiveMesh({
-        bounds: layer.bounds,
-        pixels,
-        detail,
-        fallbackRows: layer.mesh.rows ?? 8,
-        fallbackCols: layer.mesh.cols ?? 8
-      })
-    : layer.mesh.topology === "art" && layer.mesh.art
-      ? remeshArtMesh(layer.mesh, layer.bounds, detail)
-      : layer.mesh;
-  mesh.influences = reprojectMeshInfluences(layer.mesh, mesh);
+  return [...new Set([
+    detail,
+    Math.round(detail * 0.75),
+    Math.round(detail * 0.67),
+    Math.round(detail * 1.25),
+    Math.round(detail * 1.5)
+  ].map((candidate) => Math.max(4, Math.min(256, candidate))))];
+}
+
+function assessmentRank(assessment: AgentMeshAssessment): [number, number, number, number] {
+  return [
+    assessment.issues.length,
+    assessment.topology === "art" ? 0 : 1,
+    assessment.crowdedVertexCount + assessment.orphanVertexIndices.length,
+    assessment.pointCount
+  ];
+}
+
+function betterAssessment(left: AgentMeshAssessment, right: AgentMeshAssessment): boolean {
+  const leftRank = assessmentRank(left);
+  const rightRank = assessmentRank(right);
+  for (let index = 0; index < leftRank.length; index += 1) {
+    if (leftRank[index]! !== rightRank[index]!) return leftRank[index]! < rightRank[index]!;
+  }
+  return false;
+}
+
+/** Selects the first contract-valid nearby ArtMesh, retaining the best diagnostic candidate if none fully pass. */
+export function rebuildAgentMesh(layer: LayerBinding, pixels?: PixelBuffer): MeshBinding {
+  let selected = layer.mesh;
+  let selectedAssessment = assessAgentMesh(layer);
+  for (const detail of meshDetailCandidates(layer)) {
+    let candidate: MeshBinding;
+    try {
+      candidate = pixels
+        ? makeAdaptiveMesh({
+            bounds: layer.bounds,
+            pixels,
+            detail,
+            fallbackRows: layer.mesh.rows ?? 8,
+            fallbackCols: layer.mesh.cols ?? 8
+          })
+        : layer.mesh.topology === "art" && layer.mesh.art
+          ? remeshArtMesh(layer.mesh, layer.bounds, detail)
+          : layer.mesh;
+    } catch {
+      continue;
+    }
+    const assessment = assessAgentMesh({ ...layer, mesh: candidate });
+    if (assessment.issues.length === 0) {
+      selected = candidate;
+      selectedAssessment = assessment;
+      break;
+    }
+    if (betterAssessment(assessment, selectedAssessment)) {
+      selected = candidate;
+      selectedAssessment = assessment;
+    }
+  }
+  const mesh = {
+    ...selected,
+    influences: reprojectMeshInfluences(layer.mesh, selected)
+  };
   if (layer.role === "frontHair") {
     const remeshedLayer = { ...layer, mesh };
     mesh.influences.physics = mesh.points.map((point) => frontHairPhysicsMask(remeshedLayer, point));
@@ -239,7 +291,7 @@ export async function prepareAgentMeshes(projectDirectory: string, project: Pupp
   for (const layer of targets) {
     const assessment = before.find((candidate) => candidate.layerId === layer.id)!;
     if (!assessment.shouldRebuild) continue;
-    const mesh = rebuiltMesh(layer, sources.get(layer.id));
+    const mesh = rebuildAgentMesh(layer, sources.get(layer.id));
     replacements[layer.id] = mesh;
     repairs.push({
       pass: repairs.length + 1,

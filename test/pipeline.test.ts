@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -155,9 +155,31 @@ describe("optional enhancement", () => {
   it("describes blink and compact mouth-shape requests without blocking the build", async () => {
     const requests = JSON.parse(await readFile(resolve(semanticOutput, "requests/asset-requests.json"), "utf8")) as { optional: boolean; requests: Array<{ id: string; kind: string; reference: { path: string } }> };
     expect(requests.optional).toBe(true);
-    expect(requests.requests.map(({ id }) => id)).toEqual(["closed-eye-left", "closed-eye-right", "mouth-slight", "mouth-open-small"]);
-    expect(requests.requests.map(({ kind }) => kind)).toEqual(["closed-eye", "closed-eye", "mouth-shape", "mouth-shape"]);
+    expect(requests.requests.map(({ id }) => id)).toEqual(["closed-eye-left", "closed-eye-right", "mouth-open-small"]);
+    expect(requests.requests.map(({ kind }) => kind)).toEqual(["closed-eye", "closed-eye", "mouth-shape"]);
     for (const request of requests.requests) expect((await stat(resolve(semanticOutput, request.reference.path))).isFile()).toBe(true);
+  });
+
+  it("migrates a legacy slight-mouth request to the default two-state contract without deleting its evidence", async () => {
+    const output = resolve(runRoot, "legacy-mouth-request");
+    await createProject({ input: resolve(fixtures, "semantic.psd"), reference: resolve(fixtures, "semantic-reference.png"), output, seed: 42 });
+    const requestPath = resolve(output, "requests/asset-requests.json");
+    const document = JSON.parse(await readFile(requestPath, "utf8")) as { requests: Array<Record<string, unknown>> };
+    const open = document.requests.find((request) => request.id === "mouth-open-small")!;
+    document.requests.splice(document.requests.length - 1, 0, {
+      ...open,
+      id: "mouth-slight",
+      variant: "slight",
+      reference: { path: "requests/references/mouth-slight.png" },
+      output: { ...(open.output as object), path: "supplements/mouth-slight.png" }
+    });
+    await writeFile(requestPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+
+    const result = await enhanceProject({ project: output, assets: resolve(runRoot, "missing-legacy-supplements") });
+    expect(result.rejected.map((entry) => entry.requestId)).not.toContain("mouth-slight");
+    const migrated = JSON.parse(await readFile(requestPath, "utf8")) as { requests: Array<{ id: string }> };
+    expect(migrated.requests.map((request) => request.id)).toEqual(["closed-eye-left", "closed-eye-right", "mouth-open-small"]);
+    expect((await stat(resolve(output, "requests/asset-requests.pre-two-state.json"))).isFile()).toBe(true);
   });
 
   it("rejects wrong-size supplements and preserves the safe project", async () => {
@@ -165,12 +187,11 @@ describe("optional enhancement", () => {
     await mkdir(assetDirectory, { recursive: true });
     await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "closed-eye-left.png"));
     await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "closed-eye-right.png"));
-    await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "mouth-slight.png"));
     await sharp({ create: { width: 3, height: 3, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(resolve(assetDirectory, "mouth-open-small.png"));
     const before = await readFile(resolve(semanticOutput, "puppetloom.json"), "utf8");
     const result = await enhanceProject({ project: semanticOutput, assets: assetDirectory });
     expect(result.accepted).toHaveLength(0);
-    expect(result.rejected).toHaveLength(4);
+    expect(result.rejected).toHaveLength(3);
     expect(await readFile(resolve(semanticOutput, "puppetloom.json"), "utf8")).toBe(before);
   });
 
@@ -185,15 +206,15 @@ describe("optional enhancement", () => {
       await sharp({ create: { width, height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: mark }]).png().toFile(resolve(assetDirectory, request.output.path.split("/").at(-1)!));
     }
     const result = await enhanceProject({ project: semanticOutput, assets: assetDirectory });
-    expect(result.accepted).toEqual(["closed-eye-left", "closed-eye-right", "mouth-slight", "mouth-open-small"]);
+    expect(result.accepted).toEqual(["closed-eye-left", "closed-eye-right", "mouth-open-small"]);
     expect(result.rejected).toEqual([]);
     expect(result.project.runtime.features.blink).toBe(true);
     for (const closed of result.project.layers.filter((layer) => layer.role === "eyeClosed")) {
       expect(closed.pivot).toEqual(result.project.layers.find((layer) => layer.role === "eyeWhite" && layer.side === closed.side)?.pivot);
     }
-    expect(result.project.layers.filter((layer) => layer.role === "mouth").map((layer) => layer.mouthVariant).sort()).toEqual(["closed", "open", "slight"]);
+    expect(result.project.layers.filter((layer) => layer.role === "mouth").map((layer) => layer.mouthVariant).sort()).toEqual(["closed", "open"]);
     expect(result.project.layers.filter((layer) => layer.role === "mouth" && layer.mouthVariant === "closed" && layer.opacity === 1)).toHaveLength(1);
-    expect(JSON.parse(await readFile(resolve(semanticOutput, "reports/build-report.json"), "utf8"))).toMatchObject({ layerCount: 23, enabledFeatures: expect.arrayContaining(["blink", "mouthMotion"]), disabledFeatures: [] });
+    expect(JSON.parse(await readFile(resolve(semanticOutput, "reports/build-report.json"), "utf8"))).toMatchObject({ layerCount: 22, enabledFeatures: expect.arrayContaining(["blink", "mouthMotion"]), disabledFeatures: [] });
     expect((await verifyProject(semanticOutput)).valid).toBe(true);
   });
 });

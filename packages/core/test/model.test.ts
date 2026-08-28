@@ -66,6 +66,19 @@ describe("AI authoring model", () => {
     expect(authoredLayersInRenderOrder(value, state).map((entry) => entry.id)).toEqual(["second", "first"]);
   });
 
+  it("switches directly between closed and open art when the slight mouth is inactive", () => {
+    const closed = { ...layer("mouth-closed"), role: "mouth" as const, mouthVariant: "closed" as const };
+    const slight = { ...layer("mouth-slight"), role: "mouth" as const, mouthVariant: "slight" as const, visible: false };
+    const open = { ...layer("mouth-open"), role: "mouth" as const, mouthVariant: "open" as const };
+    const value = project(createDefaultAuthoringModel(), [closed, slight, open]);
+    value.runtime.features.mouthMotion = true;
+
+    expect(authoredOpacityFor(value, closed, { ...neutralMotionState, mouthOpen: 0.49 })).toBe(1);
+    expect(authoredOpacityFor(value, open, { ...neutralMotionState, mouthOpen: 0.49 })).toBe(0);
+    expect(authoredOpacityFor(value, closed, { ...neutralMotionState, mouthOpen: 0.5 })).toBe(0);
+    expect(authoredOpacityFor(value, open, { ...neutralMotionState, mouthOpen: 0.5 })).toBe(1);
+  });
+
   it("bilinearly samples a complete two-parameter keyform grid", () => {
     const parameters = [
       { id: "x", name: "X", group: "Custom", kind: "continuous" as const, min: 0, default: 0, max: 1 },

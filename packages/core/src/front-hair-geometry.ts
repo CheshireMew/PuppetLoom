@@ -39,8 +39,10 @@ interface FrontHairLayerGeometry {
 }
 
 const frontHairLayerGeometryCache = new WeakMap<LayerBinding, FrontHairLayerGeometry>();
-const frontHairSideGeometryCache = new WeakMap<LayerBinding, WeakMap<Point, FrontHairSideGeometry>>();
-const ahogeHingeWeightCache = new WeakMap<LayerBinding, WeakMap<Point, number>>();
+interface CoordinateCacheEntry<T> { x: number; y: number; value: T }
+
+const frontHairSideGeometryCache = new WeakMap<LayerBinding, WeakMap<Point, CoordinateCacheEntry<FrontHairSideGeometry>>>();
+const ahogeHingeWeightCache = new WeakMap<LayerBinding, WeakMap<Point, CoordinateCacheEntry<number>>>();
 
 function normalizedU(layer: LayerBinding, point: Point): number {
   return clamp((point.x - layer.bounds.x) / Math.max(1e-6, layer.bounds.width));
@@ -107,7 +109,7 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
     frontHairSideGeometryCache.set(layer, byPoint);
   }
   const cached = byPoint.get(point);
-  if (cached) return cached;
+  if (cached && cached.x === point.x && cached.y === point.y) return cached.value;
   const geometry = layerGeometry(layer);
   const { width, height, commonRootY, bangRootY, bangTipY } = geometry;
   const u = normalizedU(layer, point);
@@ -155,7 +157,7 @@ export function frontHairSideGeometry(layer: LayerBinding, point: Point): FrontH
     bangRelease,
     totalRelease: Math.max(sideRelease, bangRelease)
   };
-  byPoint.set(point, resolved);
+  byPoint.set(point, { x: point.x, y: point.y, value: resolved });
   return resolved;
 }
 
@@ -174,16 +176,16 @@ export function ahogeHingeWeight(layer: LayerBinding, point: Point): number {
     ahogeHingeWeightCache.set(layer, byPoint);
   }
   const cached = byPoint.get(point);
-  if (cached !== undefined) return cached;
+  if (cached && cached.x === point.x && cached.y === point.y) return cached.value;
   const root = layer.secondaryAnchors?.ahogeRoot;
   if (!root) {
-    byPoint.set(point, 0);
+    byPoint.set(point, { x: point.x, y: point.y, value: 0 });
     return 0;
   }
   const height = Math.max(1e-6, layer.bounds.height);
   const aboveRoot = (root.y - point.y) / height;
   if (aboveRoot <= 0.004) {
-    byPoint.set(point, 0);
+    byPoint.set(point, { x: point.x, y: point.y, value: 0 });
     return 0;
   }
   const rootRelease = smoothstep((aboveRoot - 0.004) / 0.052);
@@ -197,12 +199,12 @@ export function ahogeHingeWeight(layer: LayerBinding, point: Point): number {
   const corridorHalfWidth = 0.06 + heightProgress ** 1.5 * 0.31;
   const corridorSoftness = 0.1 + heightProgress * 0.1;
   if (horizontalDistance >= corridorHalfWidth + corridorSoftness) {
-    byPoint.set(point, 0);
+    byPoint.set(point, { x: point.x, y: point.y, value: 0 });
     return 0;
   }
   const corridor = 1 - smoothstep((horizontalDistance - corridorHalfWidth) / corridorSoftness);
   const weight = clamp(rootRelease * corridor);
-  byPoint.set(point, weight);
+  byPoint.set(point, { x: point.x, y: point.y, value: weight });
   return weight;
 }
 

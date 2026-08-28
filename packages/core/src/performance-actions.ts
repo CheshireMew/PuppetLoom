@@ -134,11 +134,12 @@ export function planStandardPerformanceActions(project: PuppetLoomProject, baseR
 
   const mouthLayers = project.layers.filter((layer) => layer.role === "mouth" && layer.visible !== false);
   const mouthVariants = new Set(mouthLayers.map((layer) => layer.mouthVariant ?? "closed"));
-  const hasMouthSet = ["closed", "slight", "open"].every((variant) => mouthVariants.has(variant as "closed" | "slight" | "open"));
+  const hasMouthSet = ["closed", "open"].every((variant) => mouthVariants.has(variant as "closed" | "open"));
+  const hasSlightMouth = mouthVariants.has("slight");
   const mouth = hasMouthSet ? semantic(project, "mouth-open") : undefined;
   if (mouthLayers.length === 0) parts.push({ part: "mouth", status: "not-present", layerIds: [], message: "项目没有嘴部图层，未生成口型动作。" });
-  else if (!mouth) parts.push({ part: "mouth", status: "needs-assets", layerIds: mouthLayers.map((layer) => layer.id), message: hasMouthSet ? "嘴部图层缺少可用的 mouth-open 语义参数。" : "缺少闭合、微张、张开三态嘴形；嘴部保持不动，不用透明切换冒充口型。" });
-  else parts.push({ part: "mouth", status: "completed", layerIds: mouthLayers.map((layer) => layer.id), expressionIds: ["performance-soft-smile", "performance-surprised", "performance-determined", "performance-sleepy"], behaviorIds: ["action-short-talk"], message: "已使用三态嘴形建立表情和短句口型。" });
+  else if (!mouth) parts.push({ part: "mouth", status: "needs-assets", layerIds: mouthLayers.map((layer) => layer.id), message: hasMouthSet ? "嘴部图层缺少可用的 mouth-open 语义参数。" : "缺少闭合与张开两态嘴形；嘴部保持不动，不用透明消失冒充口型。" });
+  else parts.push({ part: "mouth", status: "completed", layerIds: mouthLayers.map((layer) => layer.id), expressionIds: ["performance-soft-smile", "performance-surprised", "performance-determined", "performance-sleepy"], behaviorIds: ["action-short-talk"], message: hasSlightMouth ? "已使用三态嘴形建立表情和短句口型。" : "已使用闭口与张口两态素材建立表情和短句口型。" });
   const expressionValues = (brow: number, blinkValue: number, mouthValue: number): Record<string, number> => ({
     ...(browLayers.length > 0 ? { [browParameter.id]: brow } : {}),
     ...(blink ? { [blink]: blinkValue } : {}),
@@ -244,10 +245,21 @@ export function planStandardPerformanceActions(project: PuppetLoomProject, baseR
 
   const earLayers = project.layers.filter((layer) => layer.visible !== false && (layer.role === "ear" || (layer.role === "headwear" && Boolean(layer.secondaryAnchors?.earHingeLeft || layer.secondaryAnchors?.earHingeRight))));
   if (earLayers.length > 0) {
-    const earX = parameter("param-performance-ear-x", "表演 · 耳部侧摆", -0.005, 0.005, "ear-x");
-    const earY = parameter("param-performance-ear-y", "表演 · 耳部抬落", -0.012, 0.012, "ear-y");
+    const mergedEarLayers = earLayers.filter((layer) => layer.role === "headwear");
+    const separateEarLayers = earLayers.filter((layer) => layer.role === "ear");
+    const earX = parameter("param-performance-ear-x", "表演 · 耳部侧摆", -0.005, 0.005, mergedEarLayers.length > 0 ? "ear-x" : undefined);
+    const earY = parameter("param-performance-ear-y", "表演 · 耳部抬落", -0.012, 0.012, mergedEarLayers.length > 0 ? "ear-y" : undefined);
     pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earX });
     pushIfChanged(operations, project, { op: "upsert-parameter", parameter: earY });
+    for (const layer of separateEarLayers) {
+      const mirror = layer.side === "left" ? 1 : layer.side === "right" ? -1 : 1;
+      pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-ear-x-${layer.id}`, earX.id, layer, [
+        { value: -0.005, rotation: -1 }, { value: 0 }, { value: 0.005, rotation: 1 }
+      ]) });
+      pushIfChanged(operations, project, { op: "upsert-binding", binding: layerBinding(`binding-performance-ear-y-${layer.id}`, earY.id, layer, [
+        { value: -0.012, rotation: 8 * mirror }, { value: 0 }, { value: 0.012, rotation: -5 * mirror }
+      ]) });
+    }
     behaviors.push(behavior("action-ear-flick", "动作 · 耳朵轻弹", 0.82, [
       track(earX.id, [[0, 0], [0.12, -0.0025], [0.26, 0.003], [0.42, -0.0015], [0.62, 0.0008], [0.82, 0]]),
       track(earY.id, [[0, 0], [0.1, -0.009], [0.24, 0.005], [0.39, -0.007], [0.58, 0.002], [0.82, 0]])

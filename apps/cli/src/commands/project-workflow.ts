@@ -73,6 +73,31 @@ export function registerProjectWorkflowCommands(program: Command): void {
     });
 
   program
+    .command("performance")
+    .description("测量指定项目和校准修订在活动与暂停状态下的真实帧率和长帧")
+    .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+    .requiredOption("--output <new-directory>", "新建的性能证据目录")
+    .option("--revision <number>", "指定校准修订；省略时锁定当前修订")
+    .option("--trials <number>", "活动与暂停状态分别测量 1 到 5 轮", "3")
+    .option("--json", "输出 JSON")
+    .action(async (options: { project: string; output: string; revision?: string; trials: string; json?: boolean }) => {
+      await run(async () => {
+        const revision = options.revision === undefined ? undefined : Number(options.revision);
+        const trials = Number(options.trials);
+        if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) throw new PuppetLoomError("INVALID_INPUT", "revision 必须是非负整数。" );
+        if (!Number.isInteger(trials) || trials < 1 || trials > 5) throw new PuppetLoomError("INVALID_INPUT", "trials 必须是 1 到 5 的整数。" );
+        const result = await runWorkspaceTool("measure-project-performance.mjs", [
+          "--project", resolve(options.project),
+          "--output", resolve(options.output),
+          "--trials", String(trials),
+          ...(revision === undefined ? [] : ["--revision", String(revision)])
+        ]) as { valid?: boolean };
+        print(result, options);
+        if (result.valid === false) process.exitCode = 3;
+      }, options);
+    });
+
+  program
     .command("calibrate")
     .description("通过经过验证的 JSON 补丁校准锚点、控制点、网格、权重和动作参数")
     .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
@@ -167,7 +192,7 @@ export function registerProjectWorkflowCommands(program: Command): void {
 
   program
     .command("enhance")
-    .description("验证并接入可选闭眼和三态嘴形素材；不合格素材自动忽略")
+    .description("验证并接入可选闭眼和张口素材；不合格素材自动忽略")
     .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
     .requiredOption("--assets <supplement-dir>", "补充素材目录")
     .option("--json", "输出 JSON")

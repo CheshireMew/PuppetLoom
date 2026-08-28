@@ -127,7 +127,7 @@ describe("secondary part Agent", () => {
     expect(rigidity.details.maximumAngularSpread).toBeLessThanOrEqual(1e-5);
   });
 
-  it("authors separate ears as rigid root rotations without the procedural flap", () => {
+  it("authors separate ears as rigid root rotations while preserving autonomous ear motion", () => {
     const proposal = createSecondaryPartAgentProposal(project(), { part: "ears", instruction: "精灵耳以贴脸端为根轻微跟随" });
     const ear = proposal.layers.find((candidate) => candidate.role === "ear")!;
     const proposedEar = proposal.project.layers.find((candidate) => candidate.id === ear.id)!;
@@ -135,7 +135,10 @@ describe("secondary part Agent", () => {
       && operation.binding.id.includes("agent-ears-direct"));
 
     expect(binding?.op).toBe("upsert-binding");
-    expect(proposedEar.weights.physics).toBe(0);
+    expect(proposedEar.weights.physics).toBeGreaterThanOrEqual(0.55);
+    expect(proposal.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "autonomous-secondary-visible", passed: true })
+    ]));
     if (binding?.op !== "upsert-binding") return;
     for (const keyform of binding.binding.keyforms.filter((candidate) => candidate.values[0] !== 0)) {
       for (const [index, base] of ear.mesh.points.entries()) {
@@ -145,6 +148,16 @@ describe("secondary part Agent", () => {
         expect(Math.abs(afterRadius - beforeRadius)).toBeLessThanOrEqual(1e-7);
       }
     }
+  });
+
+  it("moves an independent headwear pivot to its attachment edge and verifies visible idle deformation", () => {
+    const proposal = createSecondaryPartAgentProposal(project(), { part: "headwear", instruction: "让吊饰轻微摆动" });
+    const headwear = proposal.project.layers.find((candidate) => candidate.id === "headwear")!;
+    expect(headwear.pivot.x).toBeCloseTo(headwear.bounds.x + headwear.bounds.width * 0.5, 8);
+    expect(headwear.pivot.y).toBeCloseTo(headwear.bounds.y + headwear.bounds.height * 0.84, 8);
+    expect(proposal.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "autonomous-secondary-visible", passed: true })
+    ]));
   });
 
   it("locks the clothing waist, reduces skirt amplitude, and places merged back bows behind overlapping arms", () => {

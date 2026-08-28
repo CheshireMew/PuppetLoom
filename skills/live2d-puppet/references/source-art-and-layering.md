@@ -50,10 +50,10 @@
 获准自动上传后通过包装脚本调用，不控制 Windows 鼠标：
 
 ```powershell
-& <skill>\scripts\acquire_layered_psd.ps1 E:\Input\character.png -Resolution 1024 -Seed 42 -SplitLimbs
+& <skill>\scripts\acquire_layered_psd.ps1 E:\Input\character.png -Resolution 1024 -Seed 42 -SplitLimbs -OutputRoot E:\Puppets\work\layering-review
 ```
 
-自动路线的结果写入 Skill 自有且被忽略的 `runtime/see-through/<UTC 时间-随机编号>/`，不覆盖既有任务。即使接口与 `inspect` 均成功，结果仍保持 `readyForCreate: false`，因为脚本只证明服务返回了 PuppetLoom 可读取的 PSD 和待审查证据，不证明分层语义或重组画面正确。获准自动上传后先用只读检查确认当前 API 协议仍匹配：
+自动路线必须显式把 `-OutputRoot` 指向本次规范项目或仓库根目录内部，结果写入其新的时间—随机编号子目录，不覆盖既有任务；不得沿用 Skill 自有 `runtime`、下载目录或仓库旁边的临时任务根目录。即使接口与 `inspect` 均成功，结果仍保持 `readyForCreate: false`，因为脚本只证明服务返回了 PuppetLoom 可读取的 PSD 和待审查证据，不证明分层语义或重组画面正确。获准自动上传后先用只读检查确认当前 API 协议仍匹配：
 
 ```powershell
 & <skill>\scripts\acquire_layered_psd.ps1 -Check
@@ -66,12 +66,12 @@
 已有原图和 PSD 时使用本地复核，不上传任何文件：
 
 ```powershell
-& <skill>\scripts\acquire_layered_psd.ps1 E:\Input\character.png -ReviewPsd E:\Input\character.psd -OutputRoot E:\Output\layering-review
+& <skill>\scripts\acquire_layered_psd.ps1 E:\Input\character.png -ReviewPsd E:\Input\character.psd -OutputRoot E:\Puppets\work\layering-review
 ```
 
 获准的自动路线若失败、持续排队、结果 URL 无法下载或服务协议改变，保留错误任务目录并报告失败；不要假装已经获得 PSD，也不要自动改分辨率、换种子或改用浏览器继续上传。回到三个选择：用户可在准确的 ModelScope 网页以 1024 手动处理，或在线入口不可用时明确选择本地部署。
 
-See-Through 返回的单层采用原画画布坐标和透明通道。复核、补层或迁移时必须保留全画布尺寸、图层原始位置和解剖学左右；不能把裁出的局部部件任意缩放、镜像或凭目测重新摆放。完整角色制作中缺少左右闭眼、微张嘴或张口时，Agent 默认按原画、PSD 重组图和对应局部参考生成真正缺少的表情素材，不需要再次索取授权；已有闭嘴绝不重画。图像生成不能作为默认的 PSD 主要语义修复器：不要把孤立后发、翅膀、腿或其它主要结构生成为绿幕图，再用色键和代码拼回 PSD。这样得到的坐标、朝向、透明边和画风没有可靠保证。
+See-Through 返回的单层采用原画画布坐标和透明通道。复核、补层或迁移时必须保留全画布尺寸、图层原始位置和解剖学左右；不能把裁出的局部部件任意缩放、镜像或凭目测重新摆放。完整角色制作中缺少左右闭眼或一个张口时，Agent 默认按原画、PSD 重组图和对应局部参考生成真正缺少的表情素材，不需要再次索取授权；已有闭嘴绝不重画，微张嘴和音素嘴形只在用户明确需要独立表情或触发方式时增加。生成闭眼前先检查睁眼、虹膜和睫毛是否独立，还是已经烘焙进脸部；烘焙眼需要完整眼睑与肤色遮挡补片或 PSD 修复，不能只叠加线状闭眼。图像生成不能作为默认的 PSD 主要语义修复器：不要把孤立后发、翅膀、腿或其它主要结构生成为绿幕图，再用色键和代码拼回 PSD。这样得到的坐标、朝向、透明边和画风没有可靠保证。
 
 ### 多份 PSD 的部件整理
 
@@ -88,7 +88,7 @@ See-Through 返回的单层采用原画画布坐标和透明通道。复核、�
 脚本验证文件非空且以 PSD 签名 `8BPS` 开头。随后运行：
 
 ```powershell
-& <skill>\scripts\invoke_puppetloom.ps1 inspect --input E:\Output\character.psd --json
+& <skill>\scripts\invoke_puppetloom.ps1 inspect --input E:\Puppets\work\layering-review\<run>\character.psd --json
 ```
 
 实际打开 `source-normalized.png`、`recomposition.png`、`comparison.png`、`previews/contact-sheet.png` 和需要放大的单层预览，确认脸、双眼、虹膜/睫毛、前发、后发、脖子和上身等核心语义存在；全身角色还要检查手臂、腿、裙摆、尾巴和配饰。`recomposition.png` 必须由 PSD 的实际可见图层强制合成，不能信任 PSD 内置预览图。对照图同时展示白底、深色底和只保留角色有效 Alpha 的放大差异，用于检查脸形、五官、发际线、服装图案、肢体轮廓、透明边、残留底色、离散噪点和画布位置。
@@ -97,7 +97,7 @@ See-Through 返回的单层采用原画画布坐标和透明通道。复核、�
 
 判断异常来自原图还是 See-Through 拆分时，要同时比较 `source-original.*` 的真实 RGB/Alpha、`source-normalized.png`、PSD 单层 Alpha 和 `recomposition.png`。原图没有 Alpha 只能证明原图不存在隐藏透明蒙版，不能单独证明其可见 RGB 中没有相似痕迹；归因仍以原图画面和拆分结果的对应差异为准。
 
-`inspect` 通过、图层数量充足或 `comparison-metrics.json` 的差异较小，都不能自动接受候选。外部 Agent 必须把 `visual-review.json` 中五官、头发、服装肢体、`layer-order-and-occlusion`、背景透明边和整体重组逐项记录为通过、可后修或失败，并给出 `blockingIssues` 与 `repairPlan`。图层顺序按从后到前检查，至少确认后裙在裸露腿后、腿在前裙后，后发在脖子和脸后，眉毛在脸前且不会因眨眼消失；前发仍可在脸和眉眼前。实际设计不同可以调整，但必须以原画重组为证据，不能只按角色名猜。
+`inspect` 通过、图层数量充足或 `comparison-metrics.json` 的差异较小，都不能自动接受候选。外部 Agent 必须把 `visual-review.json` 中五官、头发、服装肢体、`layer-order-and-occlusion`、背景透明边和整体重组逐项记录为通过、可后修或失败，并给出 `blockingIssues` 与 `repairPlan`。用户要求整理整个 PSD 顺序时，`layer-order-and-occlusion` 是所有可见重叠关系的全局闭环，不是新增图层、替换图层或用户最后举例部位的抽查；更新 PSD 也要重新检查未修改图层与新内容之间的遮挡。图层顺序按从后到前检查，至少确认后裙与裸露腿及前裙、后发与脖子及脸、外衣与脖子、项链主体与吊坠、眉毛与脸眼的实际关系，并在中立重组和相关动作极值中复核；前发仍可按设计位于脸和眉眼前。这里都是风险示例，实际设计可以不同，但必须以原画、PSD 重组和动作证据为准，不能只按角色名猜。
 
 如果错误只是几个完整独立图层的前后顺序，候选可标为 `accepted-with-repairs`，`repairPlan` 逐条记录要移动的 layer ID、相对目标和视觉原因；进入项目后由 Agent 通过可恢复的 `move-layer` authoring 操作调整，再查看 neutral、眨眼和身体动作证据。
 
@@ -106,7 +106,7 @@ See-Through 返回的单层采用原画画布坐标和透明通道。复核、�
 若异常与真实轮廓相连，矩形区域包含被遮挡结构、补底或动作时需要显露的像素，清理规则需要猜角色内容，或未增强的合成与运动画面已经出现大面积白雾、底色、绿边和硬截断，就不能用阈值或整块清除掩盖，应标为 `rejected`。若前后裙、前后发、眉毛与脸或其它前后结构已经粘在同一图层，无法只靠移动完整图层修复，同样标为 `rejected`。缺失核心五官或主要身体区域、第二主体串层、画布严重错位或分层结构不足以可靠创建项目时也拒绝；缺少呆毛、小配饰、少量边缘残留、孤立噪点和轻微颜色变化等不改变主要轮廓与遮挡的问题才可后修。写完结论后通过确定性入口校验三档状态并同步结果，Agent 不再手工维护两份状态：
 
 ```powershell
-& <skill>\scripts\acquire_layered_psd.ps1 -FinalizeReview E:\Output\layering-review\<run>\visual-review.json
+& <skill>\scripts\acquire_layered_psd.ps1 -FinalizeReview E:\Puppets\work\layering-review\<run>\visual-review.json
 ```
 
 `accepted` 不得带阻断项或待修计划；`accepted-with-repairs` 必须有具体 `repairPlan`，但不带阻断项；`rejected` 必须说明至少一个真正阻止继续创建的 `blockingIssues`。命令校验原图与 PSD 哈希、审图证据路径和结论内部一致性，再同步更新 `visual-review.json` 与 `result.json`。用户只要求 PSD 时，返回文件、分级结论和修复计划后停止。用户同时要求继续制作时，`accepted` 可直接进入 `create --reference <原图>`；`accepted-with-repairs` 只有在问题不改变主要语义、轮廓和遮挡结构，且用户明确接受携带这些问题继续时才可进入创建，修复完成前不能把它报告为成品。`rejected` 不进入绑定，也不自动转入生图补部件、绿幕抠图或代码拼接；回到最后接受的原画或 PSD，由用户选择重新使用官方网页分层、调整整张原画或交给画师修层。

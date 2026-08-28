@@ -24,6 +24,7 @@ import type {
   LayerBinding,
   ModelBinding,
   ModelKeyform,
+  MotionState,
   MotionTuning,
   Point,
   PuppetLoomProject,
@@ -109,8 +110,8 @@ interface PreparedSecondaryProposal {
 const policies: Record<SecondaryModelAgentPart, PartPolicy> = {
   backHair: { label: "后发与侧发", roles: ["backHair", "sideHair"], tuningPart: "backHair", driver: "param-head-yaw", defaultAmplitude: 0.82, baseScale: 0.012 },
   ahoge: { label: "呆毛", roles: ["frontHair"], tuningPart: "ahoge", driver: "param-head-yaw", defaultAmplitude: 0.9, baseScale: 0.015 },
-  ears: { label: "耳朵", roles: ["ear"], tuningPart: "ears", driver: "param-head-yaw", defaultAmplitude: 0.68, baseScale: 0.01 },
-  headwear: { label: "头饰", roles: ["headwear"], tuningPart: "headwear", driver: "param-head-yaw", defaultAmplitude: 0.62, baseScale: 0.009 },
+  ears: { label: "耳朵", roles: ["ear"], tuningPart: "ears", driver: "param-head-yaw", defaultAmplitude: 0.76, baseScale: 0.01 },
+  headwear: { label: "头饰", roles: ["headwear"], tuningPart: "headwear", driver: "param-head-yaw", defaultAmplitude: 0.78, baseScale: 0.022 },
   topCloth: { label: "上衣与袖子", roles: ["topWear", "arm"], tuningPart: "topCloth", driver: "param-body-sway", defaultAmplitude: 0.46, baseScale: 0.007 },
   skirt: { label: "裙摆与下装", roles: ["bottomWear"], tuningPart: "skirt", driver: "param-body-sway", defaultAmplitude: 0.5, baseScale: 0.0085 },
   tail: { label: "尾巴", roles: ["tail"], tuningPart: "tail", driver: "param-body-sway", defaultAmplitude: 0.9, baseScale: 0.017 },
@@ -186,6 +187,15 @@ function vertexRelease(part: SecondaryModelAgentPart, layer: LayerBinding, point
   }
   const rootV = clamp((layer.pivot.y - layer.bounds.y) / height, 0.02, 0.7);
   return smoothstep((v - rootV) / Math.max(0.12, 1 - rootV));
+}
+
+function headwearAttachmentPivot(layer: LayerBinding): Point {
+  if (layer.secondaryAnchors?.earHingeLeft || layer.secondaryAnchors?.earHingeRight) return layer.pivot;
+  const hanging = layer.bounds.height > layer.bounds.width * 1.15;
+  return {
+    x: rounded(layer.bounds.x + layer.bounds.width * 0.5, 8),
+    y: rounded(layer.bounds.y + layer.bounds.height * (hanging ? 0.04 : 0.84), 8)
+  };
 }
 
 function ids(part: SecondaryModelAgentPart): { output: string; physics: string } {
@@ -297,12 +307,13 @@ function layerOverrides(part: SecondaryModelAgentPart, project: PuppetLoomProjec
         : rounded(Math.max(layer.mesh.influences?.physics?.[index] ?? 0, vertexRelease(part, layer, point)), 6)
     ]));
     const weights = policy.driver === "param-head-yaw"
-      ? { ...layer.weights, head: 1, physics: part === "ears" ? 0 : 1 }
+      ? { ...layer.weights, head: 1, physics: part === "ears" ? Math.max(layer.weights.physics, 0.55) : 1 }
       : { ...layer.weights, body: 1, physics: 1 };
     const order = part === "skirt" ? skirtOrderBehindArms(project, layer) : undefined;
     return [layer.id, {
       weights,
       vertexInfluences: { physics },
+      ...(part === "headwear" ? { pivot: layer.pivot } : {}),
       ...(part === "skirt" && intent.garmentStructure ? { garmentStructure: intent.garmentStructure } : {}),
       ...(part === "skirt" && intent.garmentFlexibility !== undefined ? { garmentFlexibility: intent.garmentFlexibility } : {}),
       ...(order !== undefined ? { order } : {})
@@ -313,6 +324,19 @@ function layerOverrides(part: SecondaryModelAgentPart, project: PuppetLoomProjec
     layers: layerPatches,
     runtime: { secondaryMotionTuning: { [policy.tuningPart]: tuning } }
   };
+}
+
+function representativeAutonomousState(part: SecondaryModelAgentPart, project: PuppetLoomProject): MotionState | undefined {
+  if (part !== "ears" && part !== "headwear") return undefined;
+  const parameters: Record<string, number> = {};
+  if (part === "ears") {
+    for (const parameter of project.model.parameters) {
+      if (parameter.semantic === "ear-x") parameters[parameter.id] = 0.003;
+      if (parameter.semantic === "ear-y") parameters[parameter.id] = -0.01;
+    }
+    return { ...neutralMotionState, earX: 0.003, earY: -0.01, parameters };
+  }
+  return { ...neutralMotionState, headwearX: 0.008, headwearY: 0.003, parameters };
 }
 
 function maximumBindingDelta(operations: AuthoringOperation[], layerId: string): number {
@@ -406,6 +430,8 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
   let maximumRootDelta = 0;
   let maximumWaistDelta = 0;
   let maximumRelativeDelta = 0;
+  let maximumAutonomousRelativeDelta = 0;
+  const autonomousState = representativeAutonomousState(part, proposed);
   for (const layer of proposed.layers) {
     const beforeLayer = before.layers.find((candidate) => candidate.id === layer.id);
     if (!beforeLayer) continue;
@@ -417,6 +443,12 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
     if (!targetIds.has(layer.id)) continue;
     const delta = maximumBindingDelta(operations, layer.id);
     maximumRelativeDelta = Math.max(maximumRelativeDelta, delta / Math.max(layer.bounds.width, layer.bounds.height, 1e-6));
+    if (autonomousState) {
+      const neutral = deformedPoints(proposed, layer, neutralMotionState);
+      const active = deformedPoints(proposed, layer, autonomousState);
+      const movement = Math.max(0, ...active.map((point, index) => Math.hypot(point.x - neutral[index]!.x, point.y - neutral[index]!.y)));
+      maximumAutonomousRelativeDelta = Math.max(maximumAutonomousRelativeDelta, movement / Math.max(layer.bounds.width, layer.bounds.height, 1e-6));
+    }
     const rootIndices = layer.mesh.points.flatMap((point, index) => vertexRelease(part, layer, point) <= 0.14 ? [index] : []);
     for (const index of rootIndices) {
       const value = operations.flatMap((operation) => operation.op === "upsert-binding" && operation.binding.target.kind === "layer" && operation.binding.target.id === layer.id
@@ -485,6 +517,12 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
       passed: maximumRootDelta <= 0.0015,
       details: { maximumRootDelta: rounded(maximumRootDelta, 8) }
     },
+    ...((part === "ears" || part === "headwear") ? [{
+      id: "autonomous-secondary-visible",
+      label: "自主次级运动会真实带动目标图层",
+      passed: maximumAutonomousRelativeDelta >= 0.003 && maximumAutonomousRelativeDelta <= 0.18,
+      details: { maximumRelativeMovement: rounded(maximumAutonomousRelativeDelta, 8), minimumRequired: 0.003 }
+    }] : []),
     ...((part === "topCloth" || part === "skirt") ? [{
       id: "waist-seam-lock",
       label: "腰线两侧不参与独立布料变形",
@@ -602,7 +640,9 @@ export function createSecondaryPartAgentProposal(project: PuppetLoomProject, opt
         ...(intent.garmentStructure ? { garmentStructure: intent.garmentStructure } : {}),
         ...(intent.garmentFlexibility !== undefined ? { garmentFlexibility: intent.garmentFlexibility } : {})
       }
-    : layer);
+    : options.part === "headwear"
+      ? { ...layer, pivot: headwearAttachmentPivot(layer) }
+      : layer);
   let last: PreparedSecondaryProposal | undefined;
   const repairs: ModelAgentRepair[] = [];
   for (const multiplier of [1, 0.82, 0.66, 0.5, 0.38, 0.28]) {

@@ -152,6 +152,7 @@ describe("rig attachment pivots", () => {
     });
 
     expect(project.layers.find((layer) => layer.role === "headwear")?.secondaryAnchors).toBeUndefined();
+    expect(project.layers.find((layer) => layer.role === "headwear")?.pivot).toEqual({ x: 0.5, y: 0.372 });
     expect(project.layers.find((layer) => layer.id === "ear-left")?.pivot).toEqual({ x: 0.6, y: 0.2852 });
     expect(project.layers.find((layer) => layer.id === "ear-right")?.pivot).toEqual({ x: 0.4, y: 0.2852 });
   });

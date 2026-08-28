@@ -382,6 +382,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     directory: resolvedProject,
     ...(revision === undefined ? {} : { revision })
   });
+  if (!capture) await projectIpc.rememberProject(resolvedProject, project);
   const resolvedSourceLabel = sourceLabel ?? (revision === undefined ? "已保存项目" : `历史 revision ${revision}`);
   for (const [id, directory] of viewerProjects) {
     const existing = BrowserWindow.fromId(id);
@@ -541,6 +542,7 @@ windowPreferences = new WindowPreferencesStore(join(applicationProfile, "viewer-
 });
 app.setPath("userData", applicationProfile);
 app.setPath("cache", join(applicationProfile, "cache"));
+const projectIpc = new ProjectIpcService(applicationProfile);
 const allowMultipleInstances = process.env.PUPPETLOOM_ALLOW_MULTIPLE === "1" || (Number.isFinite(automatedExit) && automatedExit > 0);
 const hasInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock({ project: initialProject ?? "", edit: initialEdit, revision: initialRevision });
 runtimeLog("app-start", { argv: process.argv, initialProject, initialEdit, initialRevision, initialCapture, allowMultipleInstances, hasInstanceLock });
@@ -621,7 +623,6 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       viewerAspectRatios.delete(mirrorId);
     }
   });
-  const projectIpc = new ProjectIpcService(applicationProfile);
   projectIpc.register();
   const calibrationIpc = new CalibrationIpcService((directory, project) => projectIpc.rememberProject(directory, project));
   calibrationIpc.register();
@@ -680,7 +681,6 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("viewer:launch", async (_event, directory: string, options?: ViewerLaunchOptions) => {
     const projectDirectory = resolve(directory);
     const project = options?.project ?? await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: projectDirectory });
-    await projectIpc.rememberProject(projectDirectory, project);
     const window = await createViewer(projectDirectory, undefined, false, project, options?.sourceLabel);
     return { id: window.id, state: stateFor(window) };
   });

@@ -3,7 +3,7 @@ import type { PointerLookTarget } from "./pointer.js";
 import { controlledMotionValue, resolveRuntimeControl, runtimeAuthoredState } from "./runtime-control.js";
 import { SegmentedSpringChain } from "./secondary-motion.js";
 
-interface MotionEvent {
+export interface MotionEvent {
   start: number;
   transition: number;
   hold: number;
@@ -57,14 +57,21 @@ function smoothstep(value: number): number {
   return t * t * (3 - 2 * t);
 }
 
-function eventValue(event: MotionEvent, time: number, key: "yaw" | "pitch" | "roll", lead = 0): number {
+export function eventValue(event: MotionEvent, time: number, key: "yaw" | "pitch" | "roll", lead = 0): number {
   const local = time - event.start + lead;
   const target = event[key];
   if (local <= 0) return 0;
   if (local < event.transition) return target * smoothstep(local / event.transition);
-  if (local < event.transition + event.hold) return target;
+  // A deliberate look should settle, not freeze on one mathematically exact
+  // value. Ease a few percent back toward neutral during the pause so the
+  // character keeps breathing through the beat and the return stays smooth.
+  const settledTarget = target * 0.955;
+  if (local < event.transition + event.hold) {
+    const settling = (local - event.transition) / event.hold;
+    return target + (settledTarget - target) * smoothstep(settling);
+  }
   const returning = (local - event.transition - event.hold) / event.returnDuration;
-  if (returning < 1) return target * (1 - smoothstep(returning));
+  if (returning < 1) return settledTarget * (1 - smoothstep(returning));
   return 0;
 }
 
@@ -390,7 +397,7 @@ export class CalmMotionController {
       secondaryTuning(this.project, "ahoge")
     );
     advanceChain(this.headwear,
-      -(headVelocity * 0.4 + bodyVelocity * 0.6 + rollVelocity * 0.28) * 0.01 + headwearWobble * 0.016,
+      -(headVelocity * 0.4 + bodyVelocity * 0.6 + rollVelocity * 0.28) * 0.01 + headwearWobble * 0.24,
       -(pitchVelocity * 0.4 + this.trackedBodyPitch.velocity * 0.6) * 0.006,
       delta,
       secondaryTuning(this.project, "headwear")

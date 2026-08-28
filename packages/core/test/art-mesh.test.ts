@@ -17,6 +17,30 @@ function pixels(width: number, height: number, opaque: (x: number, y: number) =>
   return { width, height, data };
 }
 
+function seededHairPixels(seed: number): PixelBuffer {
+  const width = 96;
+  const height = 128;
+  let value = seed >>> 0;
+  const random = (): number => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 0x100000000;
+  };
+  const lobes = Array.from({ length: 15 }, (_, index) => ({
+    cx: 48 + (random() - 0.5) * 52,
+    cy: 22 + index * 5.4 + (random() - 0.5) * 12,
+    rx: 18 + random() * 25,
+    ry: 13 + random() * 24
+  }));
+  const notches = Array.from({ length: 10 }, () => ({
+    cx: 48 + (random() - 0.5) * 62,
+    cy: 38 + random() * 76,
+    rx: 5 + random() * 12,
+    ry: 6 + random() * 18
+  }));
+  return pixels(width, height, (x, y) => lobes.some((lobe) => ((x - lobe.cx) / lobe.rx) ** 2 + ((y - lobe.cy) / lobe.ry) ** 2 <= 1)
+    && !notches.some((notch) => ((x - notch.cx) / notch.rx) ** 2 + ((y - notch.cy) / notch.ry) ** 2 <= 1));
+}
+
 function opaqueAt(buffer: PixelBuffer, u: number, v: number): boolean {
   const x = Math.max(0, Math.min(buffer.width - 1, Math.floor(u * buffer.width)));
   const y = Math.max(0, Math.min(buffer.height - 1, Math.floor(v * buffer.height)));
@@ -156,6 +180,46 @@ describe("Alpha-aware ArtMesh", () => {
     });
     expect(mesh.topology).toBe("grid");
     expect(mesh.points).toHaveLength(20);
+  });
+
+  it("retries a nearby detail before degrading a valid irregular Alpha silhouette to a grid", () => {
+    const texture = seededHairPixels(31);
+    expect(() => buildArtMesh(
+      { x: 0, y: 0, width: 1, height: 1 },
+      traceArtMeshSource(texture, 8, 12),
+      12
+    )).toThrow();
+
+    const mesh = makeAdaptiveMesh({
+      bounds: { x: 0, y: 0, width: 1, height: 1 },
+      pixels: texture,
+      detail: 12,
+      fallbackRows: 8,
+      fallbackCols: 8
+    });
+    expect(mesh.topology).toBe("art");
+    expect(mesh.art?.detail).toBe(9);
+    expect(mesh.triangles.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the outer silhouette when Alpha holes overlap and cannot be triangulated", () => {
+    const source = {
+      textureSize: { width: 100, height: 100 },
+      alphaThreshold: 8,
+      detail: 12,
+      regions: [{
+        outer: [{ x: 0.05, y: 0.05 }, { x: 0.95, y: 0.05 }, { x: 0.95, y: 0.95 }, { x: 0.05, y: 0.95 }],
+        holes: [
+          [{ x: 0.2, y: 0.2 }, { x: 0.65, y: 0.2 }, { x: 0.65, y: 0.65 }, { x: 0.2, y: 0.65 }],
+          [{ x: 0.45, y: 0.45 }, { x: 0.8, y: 0.45 }, { x: 0.8, y: 0.8 }, { x: 0.45, y: 0.8 }]
+        ]
+      }]
+    };
+
+    const mesh = buildArtMesh({ x: 0, y: 0, width: 1, height: 1 }, source);
+    expect(mesh.topology).toBe("art");
+    expect(mesh.art?.regions[0]?.holes).toHaveLength(0);
+    expect(mesh.triangles.length).toBeGreaterThan(0);
   });
 
   it("keeps soft selection on the selected mesh component", () => {

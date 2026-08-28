@@ -493,8 +493,23 @@ export function buildArtMesh(bounds: Rect, source: ArtMeshSource, detail = sourc
   const points: Point[] = [];
   const uvs: Point[] = [];
   const triangles: number[] = [];
+  const builtRegions: ArtMeshRegion[] = [];
   for (const region of regions) {
-    const triangulated = triangulateRegion(region, source, clampedDetail);
+    let builtRegion = region;
+    let triangulated: ReturnType<typeof triangulateRegion>;
+    try {
+      triangulated = triangulateRegion(region, source, clampedDetail);
+    } catch (error) {
+      if (region.holes.length === 0) throw error;
+      // Hair and lace textures can contain overlapping or self-touching Alpha
+      // holes. They are not valid polygon constraints, but they do not need to
+      // be cut out of the mesh because the texture Alpha still hides them at
+      // render time. Keep the painted outer silhouette instead of degrading
+      // the whole layer to a rectangular grid.
+      builtRegion = { ...region, holes: [] };
+      triangulated = triangulateRegion(builtRegion, source, clampedDetail);
+    }
+    builtRegions.push(builtRegion);
     if (points.length + triangulated.points.length > MAX_ART_MESH_VERTICES) {
       throw new Error(`ArtMesh 顶点不能超过 ${MAX_ART_MESH_VERTICES}，请增大细节尺度。`);
     }
@@ -509,7 +524,7 @@ export function buildArtMesh(bounds: Rect, source: ArtMeshSource, detail = sourc
   if (points.length < 3 || triangles.length < 3) throw new Error("Alpha 轮廓没有生成可渲染的 ArtMesh。" );
   return {
     topology: "art",
-    art: { ...source, detail: clampedDetail, regions },
+    art: { ...source, detail: clampedDetail, regions: builtRegions },
     points,
     uvs,
     triangles,
@@ -525,17 +540,40 @@ export function remeshArtMesh(mesh: MeshBinding, bounds: Rect, detail: number): 
 }
 
 export function makeAdaptiveMesh(options: AdaptiveMeshOptions): MeshBinding {
-  const source = traceArtMeshSource(options.pixels, options.alphaThreshold ?? 8, options.detail);
+  const alphaThreshold = options.alphaThreshold ?? 8;
+  const source = traceArtMeshSource(options.pixels, alphaThreshold, options.detail);
   let opaquePixels = 0;
   for (let index = 3; index < options.pixels.data.length; index += 4) if ((options.pixels.data[index] ?? 0) >= source.alphaThreshold) opaquePixels += 1;
   const coverage = options.pixels.width * options.pixels.height > 0 ? opaquePixels / (options.pixels.width * options.pixels.height) : 0;
   const rectangular = coverage >= 0.985
     && source.regions.length === 1
     && source.regions[0]!.holes.length === 0;
-  if (rectangular || source.regions.length === 0) return makeGridMesh(options.bounds, options.fallbackRows, options.fallbackCols);
-  try {
-    return buildArtMesh(options.bounds, source, options.detail);
-  } catch {
-    return makeGridMesh(options.bounds, options.fallbackRows, options.fallbackCols);
+  if (rectangular) return makeGridMesh(options.bounds, options.fallbackRows, options.fallbackCols);
+
+  // A contour can be perfectly valid at the source Alpha level yet become
+  // self-intersecting after simplification at one exact detail value. Falling
+  // straight back to a rectangular grid makes the Agent unable to repair that
+  // layer even though a neighbouring deformation scale triangulates cleanly.
+  // Retry a small deterministic set around the requested scale; the caller's
+  // requested value remains first, so established successful meshes do not
+  // change merely because this recovery path exists.
+  const details = [...new Set([
+    options.detail,
+    Math.round(options.detail * 0.75),
+    Math.round(options.detail * 1.25),
+    Math.round(options.detail * 0.5),
+    Math.round(options.detail * 1.5)
+  ].map((detail) => Math.max(4, Math.min(256, detail))))];
+  for (const detail of details) {
+    const candidateSource = detail === options.detail
+      ? source
+      : traceArtMeshSource(options.pixels, alphaThreshold, detail);
+    if (candidateSource.regions.length === 0) continue;
+    try {
+      return buildArtMesh(options.bounds, candidateSource, detail);
+    } catch {
+      // Try the next nearby detail before accepting a rectangular fallback.
+    }
   }
+  return makeGridMesh(options.bounds, options.fallbackRows, options.fallbackCols);
 }

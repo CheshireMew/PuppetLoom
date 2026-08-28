@@ -6,7 +6,8 @@ export type TextureResolver = (layer: LayerBinding) => Promise<Blob | ImageBitma
 
 interface LayerGpuResources {
   texture: WebGLTexture;
-  positionBuffer: WebGLBuffer;
+  positionBuffers: WebGLBuffer[];
+  positionBufferIndex: number;
   uvBuffer: WebGLBuffer;
   indexBuffer: WebGLBuffer;
   indexCount: number;
@@ -208,6 +209,9 @@ export class PuppetRenderer {
   private runtimeControl: RuntimeControlSnapshot | undefined;
   private outputOverride: RendererOutputOverride | undefined;
   private authoredFrameReuse: AuthoredRenderFrameReuse | undefined;
+  private readonly deformedByLayerId = new Map<string, Point[]>();
+  private readonly deformationBuffersByLayerId = new Map<string, Point[]>();
+  private readonly uploadedLayerIds = new Set<string>();
   private readonly deformedPointCache = new Map<string, {
     layer: LayerBinding;
     inputState: MotionState;
@@ -291,12 +295,16 @@ export class PuppetRenderer {
   private createLayerResources(layer: LayerBinding, bitmap: ImageBitmap): void {
     const gl = this.gl;
     const texture = gl.createTexture();
-    const positionBuffer = gl.createBuffer();
+    const positionBuffers: WebGLBuffer[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const buffer = gl.createBuffer();
+      if (buffer) positionBuffers.push(buffer);
+    }
     const uvBuffer = gl.createBuffer();
     const indexBuffer = gl.createBuffer();
-    if (!texture || !positionBuffer || !uvBuffer || !indexBuffer) {
+    if (!texture || positionBuffers.length !== 3 || !uvBuffer || !indexBuffer) {
       if (texture) gl.deleteTexture(texture);
-      if (positionBuffer) gl.deleteBuffer(positionBuffer);
+      for (const buffer of positionBuffers) gl.deleteBuffer(buffer);
       if (uvBuffer) gl.deleteBuffer(uvBuffer);
       if (indexBuffer) gl.deleteBuffer(indexBuffer);
       throw new Error(`无法为 ${layer.sourceName} 创建 GPU 资源。`);
@@ -310,8 +318,10 @@ export class PuppetRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     const positions = new Float32Array(layer.mesh.points.length * 2);
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, positions.byteLength, gl.DYNAMIC_DRAW);
+    for (const buffer of positionBuffers) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, positions.byteLength, gl.DYNAMIC_DRAW);
+    }
     const uvs = this.uvArray(layer);
     gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
@@ -320,7 +330,8 @@ export class PuppetRenderer {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
     this.resources.set(layer.id, {
       texture,
-      positionBuffer,
+      positionBuffers,
+      positionBufferIndex: 0,
       uvBuffer,
       indexBuffer,
       indexCount: indices.length,
@@ -367,6 +378,7 @@ export class PuppetRenderer {
   render(state: MotionState): void {
     this.lastState = state;
     const gl = this.gl;
+    this.uploadedLayerIds.clear();
     this.resize();
     const background = this.outputOverride?.background;
     if (background?.mode === "solid") {
@@ -393,23 +405,30 @@ export class PuppetRenderer {
       if (!resource) return;
       if (resource.positions.length !== points.length * 2) {
         resource.positions = new Float32Array(points.length * 2);
-        gl.bindBuffer(gl.ARRAY_BUFFER, resource.positionBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, resource.positions.byteLength, gl.DYNAMIC_DRAW);
+        for (const buffer of resource.positionBuffers) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+          gl.bufferData(gl.ARRAY_BUFFER, resource.positions.byteLength, gl.DYNAMIC_DRAW);
+        }
         resource.uploadedPoints = undefined;
       }
-      if (resource.uploadedPoints !== points) {
+      const pointsChanged = resource.uploadedPoints !== points;
+      const reusableActiveBufferChanged = !this.paused && !this.uploadedLayerIds.has(layer.id);
+      if (pointsChanged || reusableActiveBufferChanged) {
         const positions = resource.positions;
         for (let index = 0; index < points.length; index += 1) {
           const point = points[index]!;
           positions[index * 2] = point.x;
           positions[index * 2 + 1] = point.y;
         }
-        gl.bindBuffer(gl.ARRAY_BUFFER, resource.positionBuffer);
-        // Orphan only the dynamic positions. UVs stay in their static buffer.
-        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+        resource.positionBufferIndex = (resource.positionBufferIndex + 1) % resource.positionBuffers.length;
+        gl.bindBuffer(gl.ARRAY_BUFFER, resource.positionBuffers[resource.positionBufferIndex]!);
+        // Rotate through preallocated buffers so the CPU never reallocates a
+        // buffer that the GPU may still be consuming from a previous frame.
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, positions);
         resource.uploadedPoints = points;
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, resource.positionBuffer);
+      this.uploadedLayerIds.add(layer.id);
+      gl.bindBuffer(gl.ARRAY_BUFFER, resource.positionBuffers[resource.positionBufferIndex]!);
       gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, resource.uvBuffer);
       gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, 0, 0);
@@ -424,7 +443,8 @@ export class PuppetRenderer {
     const frame = authoredRenderFrame(this.project, state, this.authoredFrameReuse);
     this.authoredFrameReuse = { project: this.project, inputState: state, frame };
     const deformationFrame = createDeformationFrameContext(this.project, frame.state);
-    const deformedByLayerId = new Map<string, ReturnType<typeof deformedAuthoredPoints>>();
+    const deformedByLayerId = this.deformedByLayerId;
+    deformedByLayerId.clear();
     const hasSeparateEarLayers = this.project.layers.some((layer) => layer.visible !== false && layer.role === "ear");
     const pointsFor = (layer: LayerBinding): ReturnType<typeof deformedAuthoredPoints> => {
       const existing = deformedByLayerId.get(layer.id);
@@ -443,8 +463,9 @@ export class PuppetRenderer {
       const points = authoring
         ? this.paused
           ? deformedAuthoredPointsForPreview(this.project, layer, authoring.points, frame.state, deformationFrame)
-          : deformedAuthoredPoints(this.project, layer, authoring.points, frame.state, deformationFrame)
+          : deformedAuthoredPoints(this.project, layer, authoring.points, frame.state, deformationFrame, this.deformationBuffersByLayerId.get(layer.id))
         : layer.mesh.points;
+      if (!this.paused && authoring) this.deformationBuffersByLayerId.set(layer.id, points);
       deformedByLayerId.set(layer.id, points);
       this.deformedPointCache.set(layer.id, {
         layer,
@@ -558,8 +579,10 @@ export class PuppetRenderer {
       if (!resource) continue;
       if (resource.positions.length !== layer.mesh.points.length * 2) {
         resource.positions = new Float32Array(layer.mesh.points.length * 2);
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, resource.positionBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, resource.positions.byteLength, this.gl.DYNAMIC_DRAW);
+        for (const buffer of resource.positionBuffers) {
+          this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
+          this.gl.bufferData(this.gl.ARRAY_BUFFER, resource.positions.byteLength, this.gl.DYNAMIC_DRAW);
+        }
         resource.uploadedPoints = undefined;
       }
       if (previousLayer?.mesh.uvs !== layer.mesh.uvs) {
@@ -595,12 +618,15 @@ export class PuppetRenderer {
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     for (const resource of this.resources.values()) {
       this.gl.deleteTexture(resource.texture);
-      this.gl.deleteBuffer(resource.positionBuffer);
+      for (const buffer of resource.positionBuffers) this.gl.deleteBuffer(buffer);
       this.gl.deleteBuffer(resource.uvBuffer);
       this.gl.deleteBuffer(resource.indexBuffer);
     }
     this.gl.deleteProgram(this.program);
     this.resources.clear();
+    this.deformedByLayerId.clear();
+    this.deformationBuffersByLayerId.clear();
+    this.uploadedLayerIds.clear();
     this.deformedPointCache.clear();
     this.authoredFrameReuse = undefined;
   }
