@@ -81,7 +81,7 @@ function motionSamplesFor(project: import("./types.js").PuppetLoomProject): Samp
   });
 }
 
-function previewState(project: import("./types.js").PuppetLoomProject, preview: AuthoringPreview): MotionState {
+export function authoringPreviewState(project: import("./types.js").PuppetLoomProject, preview: AuthoringPreview): MotionState {
   const initial = state({
     ...(preview.parameters ? { parameters: preview.parameters } : {}),
     ...(preview.expressions ? { expressions: preview.expressions } : {}),
@@ -100,7 +100,7 @@ function samplesFor(project: import("./types.js").PuppetLoomProject, suite: Rend
     id: `authoring-${preview.id}`,
     label: preview.label,
     kind: "pose",
-    state: previewState(project, preview)
+    state: authoringPreviewState(project, preview)
   }));
   if (suite === "poses") return poseSamples;
   const projectMotionSamples = motionSamplesFor(project);
@@ -212,11 +212,11 @@ export async function renderProjectSuiteFromProject(
       }
     }
     const sheet = join(output, `${kind}-sheet.png`);
-    await renderSheet(kindSamples, paths, sheet, kind === "pose" ? `姿态校准 · revision ${revision}` : `次级运动校准 · revision ${revision}`, renderSize);
+    await renderSheet(kindSamples, paths, sheet, `${options.contextLabel ? options.contextLabel + " · " : ""}${kind === "pose" ? "姿态校准" : "次级运动校准"} · revision ${revision}`, renderSize);
     artifacts.push({ id: `${kind}-sheet`, kind: "sheet", path: sheet, sha256: await fileSha256(sheet) });
     if (region && focusPaths.length > 0) {
       const focusSheet = join(output, `focus-${kind}-sheet.png`);
-      await renderSheet(kindSamples, focusPaths, focusSheet, `${options.focus} 局部${kind === "pose" ? "姿态" : "运动"} · revision ${revision}`, renderSize);
+      await renderSheet(kindSamples, focusPaths, focusSheet, `${options.contextLabel ? options.contextLabel + " · " : ""}${options.focus} 局部${kind === "pose" ? "姿态" : "运动"} · revision ${revision}`, renderSize);
       artifacts.push({ id: `focus-${kind}-sheet`, kind: "sheet", path: focusSheet, sha256: await fileSha256(focusSheet) });
     }
   }

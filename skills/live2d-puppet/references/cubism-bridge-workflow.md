@@ -1,6 +1,21 @@
 # Cubism 官方格式桥接
 
-这条流程用于把 PuppetLoom 项目交给 Live2D Cubism 官方运行时，不替代 PuppetLoom 自身项目，也不绕过 Cubism Editor。公开 JSON 可以由 PuppetLoom 生成、合并和检查；专有 `.moc3` 必须由 Cubism Editor 官方导出。Cubism Core 是读取运行库，不是公开的 moc3 编译器。
+## 直接导出 CMO3 / MOC3
+
+用户要求一键双格式导出时，使用这一条路线，不要要求先在 Editor 重新建模。首次在 PuppetLoom 根目录运行 `node scripts/setup-cubism-exporter.mjs`，使用固定版本的 PSD2Live/Umamo 依赖；随后通过包装脚本调用：
+
+```powershell
+& <skill>\scripts\invoke_puppetloom.ps1 cubism export --project E:\Puppets\Character --output E:\Puppets\Character-cubism --editor-version 5.3 --runtime-version 5.0 --json
+```
+
+工程目标默认 Editor 5.3.01 起，运行时目标默认 SDK 5.0；两者独立选择。保留源 revision、指纹、参数 ID 映射、输出文件及 `export-status.json`。图集按原像素组成二次幂页面，不能把小图层 PNG 直接当 Cubism 图集。导出只转换当前造型，不自动修复原项目的错误造型；原程序化层级转换为可编辑网格关键形。
+
+返回 `awaiting-visual-review` 后，用 `node scripts/check-native-export.mjs <导出目录> <项目目录>` 运行本机官方 Core，对照顶点、透明度、UV、拓扑和实际导出图集的画面。在目标 Editor 中打开、检查和另存 CMO3，再通过 Editor 导出 MOC3；把其 model3 路径追加到上述命令，检查 `qa-editor` 中的九向与闭眼对照。不要重排图集后仍按原 UV 逐值比较。原画贴图位置与动作关键形必须分别保留，不能用变形后的默认网格反推原画位置。不能拿同一转换库自己读回成功，或只拿原纹理重画成功，代替真正导出文件的视觉验证。`cubism verify` 也不代表画面通过。
+
+以下章节仅描述原有 Editor API 交接路线，不能把其顶点写入限制套用到直接编码导出。
+
+
+这条流程用于把 PuppetLoom 项目交给 Live2D Cubism 官方运行时，不替代 PuppetLoom 自身项目，也不绕过 Cubism Editor。公开 JSON 可以由 PuppetLoom 生成、合并和检查；专有 `finalize` 的输入 `.moc3` 必须由 Cubism Editor 官方导出。Cubism Core 是读取运行库，不是公开的 moc3 编译器。
 
 ## 能力和停止边界
 

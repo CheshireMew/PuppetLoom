@@ -31,6 +31,14 @@ function validSpecification() {
 }
 
 describe("external Agent rig specification", () => {
+  it("accepts character-authored low head ranges without adding default sculpt strengths", () => {
+    const source = { ...validSpecification(), parts: [{ part: "headFace", rationale: ["原画轻微侧倾，只需小范围转头"],
+      intent: { amplitude: 0.5, response: 0.6, stability: 0.7, yawDegrees: 3, pitchUpDegrees: 2, pitchDownDegrees: 0 } }] };
+    const parsed = parseModelAgentSpecification(source);
+    expect(parsed.parts[0]!.intent).toMatchObject({ yawDegrees: 3, pitchUpDegrees: 2, pitchDownDegrees: 0 });
+    expect(parsed.parts[0]!.intent.contourStrength).toBeUndefined();
+    expect(parsed.parts[0]!.intent.depthStrength).toBeUndefined();
+  });
   it("accepts a revision-pinned, numeric and explainable specification", () => {
     expect(parseModelAgentSpecification(validSpecification())).toEqual(validSpecification());
   });

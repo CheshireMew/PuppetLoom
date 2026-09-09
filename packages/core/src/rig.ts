@@ -360,6 +360,7 @@ export function buildRig(input: BuildRigInput): PuppetLoomProject {
       id: layer.id,
       sourceName: layer.sourceName,
       sourcePath: layer.sourcePath,
+      ...(layer.sourceLayerId ? { sourceLayerId: layer.sourceLayerId } : {}),
       role: layer.role,
       side: layer.side,
       order: layer.order,

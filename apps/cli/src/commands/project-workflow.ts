@@ -30,12 +30,14 @@ export function registerProjectWorkflowCommands(program: Command): void {
     .option("--reference <image>", "与更新 PSD 对应的可选参考图")
     .option("--seed <number>", "覆盖旧项目动作时间线种子")
     .option("--name <name>", "新项目名称")
+    .option("--mapping <json>", "明确指定旧图层 ID 到新图层 ID 的一对一 JSON 映射")
     .option("--json", "输出 JSON")
-    .action(async (options: { project: string; input: string; output: string; reference?: string; seed?: string; name?: string; json?: boolean }) => {
+    .action(async (options: { project: string; input: string; output: string; reference?: string; seed?: string; name?: string; mapping?: string; json?: boolean }) => {
       await run(async () => {
         const seed = options.seed === undefined ? undefined : Number(options.seed);
         if (seed !== undefined && !Number.isSafeInteger(seed)) throw new PuppetLoomError("INVALID_INPUT", "seed 必须是安全整数。" );
         print(await migrateProject({
+          ...(options.mapping ? { layerMapping: JSON.parse(await readFile(resolve(options.mapping), "utf8")) } : {}),
           project: resolve(options.project),
           input: resolve(options.input),
           output: resolve(options.output),
@@ -217,7 +219,7 @@ export function registerProjectWorkflowCommands(program: Command): void {
     .description("为准确校准修订录制确定性的透明动态证据")
     .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
     .requiredOption("--output <directory>", "证据输出目录")
-    .option("--mode <kind>", "autonomous 或 secondary", "autonomous")
+    .option("--mode <kind>", "autonomous、secondary 或 blink（三向完整眨眼）", "autonomous")
     .option("--duration <seconds>", "录制时长，2 到 120 秒", "12")
     .option("--fps <number>", "帧率，1 到 60", "12")
     .option("--revision <number>", "指定校准修订")
@@ -225,7 +227,7 @@ export function registerProjectWorkflowCommands(program: Command): void {
     .option("--json", "输出 JSON")
     .action(async (options: { project: string; output: string; mode: string; duration: string; fps: string; revision?: string; ffmpeg?: string; json?: boolean }) => {
       await run(async () => {
-        if (!['autonomous', 'secondary'].includes(options.mode)) throw new PuppetLoomError("INVALID_INPUT", "mode 必须是 autonomous 或 secondary。" );
+        if (!['autonomous', 'secondary', 'blink'].includes(options.mode)) throw new PuppetLoomError("INVALID_INPUT", "mode 必须是 autonomous、secondary 或 blink。" );
         const duration = Number(options.duration);
         const fps = Number(options.fps);
         const revision = options.revision === undefined ? undefined : Number(options.revision);

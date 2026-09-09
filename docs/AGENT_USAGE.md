@@ -1,5 +1,9 @@
 # Agent 调用说明
 
+原图闭眼、脸缘和五官修形可通过 `author inspect-shape` 标记结构，使用 `transform-keyform` 的 `fit-landmarks` / `curve-warp` 表达目标，再以 `author preview` 检查目标标记、修改前后和中间姿态，最后 `author apply` 保存同一补丁。字段、坐标与边界见 [SHAPE_GUIDES.md](SHAPE_GUIDES.md)。
+
+制作执行与视觉结论分开：`agent apply` 执行成功时 `ok` 为 true，`status` 为 `awaiting-visual-review`，`visualReview` 为 `unreviewed`；自动检查不能宣布角色制作完成。分部报告另有 `executionStatus: succeeded`。外部 Agent 检查准确 revision 的造型与连续动作；用户接受后通过已有 `evidence --session <id> --status accepted` 记录，历史执行报告不自动改写。头脸 `measurements` 仅报告当前比例与变化，不要求不同角色满足统一近远眼或下半脸伸缩比例。
+
 Codex 一类外部 Agent 通过 CLI 完成从 PSD 到可运行角色的工作，并用同一修订与证据接口和用户协作。软件负责格式、结构化规格验证、确定性制作、渲染、安全收敛和历史；外部 Agent 负责理解自然语言、选择整模或分部范围、观察实际证据、判断是否继续调整，以及把“当前角色校准”和“通用算法缺陷”分开。桌面应用只负责创建、查看、播放和人工兜底，不内嵌 Agent 对话或编排。
 
 下面用 `$cli = "E:\Code\PuppetLoom\apps\cli\dist\index.js"` 表示入口。
@@ -43,9 +47,9 @@ node $cli agent apply --project E:\Puppets\CharacterName --spec E:\Puppets\front
 
 `headFace.intent` 除 yaw、pitch 和 perspective 外，还可以填写 `contourStrength`、`depthStrength`、`occlusionFadeStart`、远侧耳朵/侧发的保留透明度，以及 `sideHairDepthSwap`。眼睛与眉毛只通过收窄、位移和轮廓遮挡表达透视，运行时始终保持完全不透明；`farEyeOpacity` 和 `farBrowOpacity` 仅为旧项目格式兼容而保留，制作规格会固定为 1。Agent 应根据左右大角度证据判断其它值：轮廓强度解决脸缘体积，深度强度解决五官和头骨的相对位移，外围遮挡字段解决耳朵或侧发仍完整贴在脸缘外的问题。不要用降低整头转角来掩盖单一遮挡穿帮。
 
-部位状态必须按原义报告：`completed` 是已经写入并产生证据，`not-present` 是项目没有相应语义图层，`needs-assets` 是闭眼或嘴形等可选素材尚缺，`blocked` 是自检、草稿、修订或最终验证阻止继续。不能新建不存在的假图层，也不能把缺素材或不存在说成制作完成。
+部位状态必须按原义报告：`awaiting-visual-review` 是制作命令成功执行、仍需检查实际造型与动作，`not-present` 是项目没有相应语义图层，`needs-assets` 是实现当前目标确实还缺必要素材，`blocked` 是自检、草稿、修订或最终验证阻止继续。原眼部图层能够通过几何变形闭合时，不因缺少替换用闭眼图片而要求补图。不能新建不存在的假图层，也不能把技术检查通过说成视觉验收通过。
 
-每个已完成部位会返回 `focusComparisonSheet`、4×4 `focusMotionSheet` 和用于定位单帧的 `focusMotionManifest`。外部 Agent 必须实际打开前后对比与连续运动接触表：头脸看体积和连接，眼嘴看形状与遮挡，头发和配饰看根部、滞后和回弹，身体与衣服看连接、呼吸和惯性。`verification.valid` 及 13 姿态全绿只证明结构安全，不能替代观感。最终应把这些证据交给用户看；用户反馈“幅度小一点”之类结果时，用同一 scope 再执行，而不是让用户自己拖网格。
+每个成功执行的部位会返回 `focusComparisonSheet`、4×4 `focusMotionSheet` 和用于定位单帧的 `focusMotionManifest`。外部 Agent 必须实际打开前后对比与连续运动接触表：头脸看体积和连接，眼嘴看形状与遮挡，头发和配饰看根部、滞后和回弹，身体与衣服看连接、呼吸和惯性。`verification.valid` 及 13 姿态全绿只证明结构安全，不能替代观感。最终应把这些证据交给用户看；用户反馈“幅度小一点”之类结果时，用同一 scope 再执行，而不是让用户自己拖网格。
 
 `agent front-hair plan/apply`、`agent secondary plan/apply` 和顶层 `--instruction/--scope` 是精确控制或旧调用兼容入口。它们不是正式的自然语言理解边界；理解、看图和决定返修属于外部 Agent。结构化规格无法表达的高层结构才交给下面的 `author inspect/apply`；只剩局部点位问题时才使用稀疏 `calibrate`。
 
@@ -182,7 +186,9 @@ node $cli export --project E:\Puppets\CharacterName --output E:\Puppets\Characte
 
 ## Cubism 官方格式交付
 
-需要 `.moc3/.model3.json` 时先运行 `cubism plan`，不能直接承诺“已兼容”。`.moc3` 只能由 Cubism Editor 官方导出；External API 1.1.0 当前不能写 ArtMesh 顶点或 Warp 控制点。`strictReady: false` 表示视觉等价尚未成立，即使 `finalize` 后的目录结构通过验证也一样。
+需要直接输出 `.cmo3/.moc3` 时，配置 `node scripts/setup-cubism-exporter.mjs` 后运行 `cubism export --project <项目> --output <新目录> --editor-version 5.3 --runtime-version 5.0 --json`。这是完整文件的直接编码路线，不受 Editor API 顶点写入能力限制。结果 `awaiting-visual-review` 只表示等待看图；使用 `scripts/check-native-export.mjs` 检查实际 Core 与导出图集，在目标 Editor 中打开、编辑并另存工程后再报告实际通过范围。
+
+以下为保留的 Editor API 交接流程，适用于已有 Cubism 工程的可写结构同步。External API 1.1.0 当前不能写 ArtMesh 顶点或 Warp 控制点；这条路线的 `strictReady: false` 表示完整同步条件尚未成立，即使 `finalize` 后的目录结构通过验证也一样。
 
 ```powershell
 node $cli cubism plan --project E:\Puppets\CharacterName --json
@@ -217,3 +223,28 @@ AI 必须交付并保留 handoff 的 revision、指纹、阻断清单和 Editor 
 ## 运行和退出码
 
 `play --project <directory> [--revision <n>]` 打开透明角色窗口；鼠标穿透后按 `Ctrl+Shift+P` 恢复。`record` 每次启动独立隐藏进程并在报告中记录基础项目 SHA-256、目标 revision、启动时当前 revision 和窗口比例，不能拿没有这些字段的旧视频代替当前证据。退出码 0 表示命令或任一安全绑定成功，2 表示输入/补丁无效，3 表示文件系统、项目结构或运行时错误。成功 JSON 在标准输出，结构化错误在标准错误，不能混合解析。
+## 区域修形与构建身份
+
+开始调用前运行 `capabilities --json`，检查 `build.current`、构建指纹和当前命令列表。项目内 `invoke_puppetloom.ps1` 会检查并构建过旧的 CLI；独立安装的 Skill 通过 `PUPPETLOOM_ROOT` 指向源码根，可用 `PUPPETLOOM_NODE` 明确 Node 路径。构建只覆盖 CLI、core、renderer；桌面进程、输入设备和 Cubism 仍由各自运行时检查负责。
+
+`author geometry --project <目录> --binding <绑定ID> --values 1,0 --offset 0 --limit 64 --json` 返回准确 revision 和至多 256 个点。也可单独用 `--layer` 或 `--deformer` 检查中性控制点。这里的坐标是父级变换之前的归一化画布坐标，不是最终屏幕位置；不将采样网格称为原生贝塞尔控制点。
+
+通过现有 `author apply --patch` 提交 `transform-keyform`：指定 `bindingId`、已有关键形的 `values`、`coordinateSpace: "rest-canvas"`、`selection` 和 1–32 个有序 `transforms`。选区可为 all、indices、rect、circle 或 line；rect/circle/line 的 `feather` 为 0–1 的内侧柔化比例。选区始终按中性点固定，不因前一步变形改变归属。translate 的 delta、scale/rotate 的 origin、circle/line 的坐标均使用同一空间；rotate 的 degrees 为顺时针角度。bend 的 axis 表示位移方向，曲线沿另一轴展开，由 center、halfSpan 和 amount 定义。smooth 平滑位移而非原始轮廓，默认保留外边界与孔洞边界。
+
+需要新增关键值时，使用 `insert-binding-key`，提供 `bindingId`、`parameterId` 和 `value`。二维绑定自动插入完整一行或一列，使用运行时插值保留现有运动；随后可在同一事务内修形。一次操作只编辑指定绑定的关键形，完整姿态仍由现有渲染与校准证据检查。合法但没有改变最终项目状态的提交不会创建新 revision。
+
+例如，已存在的单参数绑定 `hair-turn` 在值 1 的关键形，可使用以下操作把圆形选区内的点向右平移；绑定 ID、坐标和 baseRevision 应先从当前项目读取，不能照抄示例值：
+
+```json
+{"version":1,"baseRevision":3,"operations":[{"op":"transform-keyform","bindingId":"hair-turn","values":[1],"coordinateSpace":"rest-canvas","selection":{"kind":"circle","center":{"x":0.5,"y":0.35},"radius":0.1,"feather":0.3},"transforms":[{"kind":"translate","delta":{"x":0.01,"y":0}}]}]}
+```
+
+校准会话中的 `authoring.changes` 记录实际新增、移除或修改的对象及字段；例如移动一个图层时会列出所有绘制顺序实际变化的关联图层。对象字段的 JSON 排列变化不会被误报为内容变化。
+
+## 已配准补件
+
+依次调用 `assets reference --project <目录> --layer <模板ID> --json`、`assets register --project <目录> --reference <ID> --image <PNG> --registration <JSON> --json`、`assets preview --project <目录> --assembly <JSON> --json` 和 `assets apply --project <目录> --plan <ID> --json`。参考返回原素材、整模上下文、标注图和源画布像素框；登记保留原始 PNG，通过明确画框或对应锚点配准，不负责生成图像或去底。
+
+frame 配准 JSON 的例子是 `{"kind":"frame","generatedRect":{"x":10,"y":14,"width":200,"height":300},"sourceRect":{"x":100,"y":80,"width":100,"height":150}}`；前者是输入 PNG 的像素框，后者是源画布目标框，必须用实际测量值。试装 JSON 为 `{"baseRevision":3,"additions":[{"registrationId":"<登记返回的ID>","layerId":"new-hair"}],"replaceLayerIds":["<旧图层ID>"]}`。
+
+新增图层继承模板父级、已有中性修形、重投影的关键形和运动权重。试装不改变当前 revision；应用检查版本、内容和原始素材哈希，再进入现有校准事务。原图层只隐藏，回退用 `restore`。必须查看整模中性、转向和次级运动证据；同一张补件单独看起来正确，不证明组合成立。详细操作判断见 [补件与局部修形](../skills/live2d-puppet/references/asset-and-geometry-workflow.md)。

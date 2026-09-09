@@ -165,6 +165,7 @@ const modelDeformerSchema = z.discriminatedUnion("kind", [
 const modelBindingSchema = z.object({
   id: z.string().min(1),
   parameterIds: z.union([z.tuple([z.string().min(1)]), z.tuple([z.string().min(1), z.string().min(1)])]),
+  blinkMode: z.enum(["geometry", "texture"]).optional(),
   target: z.object({ kind: z.enum(["layer", "deformer"]), id: z.string().min(1) }),
   keyforms: z.array(modelKeyformSchema).min(1)
 });
@@ -208,12 +209,37 @@ export const authoringModelSchema = z.object({
   behaviors: z.array(modelBehaviorSchema).default([])
 });
 
+const geometrySelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("all") }).strict(),
+  z.object({ kind: z.literal("indices"), indices: z.array(z.number().int().nonnegative()).min(1) }).strict(),
+  z.object({ kind: z.literal("rect"), rect: z.object({ x: z.number().finite(), y: z.number().finite(), width: z.number().positive(), height: z.number().positive() }).strict(), feather: z.number().min(0).max(1).optional() }).strict(),
+  z.object({ kind: z.literal("circle"), center: pointSchema, radius: z.number().positive(), feather: z.number().min(0).max(1).optional() }).strict(),
+  z.object({ kind: z.literal("line"), start: pointSchema, end: pointSchema, radius: z.number().positive(), feather: z.number().min(0).max(1).optional() }).strict()
+]);
+const geometryTransformSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("fit-landmarks"), radiusPixels: z.number().finite().positive(), points: z.array(z.object({ label: z.string().trim().min(1), source: pointSchema, target: pointSchema }).strict()).min(1).max(64) }).strict(),
+  z.object({ kind: z.literal("curve-warp"), source: z.tuple([pointSchema, pointSchema, pointSchema]), target: z.tuple([pointSchema, pointSchema, pointSchema]), profile: z.array(z.object({ source: z.number().finite(), target: z.number().finite() }).strict()).min(2).max(16), taper: z.object({ start: z.number().finite().positive(), middle: z.number().finite().positive(), end: z.number().finite().positive() }).strict().optional() }).strict(),
+  z.object({ kind: z.literal("translate"), delta: pointSchema }).strict(),
+  z.object({ kind: z.literal("scale"), origin: pointSchema, factors: z.object({ x: z.number().positive(), y: z.number().positive() }).strict() }).strict(),
+  z.object({ kind: z.literal("rotate"), origin: pointSchema, degrees: z.number().finite() }).strict(),
+  z.object({ kind: z.literal("bend"), axis: z.enum(["x", "y"]), center: z.number().finite(), halfSpan: z.number().positive(), amount: z.number().finite() }).strict(),
+  z.object({ kind: z.literal("smooth"), strength: z.number().min(0).max(1), iterations: z.number().int().min(1).max(32), preserveBoundary: z.boolean().optional() }).strict()
+]);
+export const geometryEditOperationSchema = z.object({
+  op: z.literal("transform-keyform"), bindingId: z.string().min(1),
+  values: z.union([z.tuple([z.number().finite()]), z.tuple([z.number().finite(), z.number().finite()])]),
+  coordinateSpace: z.literal("rest-canvas"), selection: geometrySelectionSchema,
+  transforms: z.array(geometryTransformSchema).min(1).max(32)
+}).strict();
 const authoringOperationSchema = z.discriminatedUnion("op", [
+  geometryEditOperationSchema,
+  z.object({ op: z.literal("insert-binding-key"), bindingId: z.string().min(1), parameterId: z.string().min(1), value: z.number().finite() }).strict(),
   z.object({ op: z.literal("upsert-parameter"), parameter: modelParameterSchema }),
   z.object({ op: z.literal("remove-parameter"), id: z.string().min(1), cascade: z.boolean().optional() }),
   z.object({ op: z.literal("upsert-deformer"), deformer: modelDeformerSchema }),
   z.object({ op: z.literal("remove-deformer"), id: z.string().min(1), cascade: z.boolean().optional() }),
   z.object({ op: z.literal("set-layer-deformer"), layerId: z.string().min(1), deformerId: z.string().min(1).nullable() }),
+  z.object({ op: z.literal("set-layer-head-pose"), layerId: z.string().min(1), mode: z.enum(["keyforms", "procedural"]) }),
   z.object({ op: z.literal("move-layer"), layerId: z.string().min(1), beforeLayerId: z.string().min(1).optional(), afterLayerId: z.string().min(1).optional() }),
   z.object({ op: z.literal("upsert-binding"), binding: modelBindingSchema }),
   z.object({ op: z.literal("remove-binding"), id: z.string().min(1) }),
@@ -249,6 +275,7 @@ function validateMoveLayerOperations(
 }
 const authoringAuditSchema = z.object({
   version: z.literal(1),
+  changes: z.array(z.object({ collection: z.enum(["parameters", "deformers", "bindings", "expressions", "physics", "behaviors", "layers"]), id: z.string().min(1), kind: z.enum(["added", "removed", "updated"]), fields: z.array(z.string()) })).optional(),
   operations: z.array(authoringOperationSchema).min(1).max(200),
   previews: z.array(authoringPreviewSchema).max(12)
 }).superRefine(validateMoveLayerOperations);
@@ -301,6 +328,8 @@ export const puppetLoomProjectSchema = z.object({
       id: z.string().min(1),
       sourceName: z.string(),
       sourcePath: z.array(z.string()),
+      sourceLayerId: z.string().min(1).optional(),
+      generatedAsset: z.object({ referenceId: z.string().min(1), registrationId: z.string().min(1), imageSha256: z.string().regex(/^[a-f0-9]{64}$/), templateLayerId: z.string().min(1) }).optional(),
       role: z.enum([
         "backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "tail", "accessory", "unknown"
       ]),
@@ -314,6 +343,8 @@ export const puppetLoomProjectSchema = z.object({
       garmentStructure: z.enum(["soft", "supported"]).optional(),
       garmentFlexibility: z.number().min(0).max(0.5).optional(),
       headwearPerspective: z.literal("crown").optional(),
+      blinkMode: z.enum(["geometry", "texture"]).optional(),
+      headPoseMode: z.literal("keyforms").optional(),
       secondaryAnchors: z.object({
         earHingeLeft: pointSchema.optional(),
         earHingeRight: pointSchema.optional(),
@@ -355,13 +386,13 @@ export const puppetLoomProjectSchema = z.object({
       skullCenter: pointSchema.optional(),
       skullRadiusX: z.number().positive().optional(),
       skullRadiusY: z.number().positive().optional(),
-      maxYawRadians: z.number().positive(),
-      maxPitchRadians: z.number().positive(),
-      maxPitchUpRadians: z.number().positive().optional(),
-      maxPitchDownRadians: z.number().positive().optional(),
+      maxYawRadians: z.number().nonnegative(),
+      maxPitchRadians: z.number().nonnegative(),
+      maxPitchUpRadians: z.number().nonnegative().optional(),
+      maxPitchDownRadians: z.number().nonnegative().optional(),
       perspective: z.number().min(0).max(0.5),
-      contourStrength: z.number().min(0.4).max(1.6).optional(),
-      depthStrength: z.number().min(0.4).max(1.6).optional(),
+      contourStrength: z.number().min(0).max(1.6).optional(),
+      depthStrength: z.number().min(0).max(1.6).optional(),
       faceDepthProfile: faceDepthProfileSchema.optional()
     }).optional(),
     poseOcclusion: z.object({
@@ -705,6 +736,9 @@ const layerCalibrationOverrideSchema = z.object({
   garmentStructure: z.enum(["soft", "supported"]).optional(),
   garmentFlexibility: z.number().min(0).max(0.5).optional(),
   headwearPerspective: z.literal("crown").nullable().optional(),
+  blinkMode: z.enum(["geometry", "texture"]).nullable().optional(),
+  headPoseMode: z.literal("keyforms").nullable().optional(),
+  clipLayerId: z.string().min(1).nullable().optional(),
   secondaryAnchors: secondaryAnchorOverrideSchema.optional(),
   hairStrands: z.array(hairStrandSchema).min(2).max(12).optional(),
   weights: z.object({
@@ -731,11 +765,13 @@ const layerCalibrationOverrideSchema = z.object({
 }).refine((override) => override.meshDetail === undefined || override.meshDensity === undefined, { message: "不能同时按细节尺度和行列数重建网格。" });
 
 export const calibrationOverridesSchema = z.object({
+  assetLayers: z.record(z.string().min(1), puppetLoomProjectSchema.shape.layers.element).optional(),
   model: authoringModelSchema.optional(),
   anchors: anchorOverrideSchema.optional(),
   semanticPoints: z.partialRecord(semanticCagePointIdSchema, pointSchema).optional(),
   layers: z.record(z.string().min(1), layerCalibrationOverrideSchema).optional(),
   runtime: z.object({
+    features: z.object({ blink: z.boolean().optional(), asymmetricBlink: z.boolean().optional() }).strict().optional(),
     envelope: z.object({
       headYaw: z.number().min(0).max(1).optional(),
       headPitch: z.number().min(0).max(1).optional(),
@@ -748,13 +784,13 @@ export const calibrationOverridesSchema = z.object({
       globalScale: z.number().min(0.5).max(1.5).optional()
     }).partial().optional(),
     poseField: z.object({
-      maxYawRadians: z.number().min(0.08).max(0.7).optional(),
-      maxPitchRadians: z.number().min(0.06).max(0.55).optional(),
-      maxPitchUpRadians: z.number().min(0.06).max(0.55).optional(),
-      maxPitchDownRadians: z.number().min(0.06).max(0.55).optional(),
+      maxYawRadians: z.number().min(0).max(0.7).optional(),
+      maxPitchRadians: z.number().min(0).max(0.55).optional(),
+      maxPitchUpRadians: z.number().min(0).max(0.55).optional(),
+      maxPitchDownRadians: z.number().min(0).max(0.55).optional(),
       perspective: z.number().min(0).max(0.5).optional(),
-      contourStrength: z.number().min(0.4).max(1.6).optional(),
-      depthStrength: z.number().min(0.4).max(1.6).optional(),
+      contourStrength: z.number().min(0).max(1.6).optional(),
+      depthStrength: z.number().min(0).max(1.6).optional(),
       faceDepthProfile: faceDepthProfileSchema.optional()
     }).partial().optional(),
     poseOcclusion: z.object({

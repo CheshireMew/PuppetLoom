@@ -23,6 +23,7 @@ export interface ImportedLayer {
   id: string;
   sourceName: string;
   sourcePath: string[];
+  sourceLayerId?: string;
   role: SemanticRole;
   side: Side;
   order: number;
@@ -285,6 +286,7 @@ function makeImportedLayer(flat: FlatLayer, canvas: Size, mode: AlphaCleanupMode
     id: `layer-${String(flat.order).padStart(3, "0")}-${stableSlug(flat.path.join("-"))}`,
     sourceName: flat.layer.name || flat.path.at(-1) || "unnamed",
     sourcePath: flat.path,
+    ...(Number.isSafeInteger(flat.layer.id) && flat.layer.id! >= 0 ? { sourceLayerId: `psd:${flat.layer.id}` } : {}),
     role: classification.role,
     side: classification.side,
     order: flat.order,
@@ -333,6 +335,7 @@ function makeSplitLayer(
     id: `${layer.id}-${suffix}`,
     sourceName: `${layer.sourceName}-${suffix}`,
     sourcePath: [...layer.sourcePath, suffix],
+    ...(layer.sourceLayerId ? { sourceLayerId: `${layer.sourceLayerId}/${suffix}` } : {}),
     side,
     bounds: globalBounds,
     opaquePixels: bounds.count,
@@ -509,6 +512,7 @@ export function inspectionFromImported(imported: ImportedPsd): InspectionReport 
     id: layer.id,
     sourceName: layer.sourceName,
     sourcePath: layer.sourcePath,
+    ...(layer.sourceLayerId ? { sourceLayerId: layer.sourceLayerId } : {}),
     role: layer.role,
     side: layer.side,
     order: layer.order,

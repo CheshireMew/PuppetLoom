@@ -614,13 +614,14 @@ function checksFor(part: SecondaryModelAgentPart, before: PuppetLoomProject, pro
 }
 
 function operationId(operation: AuthoringOperation): string {
+  if (operation.op === "transform-keyform" || operation.op === "insert-binding-key") return operation.bindingId;
   if (operation.op === "upsert-parameter") return operation.parameter.id;
   if (operation.op === "upsert-binding") return operation.binding.id;
   if (operation.op === "upsert-physics") return operation.physics.id;
   if (operation.op === "upsert-deformer") return operation.deformer.id;
   if (operation.op === "upsert-expression") return operation.expression.id;
   if (operation.op === "upsert-behavior") return operation.behavior.id;
-  if (operation.op === "set-layer-deformer") return operation.layerId;
+  if (operation.op === "set-layer-deformer" || operation.op === "set-layer-head-pose") return operation.layerId;
   if (operation.op === "move-layer") return operation.layerId;
   return operation.id;
 }

@@ -135,7 +135,9 @@ async function writeAgentReport(root: string, proposal: PreparedModelAgentPropos
   await mkdir(directory, { recursive: true });
   await writeFile(reportPath, `${JSON.stringify({
     version: 1,
-    status: "succeeded",
+    status: "awaiting-visual-review",
+    executionStatus: "succeeded",
+    visualReview: "unreviewed",
     task: proposal.part,
     instruction: proposal.instruction,
     label: proposal.label,

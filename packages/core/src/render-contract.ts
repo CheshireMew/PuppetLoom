@@ -119,8 +119,11 @@ function smoothstep(value: number): number {
 }
 
 export function opacityFor(layer: LayerBinding, state: MotionState): number {
+  if (layer.blinkMode === "geometry" && (eyeSurfaceRoles.has(layer.role) || layer.role === "eyeClosed")) {
+    return layer.role === "eyeClosed" ? 0 : layer.opacity;
+  }
   const blink = layer.side === "left" ? state.blinkLeft ?? state.blink : layer.side === "right" ? state.blinkRight ?? state.blink : state.blink;
-  if (layer.role === "eyeClosed") return layer.opacity === 0 ? blink : layer.opacity * blink;
+  if (layer.role === "eyeClosed") return (layer.opacity === 0 ? 1 : layer.opacity) * blink;
   if (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") return layer.opacity * (1 - blink);
   if (layer.role !== "mouth") return layer.opacity;
   const openness = Math.max(0, Math.min(1, state.mouthOpen));

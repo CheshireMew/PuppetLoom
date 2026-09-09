@@ -20,4 +20,6 @@ archive/nested-repositories/
 /archive/runtime-snapshots/
 /archive/accidental-pnpm-*/
 /archive/installer-builds/
+/archive/build-outputs/
 *.puppetloom.local.json
+/tools/cubism-exporter/build/

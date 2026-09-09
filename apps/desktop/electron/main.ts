@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isModelBehaviorAvailable, isModelExpressionAvailable, parseRuntimeControlRequest, parseRuntimeControlServiceRequest, parseRuntimeInputSession } from "@puppetloom/core/browser";
 import type { PuppetLoomProject, RuntimeControlSetRequest, RuntimeInputSession, RuntimeViewerDescriptor } from "@puppetloom/core";
-import { editPerformanceTake, exportPortableProject, exportWebRuntime, importPerformanceTake, inspectWindowsEnvironment, listPerformanceTakes, prepareCubismExport, readPerformanceTake } from "@puppetloom/core";
+import { editPerformanceTake, exportPortableProject, exportWebRuntime, importPerformanceTake, inspectWindowsEnvironment, listPerformanceTakes, readPerformanceTake } from "@puppetloom/core";
 import { pointerTargetFromScreen } from "@puppetloom/renderer";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, protocol, screen, session, shell } from "electron";
 import type { ViewerLaunchOptions, ViewerState, WindowShellAction, WindowShellState } from "./global.js";
@@ -704,7 +704,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("system:update-check", () => checkWindowsUpdate());
   ipcMain.handle("system:update-download", () => downloadWindowsUpdate());
   ipcMain.handle("system:update-install", (_event, installer: string) => { installWindowsUpdate(installer); return true; });
-  ipcMain.handle("system:export-project", async (event, projectDirectory: string, format: "portable" | "web" | "cubism") => {
+  ipcMain.handle("system:export-project", async (event, projectDirectory: string, format: "portable" | "web" | "cubism", options?: {editorVersion?:'5.3'|'5.4';runtimeVersion?:'4.2'|'5.0'|'5.3'}) => {
     const window = ownerWindow(event);
     const project = viewerProjectSnapshots.get(window?.id ?? -1)
       ?? await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: resolve(projectDirectory) });
@@ -712,7 +712,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     const parent = selection.filePaths[0]; if (selection.canceled || !parent) return undefined;
     const name = project.name.replace(/[<>:"/\\|?*]+/g, "-"); const output = join(parent, `${name}-${format}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
     if (format === "portable") return exportPortableProject({ project: resolve(projectDirectory), output });
-    if (format === "cubism") return prepareCubismExport(resolve(projectDirectory), output);
+    if (format === "cubism") return runProjectWorker({operation:"export-cubism",directory:resolve(projectDirectory),output,options:options??{}});
     const sdkBundle = app.isPackaged ? resolve(electronDirectory, "../runtime-assets/web/puppetloom-web.js") : resolve(electronDirectory, "../../../../packages/web-runtime/dist/puppetloom-web.js");
     return exportWebRuntime({ project: resolve(projectDirectory), output, sdkBundle });
   });

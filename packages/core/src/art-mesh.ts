@@ -1,5 +1,6 @@
 import { SweepContext, type XY } from "poly2tri";
 import { roundPoint } from "./math.js";
+import { improveInteriorMeshQuality } from "./mesh-quality.js";
 import { defaultMeshInfluences, makeGridMesh, reprojectMeshInfluences } from "./mesh.js";
 import type { PixelBuffer } from "./psd.js";
 import type { ArtMeshRegion, ArtMeshSource, MeshBinding, Point, Rect } from "./types.js";
@@ -467,7 +468,7 @@ function triangulateRegion(region: ArtMeshRegion, source: ArtMeshSource, detail:
     if (cross > 0) triangles.push(a.meshIndex, c.meshIndex, b.meshIndex);
     else triangles.push(a.meshIndex, b.meshIndex, c.meshIndex);
   }
-  return { points: input, triangles };
+  return { points: improveInteriorMeshQuality(input, triangles), triangles };
 }
 
 function meaningfulStoredRegion(region: ArtMeshRegion, source: ArtMeshSource, detail: number): boolean {

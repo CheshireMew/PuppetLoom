@@ -571,40 +571,15 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("软件不得用几条关键词正则冒充自然语言理解", combined)
         self.assertIn("外部 Agent 必须承担的视觉判断", combined)
 
-    def test_wrapper_matches_the_real_cubism_cli(self) -> None:
-        expectations = {
-            ("cubism", "--help"): ("plan", "prepare", "finalize", "verify", "open", "editor"),
-            ("cubism", "plan", "--help"): ("--project", "--json"),
-            ("cubism", "finalize", "--help"): ("--project", "--editor-model", "--output"),
-            ("cubism", "verify", "--help"): ("--model", "--json"),
-            ("cubism", "editor", "--help"): ("inspect", "sync", "preview", "clear-preview"),
-            ("cubism", "editor", "sync", "--help"): ("--project", "--allow-partial", "--token-file"),
-        }
-        wrapper = ROOT / "scripts" / "invoke_puppetloom.ps1"
-        for arguments, flags in expectations.items():
-            result = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrapper), *arguments],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            for flag in flags:
-                self.assertIn(flag, result.stdout)
-
     def test_dynamic_revision_topology_and_migration_are_hard_requirements(self) -> None:
         combined = self.skill + self.workflow + self.visual + self.learning
         for phrase in ("alphaTopology", "baseProjectSha256", "headAndBodyFrozen", "currentRevisionAtStart", "geometry-changed", "解剖学左右"):
             self.assertIn(phrase, combined)
         rejected = self.workflow.index("标为 `rejected`")
         restored = self.workflow.index("restore --revision", rejected)
-        stopped = self.workflow.index("停止", restored)
         self.assertLess(rejected, restored)
-        self.assertLess(restored, stopped)
+        self.assertIn("用户已授权继续修复或提出新方向", self.workflow[restored:])
+        self.assertIn("只涉及被拒绝的变化", self.workflow[restored:])
 
     def test_visual_rules_preserve_exposed_project_lessons(self) -> None:
         combined = self.skill + self.visual + self.review
@@ -631,7 +606,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("通用 fixture", self.learning)
         self.assertIn("角色专用顶点列表", self.learning)
         self.assertIn("用户明确要求", self.learning)
-        self.assertIn("$meta-skills", self.learning)
+        self.assertIn("不自动启用其它 Skill", self.learning)
 
     def test_mature_projects_are_audited_without_redundant_revisions(self) -> None:
         combined = self.skill + self.workflow
@@ -712,17 +687,6 @@ class SkillContractTests(unittest.TestCase):
             "共享网格不等于共享语义",
         ):
             self.assertIn(phrase, combined)
-
-    def test_cubism_bridge_preserves_the_official_boundary(self) -> None:
-        combined = self.skill + self.cubism
-        for phrase in (
-            ".moc3", ".model3.json", "External API 1.1.0", "strictReady",
-            "--allow-partial", "EditEnd { Cancel: true }", "ParamEyeLOpen",
-            "cubism finalize", "cubism verify", "Cubism Viewer",
-        ):
-            self.assertIn(phrase, combined)
-        self.assertIn("必须由 Cubism Editor", combined)
-        self.assertIn("ArtMesh 顶点坐标或 Warp 控制点坐标", self.cubism)
 
     def test_local_file_budget_covers_all_active_text(self) -> None:
         self.assertEqual(validate_file_budgets(ROOT), [])

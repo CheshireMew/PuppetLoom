@@ -3,6 +3,7 @@ import {
   buildCubismExportPlan,
   clearCubismPreview,
   finalizeCubismExport,
+  exportNativeCubism,
   inspectCubismEditor,
   loadCalibration,
   loadProject,
@@ -18,7 +19,18 @@ import type { Command } from "commander";
 import { connectCubism, defaultCubismTokenFile, openCubismViewer, print, run } from "../cli-support.js";
 
 export function registerCubismCommands(program: Command): void {
-  const cubism = program.command("cubism").description("通过 Cubism Editor 官方链路同步可写结构并生成、校验 model3 运行时目录");
+  const cubism = program.command("cubism").description("直接导出 CMO3/MOC3，或连接 Cubism Editor 同步与验证工程");
+
+  cubism.command("export").description("直接导出当前项目的可编辑 cmo3 和 moc3 运行时文件族")
+    .requiredOption("--project <directory>", "项目目录")
+    .requiredOption("--output <directory>", "尚不存在的输出目录")
+    .option("--tolerance <pixels>", "关键形插值允许的源图像素误差", "0.5")
+    .option("--editor-version <version>", "工程格式：5.3（Editor 5.3.01 起）或 5.4", "5.3")
+    .option("--runtime-version <version>", "运行时 SDK 目标：4.2、5.0、5.3", "5.0")
+    .option("--json", "输出 JSON")
+    .action(async (options:{project:string;output:string;tolerance:string;editorVersion:'5.3'|'5.4';runtimeVersion:'4.2'|'5.0'|'5.3';json?:boolean})=>{
+      await run(async()=>print(await exportNativeCubism(options.project,options.output,{editorVersion:options.editorVersion,runtimeVersion:options.runtimeVersion,tolerancePixels:Number(options.tolerance),onProgress:message=>process.stderr.write(`${message}\n`)}),options),options);
+    });
 
   cubism
     .command("plan")

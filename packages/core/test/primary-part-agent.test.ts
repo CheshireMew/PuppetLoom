@@ -66,6 +66,24 @@ function project(): PuppetLoomProject {
 }
 
 describe("primary model Agent", () => {
+  it("reports character proportions without imposing a template or enlarging existing head angles", () => {
+    const value = project();
+    value.runtime.poseField = { kind: "ellipsoid-v1", center: { x: 0.5, y: 0.3 }, radiusX: 0.2, radiusY: 0.22,
+      maxYawRadians: 0.08, maxPitchRadians: 0.07, perspective: 0.06, contourStrength: 0.2, depthStrength: 0.3 };
+    const proposal = createPrimaryPartAgentProposal(value, { part: "headFace", instruction: "保留这个角色的幅度",
+      intent: { amplitude: 0.7, response: 0.7, stability: 0.8, explanation: ["已按原画确定范围。"] } });
+    expect(proposal.overrides.runtime?.poseField).toMatchObject({ maxYawRadians: 0.08, maxPitchRadians: 0.07,
+      perspective: 0.06, contourStrength: 0.2, depthStrength: 0.3 });
+    expect(proposal.measurements[0]?.values.faceLayerCount).toBe(1);
+    expect(proposal.checks.map(check => check.id)).not.toEqual(expect.arrayContaining(["head-material-yaw-limit"]));
+    expect(proposal.checks.some(check => ["head-turn-balance", "head-yaw-perspective", "head-pitch-volume"].includes(check.id))).toBe(false);
+    expect(proposal.checks.some(check => check.id === "pose-safety")).toBe(true);
+  });
+  it("does not report procedural head tuning as a change to a complete authored head", () => {
+    const fixture = project();
+    fixture.layers[0]!.headPoseMode = "keyforms";
+    expect(() => createPrimaryPartAgentProposal(fixture, { part: "headFace", instruction: "改善转头" })).toThrow(/author apply/);
+  });
   it.each(["headFace", "eyes", "mouth", "body"] satisfies PrimaryModelAgentPart[])("builds and validates %s", (part) => {
     const proposal = createPrimaryPartAgentProposal(project(), { part, instruction: "自然、协调、克制" });
     expect(proposal.layers.length).toBeGreaterThan(0);

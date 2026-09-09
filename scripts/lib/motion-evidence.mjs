@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { _electron as electron } from "playwright";
-import { loadCalibration, loadProjectRevision } from "@puppetloom/core";
+import { loadCalibration, loadProjectRevision, neutralMotionState } from "@puppetloom/core";
 import { CalmMotionController } from "@puppetloom/renderer";
 import sharp from "sharp";
 
@@ -99,8 +99,8 @@ function cropFor(project, mode, fit) {
   });
 }
 
-function frozenSecondaryState(state) {
-  return {
+export function frozenSecondaryState(state, project) {
+  const frozen = {
     ...state,
     headYaw: 0,
     headPitch: 0,
@@ -112,8 +112,24 @@ function frozenSecondaryState(state) {
     gazeY: 0,
     breath: 0,
     blink: 0,
-    mouthOpen: 0
+    mouthOpen: 0,
+    blinkLeft: 0, blinkRight: 0,
+    browLeft: 0, browRight: 0, smile: 0, cheekPuff: 0,
+    mouthA: 0, mouthI: 0, mouthU: 0, mouthE: 0, mouthO: 0,
+    expressions: {}, behavior: undefined,
+    parameters: { ...(state.parameters ?? {}) }
   };
+  // Physics sampling has already resolved semantic values into parameters.
+  // Reset their backing entries too, otherwise rendering restores the motion.
+  const frozenSemantics = new Set([
+    "head-yaw", "head-pitch", "head-roll", "body-sway", "body-pitch", "body-roll",
+    "gaze-x", "gaze-y", "breath", "blink", "blink-left", "blink-right", "brow-left", "brow-right",
+    "smile", "cheek-puff", "mouth-open", "mouth-a", "mouth-i", "mouth-u", "mouth-e", "mouth-o"
+  ]);
+  for (const parameter of project.model?.parameters ?? []) {
+    if (frozenSemantics.has(parameter.semantic)) frozen.parameters[parameter.id] = 0;
+  }
+  return frozen;
 }
 
 async function requireAbsent(paths) {
@@ -128,7 +144,7 @@ export async function runMotionEvidence(options) {
   const durationSeconds = Number(options.durationSeconds ?? 12);
   const fps = Number(options.fps ?? 12);
   if (!existsSync(join(projectDirectory, "puppetloom.json"))) throw new Error(`不是有效的 PuppetLoom 项目：${projectDirectory}`);
-  if (!["autonomous", "secondary"].includes(mode)) throw new Error("mode 必须是 autonomous 或 secondary。" );
+  if (!["autonomous", "secondary", "blink"].includes(mode)) throw new Error("mode 必须是 autonomous、secondary 或 blink。" );
   if (!Number.isFinite(durationSeconds) || durationSeconds < 2 || durationSeconds > 120) throw new Error("duration 必须在 2 到 120 秒之间。" );
   if (!Number.isInteger(fps) || fps < 1 || fps > 60) throw new Error("fps 必须是 1 到 60 的整数。" );
 
@@ -202,7 +218,13 @@ export async function runMotionEvidence(options) {
     viewport = await viewer.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio }));
     for (let index = 0; index < frameCount; index += 1) {
       const state = controller.sample(index / fps, { primaryMotion: mode === "autonomous" });
-      const pose = mode === "secondary" ? frozenSecondaryState(state) : state;
+      const phase = (index / fps) % 2;
+      const closure = Math.max(0, 1 - Math.abs(phase - 1) / 0.35);
+      const pose = mode === "blink" ? {
+        ...neutralMotionState,
+        headYaw: [-0.8, 0, 0.8][Math.floor(index / fps / 2) % 3],
+        blink: closure * closure * (3 - 2 * closure)
+      } : mode === "secondary" ? frozenSecondaryState(state, project) : state;
       for (const key of motionKeys) extrema[key] = Math.max(extrema[key], Math.abs(pose[key] ?? 0));
       const rendered = await viewer.evaluate((nextPose) => window.puppetloomRenderTestPose?.(nextPose) ?? false, pose);
       if (!rendered) throw new Error("渲染器没有接受动态证据姿态。" );

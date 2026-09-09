@@ -7,7 +7,7 @@ import { applyCalibrationOverrides } from "./calibration.js";
 import { renderAgentFocusEvidence, type AgentFocusEvidence } from "./agent-evidence.js";
 import { PuppetLoomError } from "./errors.js";
 import { planFrontHairAgent, runFrontHairAgent } from "./front-hair-agent.js";
-import { planPrimaryPartAgent, runPrimaryPartAgent, type PrimaryModelAgentPart } from "./primary-part-agent.js";
+import { planPrimaryPartAgent, runPrimaryPartAgent, type PrimaryModelAgentPart, type PrimaryPartMeasurement } from "./primary-part-agent.js";
 import { evaluateModelAgentCoherence, modelAgentConstraints, type ModelAgentConstraint } from "./model-agent-coherence.js";
 import { clearCalibrationDraft, loadCalibration, loadCalibrationDraft, loadProject, loadProjectRevision, saveCalibrationPatch } from "./project.js";
 import { planSecondaryPartAgent, runSecondaryPartAgent, type SecondaryModelAgentPart } from "./secondary-part-agent.js";
@@ -16,7 +16,7 @@ import { verifyProject } from "./verify.js";
 
 export type ModelAgentRequestScope = ModelAgentPart | "whole";
 export type ModelAgentScope = ModelAgentRequestScope | "selected";
-export type ModelAgentPartStatus = "ready" | "completed" | "not-present" | "needs-assets" | "blocked";
+export type ModelAgentPartStatus = "ready" | "awaiting-visual-review" | "not-present" | "needs-assets" | "blocked";
 
 export interface ModelAgentOptions {
   instruction?: string;
@@ -30,6 +30,7 @@ export interface ModelAgentPartPlanSummary {
   status: ModelAgentPartStatus;
   targetLayerIds: string[];
   checks: ModelAgentCheck[];
+  measurements?: PrimaryPartMeasurement[];
   repairs: ModelAgentRepair[];
   blockers: string[];
   assetRequests: AssetRequest[];
@@ -79,7 +80,8 @@ export interface ModelAgentRunResult {
   toRevision: number;
   adoptedDraftRevision?: number;
   anatomyRevision?: number;
-  status: "completed" | "needs-assets" | "blocked";
+  status: "awaiting-visual-review" | "needs-assets" | "blocked";
+  visualReview: "unreviewed";
   blockers: string[];
   parts: ModelAgentPartRunSummary[];
   constraints: ModelAgentConstraint[];
@@ -229,7 +231,7 @@ async function planOne(root: string, part: ModelAgentPart, instruction: string, 
     const plan = await planPrimaryPartAgent(root, primaryOptions(part as PrimaryModelAgentPart, instruction, specification, previewProject));
     const blockers = withoutDraftBlockers(plan.blockers, plan.draft.blockers).filter((blocker) => !blocker.startsWith("缺少 "));
     const status: ModelAgentPartStatus = plan.assetRequests.length > 0 ? "needs-assets" : blockers.length > 0 ? "blocked" : "ready";
-    return { ...base, targetLayerIds: plan.targetLayers.map((layer) => layer.id), checks: plan.checks, repairs: plan.repairs, blockers, assetRequests: plan.assetRequests, status };
+    return { ...base, targetLayerIds: plan.targetLayers.map((layer) => layer.id), checks: plan.checks, measurements: plan.measurements, repairs: plan.repairs, blockers, assetRequests: plan.assetRequests, status };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ...base, status: "blocked", blockers: [message] };
@@ -329,14 +331,14 @@ async function runOne(root: string, part: ModelAgentPart, instruction: string, s
     };
     if (part === "frontHair") {
       const result = await runFrontHairAgent(root, frontHairOptions(instruction, specification));
-      return { ...planned, status: "completed", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
+      return { ...planned, status: "awaiting-visual-review", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
     }
     if (secondaryParts.has(part)) {
       const result = await runSecondaryPartAgent(root, secondaryOptions(part as SecondaryModelAgentPart, instruction, specification));
-      return { ...planned, status: "completed", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
+      return { ...planned, status: "awaiting-visual-review", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
     }
     const result = await runPrimaryPartAgent(root, primaryOptions(part as PrimaryModelAgentPart, instruction, specification));
-    return { ...planned, status: "completed", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
+    return { ...planned, status: "awaiting-visual-review", changed: result.changed, fromRevision: result.fromRevision, toRevision: result.toRevision, ...(result.reportPath ? { reportPath: result.reportPath, ...(await focus(result.reportPath)) } : {}), ...(result.comparisonSheet ? { comparisonSheet: result.comparisonSheet } : {}), ...(result.differenceImage ? { differenceImage: result.differenceImage } : {}) };
   } catch (error) {
     return { ...planned, status: "blocked", blockers: [error instanceof Error ? error.message : String(error)] };
   }
@@ -400,7 +402,7 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
   const verification = await verifyProject(root);
   const status: ModelAgentRunResult["status"] = !verification.valid || coherenceChecks.some((check) => !check.passed) || parts.some((part) => part.status === "blocked")
     ? "blocked"
-    : parts.some((part) => part.status === "needs-assets") ? "needs-assets" : "completed";
+    : parts.some((part) => part.status === "needs-assets") ? "needs-assets" : "awaiting-visual-review";
   const blockers = [
     ...parts.filter((part) => part.status === "blocked").flatMap((part) => part.blockers.map((blocker) => `${part.label}：${blocker}`)),
     ...coherenceChecks.filter((check) => !check.passed).map((check) => `跨部位检查：${check.label}`),
@@ -408,11 +410,11 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
   ];
   const taskId = randomUUID();
   const targetLayerIds = [...new Set(initial.parts.filter((part) => part.status !== "not-present").flatMap((part) => part.targetLayerIds))];
-  const coherenceEvidence = targetLayerIds.length > 0 && parts.some((part) => part.status === "completed")
+  const coherenceEvidence = targetLayerIds.length > 0 && parts.some((part) => part.status === "awaiting-visual-review")
     ? await renderAgentFocusEvidence(root, beforeProject, afterProject, targetLayerIds, [], join(root, "reports", "agent-tasks", taskId, "evidence"))
     : undefined;
   const baseResult: Omit<ModelAgentRunResult, "reportPath"> = {
-    ok: status === "completed",
+    ok: status === "awaiting-visual-review",
     task: "model-agent",
     taskId,
     project: initial.project,
@@ -426,6 +428,7 @@ export async function runModelAgent(projectDirectory: string, options: ModelAgen
     ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
     ...(anatomyRevision !== undefined ? { anatomyRevision } : {}),
     status,
+    visualReview: "unreviewed",
     blockers,
     parts,
     constraints: initial.constraints,

@@ -305,7 +305,7 @@ describe("CLI contract", () => {
       overrides: {
         layers: {
           [detail.selectedLayer.id]: {
-            meshPointDeltas: { [String(point.index)]: point.delta },
+            meshPointDeltas: { [String(point.index)]: { x: point.delta.x + 0.001, y: point.delta.y } },
             vertexInfluences: { pin: { [String(point.index)]: point.influences.pin } }
           }
         }
@@ -348,10 +348,18 @@ describe("CLI contract", () => {
   }, 120_000);
 
   it("creates a separate project when migrating an updated PSD", async () => {
+    const source = artifactPath(`cli-migration-source-${process.pid}-${Date.now()}`);
+    expect((await cli(["create", "--input", "test/fixtures/semantic.psd", "--output", source, "--seed", "42", "--json"])).code).toBe(0);
+    const original = JSON.parse(await readFile(resolve(source, "puppetloom.json"), "utf8")) as { layers: Array<{ id: string }> };
+    const patch = resolve(source, "migration-test-patch.json");
+    await writeFile(patch, JSON.stringify({ baseRevision: 0, overrides: { layers: { [original.layers[0]!.id]: {
+      meshPointDeltas: { "0": { x: 0.001, y: 0 } }, vertexInfluences: { pin: { "0": 0.5 } }
+    } } } }));
+    expect((await cli(["calibrate", "--project", source, "--patch", patch, "--json"])).code).toBe(0);
     const output = artifactPath(`cli-migration-${process.pid}-${Date.now()}`);
     const result = await cli([
       "migrate",
-      "--project", cliProject,
+      "--project", source,
       "--input", "test/fixtures/semantic.psd",
       "--output", output,
       "--json"
@@ -383,9 +391,9 @@ describe("CLI contract", () => {
     expect(changedResult.code).toBe(0);
     const changed = JSON.parse(changedResult.stdout) as { mapping: Array<{ sourceLayerId: string; status: string; migratedFields: string[]; skippedFields: string[] }> };
     const changedLayer = changed.mapping.find((entry) => entry.sourceLayerId === calibratedLayer!.targetLayerId)!;
-    expect(changedLayer.status).toBe("geometry-changed");
-    expect(changedLayer.skippedFields).toEqual(expect.arrayContaining(["meshPointDeltas", "vertexInfluences"]));
-    expect(changedLayer.migratedFields).not.toEqual(expect.arrayContaining(["meshPointDeltas", "vertexInfluences"]));
+    expect(changedLayer.status).toBe("texture-changed");
+    expect(changedLayer.skippedFields).not.toEqual(expect.arrayContaining(["meshPointDeltas", "vertexInfluences"]));
+    expect(changedLayer.migratedFields).toEqual(expect.arrayContaining(["meshPointDeltas", "vertexInfluences"]));
   }, 120_000);
 
   it("lets an Agent inspect and transactionally author a parameter with visual previews", async () => {

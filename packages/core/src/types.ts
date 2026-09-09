@@ -119,6 +119,9 @@ export interface LayerBinding {
   id: string;
   sourceName: string;
   sourcePath: string[];
+  /** Native PSD layer identity plus any deterministic split suffix; scoped to source artwork lineage. */
+  sourceLayerId?: string;
+  generatedAsset?: { referenceId: string; registrationId: string; imageSha256: string; templateLayerId: string };
   role: SemanticRole;
   side: Side;
   order: number;
@@ -133,6 +136,10 @@ export interface LayerBinding {
   garmentFlexibility?: number;
   /** Enables the specialised wide-crown perspective model. Absent means the artwork keeps its authored silhouette. */
   headwearPerspective?: "crown";
+  /** Geometry uses authored closure keyforms and the eye-white mask; texture keeps replacement-art blinking. */
+  blinkMode?: "geometry" | "texture";
+  /** Complete yaw/pitch keyforms replace procedural head projection; roll and physics remain active. */
+  headPoseMode?: "keyforms";
   secondaryAnchors?: LayerSecondaryAnchors;
   hairStrands?: HairStrandSpec[];
   mesh: MeshBinding;
@@ -235,6 +242,8 @@ export interface ModelKeyform {
 
 export interface ModelBinding {
   id: string;
+  /** Optional layer-mode condition; inactive bindings retain their editable keyforms. */
+  blinkMode?: "geometry" | "texture";
   parameterIds: [string] | [string, string];
   target: { kind: "layer" | "deformer"; id: string };
   keyforms: ModelKeyform[];
@@ -612,6 +621,9 @@ export interface LayerCalibrationOverride {
   garmentStructure?: LayerBinding["garmentStructure"];
   garmentFlexibility?: number;
   headwearPerspective?: LayerBinding["headwearPerspective"] | null;
+  blinkMode?: LayerBinding["blinkMode"] | null;
+  headPoseMode?: LayerBinding["headPoseMode"] | null;
+  clipLayerId?: string | null;
   secondaryAnchors?: LayerSecondaryAnchors;
   /** Complete replacement so roots, ownership, release and physics remain revision-consistent. */
   hairStrands?: HairStrandSpec[];
@@ -626,11 +638,14 @@ export interface LayerCalibrationOverride {
 }
 
 export interface CalibrationOverrides {
+  /** Complete generated layer snapshots, owned by revision history rather than the base project. */
+  assetLayers?: Record<string, LayerBinding>;
   model?: AuthoringModel;
   anchors?: Partial<AnchorGraph>;
   semanticPoints?: Partial<Record<SemanticCagePointId, Point>>;
   layers?: Record<string, LayerCalibrationOverride>;
   runtime?: {
+    features?: Partial<Pick<RuntimeFeatures, "blink" | "asymmetricBlink">>;
     envelope?: Partial<MotionEnvelope>;
     poseField?: Partial<Pick<CoherentPoseField, "maxYawRadians" | "maxPitchRadians" | "maxPitchUpRadians" | "maxPitchDownRadians" | "perspective" | "contourStrength" | "depthStrength" | "faceDepthProfile">>;
     poseOcclusion?: Partial<Omit<PoseOcclusionProfile, "kind">>;
@@ -666,12 +681,43 @@ export interface CalibrationPatch {
   };
 }
 
+export type GeometrySelection =
+  | { kind: "all" }
+  | { kind: "indices"; indices: number[] }
+  | { kind: "rect"; rect: Rect; feather?: number }
+  | { kind: "circle"; center: Point; radius: number; feather?: number }
+  | { kind: "line"; start: Point; end: Point; radius: number; feather?: number };
+
+export type GeometryTransform =
+  | { kind: "fit-landmarks"; radiusPixels: number; points: Array<{ label: string; source: Point; target: Point }> }
+  /** Quadratic curves in canvas coordinates. Profile distances are source-image pixels. */
+  | { kind: "curve-warp"; source: [Point, Point, Point]; target: [Point, Point, Point]; profile: Array<{ source: number; target: number }>; taper?: { start: number; middle: number; end: number } }
+  | { kind: "translate"; delta: Point }
+  | { kind: "scale"; origin: Point; factors: Point }
+  | { kind: "rotate"; origin: Point; degrees: number }
+  /** Axis names the displacement direction; the curve runs along the other axis. */
+  | { kind: "bend"; axis: "x" | "y"; center: number; halfSpan: number; amount: number }
+  | { kind: "smooth"; strength: number; iterations: number; preserveBoundary?: boolean };
+
+export interface GeometryEditOperation {
+  op: "transform-keyform";
+  bindingId: string;
+  values: [number] | [number, number];
+  /** Rest geometry before the parent deformer chain, in normalized canvas units. */
+  coordinateSpace: "rest-canvas";
+  selection: GeometrySelection;
+  transforms: GeometryTransform[];
+}
+
 export type AuthoringOperation =
+  | GeometryEditOperation
+  | { op: "insert-binding-key"; bindingId: string; parameterId: string; value: number }
   | { op: "upsert-parameter"; parameter: ModelParameter }
   | { op: "remove-parameter"; id: string; cascade?: boolean }
   | { op: "upsert-deformer"; deformer: ModelDeformer }
   | { op: "remove-deformer"; id: string; cascade?: boolean }
   | { op: "set-layer-deformer"; layerId: string; deformerId: string | null }
+  | { op: "set-layer-head-pose"; layerId: string; mode: "keyforms" | "procedural" }
   | { op: "move-layer"; layerId: string; beforeLayerId?: string; afterLayerId?: string }
   | { op: "upsert-binding"; binding: ModelBinding }
   | { op: "remove-binding"; id: string }
@@ -696,6 +742,7 @@ export interface AuthoringAudit {
   version: 1;
   operations: AuthoringOperation[];
   previews: AuthoringPreview[];
+  changes?: Array<{ collection: "parameters" | "deformers" | "bindings" | "expressions" | "physics" | "behaviors" | "layers"; id: string; kind: "added" | "removed" | "updated"; fields: string[] }>;
 }
 
 export interface AuthoringPatch {
@@ -890,7 +937,9 @@ export interface MigrationLayerMatch {
   sourceLayerId: string;
   targetLayerId?: string;
   sourcePath: string[];
-  status: "exact" | "geometry-changed" | "missing" | "ambiguous";
+  status: "exact" | "texture-changed" | "geometry-changed" | "missing" | "ambiguous";
+  matchedBy?: "source-id" | "path" | "explicit";
+  renamed?: boolean;
   migratedFields: string[];
   skippedFields: string[];
 }
@@ -902,6 +951,7 @@ export interface MigrationOptions {
   reference?: string;
   seed?: number;
   name?: string;
+  layerMapping?: Record<string, string>;
 }
 
 export interface MigrationResult {
@@ -913,6 +963,8 @@ export interface MigrationResult {
   warnings: string[];
   patchPath: string;
   reportPath: string;
+  addedLayerIds: string[];
+  skippedBindingIds: string[];
 }
 
 export type RenderSuiteKind = "calibration" | "poses" | "motion";
@@ -934,6 +986,8 @@ export type RenderFocusScope =
   | "accessory";
 
 export interface RenderSuiteOptions {
+  /** Human-visible evidence provenance, e.g. an unsaved proposal. */
+  contextLabel?: string;
   /** Native output width and height. The CLI accepts 300..1600. */
   size?: number;
   /** Also produce close-up evidence for this stable semantic scope. */
@@ -1017,6 +1071,7 @@ export interface LayerInspection {
   id: string;
   sourceName: string;
   sourcePath: string[];
+  sourceLayerId?: string;
   role: SemanticRole;
   side: Side;
   order: number;

@@ -7,6 +7,7 @@ export type ProjectWorkerRequest =
   | { operation: "create"; request: DesktopCreateRequest }
   | { operation: "load-project"; directory: string; revision?: number }
   | { operation: "load-workspace"; directory: string }
+  | { operation: "export-cubism"; directory: string; output: string; options?: {editorVersion?:'5.3'|'5.4';runtimeVersion?:'4.2'|'5.0'|'5.3'} }
   | { operation: "project-health"; directory: string }
   | { operation: "project-library"; root: string; maxDepth?: number; maximumProjects?: number }
   | { operation: "source-prepare"; reference: string; output: string; name?: string; provider?: SourcePreparationTask["decomposition"]["provider"] }

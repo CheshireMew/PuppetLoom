@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCoherentPoseField, faceDepthAt } from "../src/pose-field.js";
+import { applyCoherentPoseField, applyEyePerspective, faceDepthAt } from "../src/pose-field.js";
 import { makeGridMesh } from "../src/rig.js";
 import type { CoherentPoseField, LayerBinding, SemanticRole } from "../src/types.js";
 
@@ -26,6 +26,44 @@ function layer(role: SemanticRole, side: "left" | "right" | "center" = "center")
 }
 
 describe("coherent semantic pose field", () => {
+  it("lets an explicitly attached low front-hair point follow the scalp instead of the inferred fringe", () => {
+    const hair = layer("frontHair");
+    const point = { x: 0.62, y: 0.48 };
+    const pinned = applyCoherentPoseField(field, hair, point, 0.8, 0.8, undefined, { attachment: 1 });
+    const free = applyCoherentPoseField(field, hair, point, 0.8, 0.8, undefined, { attachment: 0 });
+    expect(Math.hypot(pinned.x - free.x, pinned.y - free.y)).toBeGreaterThan(0.001);
+    expect(applyCoherentPoseField(field, hair, point, 0, 0, undefined, { attachment: 1 })).toEqual(point);
+  });
+  it("honors authored back-hair attachments below the automatic hanging region", () => {
+    const hair = layer("backHair");
+    const tip = { x: 0.62, y: hair.bounds.y + hair.bounds.height };
+    const pinned = applyCoherentPoseField(field, hair, tip, 0.8, 0.8, undefined, { attachment: 1 });
+    const free = applyCoherentPoseField(field, hair, tip, 0.8, 0.8, undefined, { attachment: 0 });
+    const halfway = applyCoherentPoseField(field, hair, tip, 0.8, 0.8, undefined, { attachment: 0.5 });
+    expect(Math.hypot(pinned.x - free.x, pinned.y - free.y)).toBeGreaterThan(0.001);
+    expect(halfway.x).toBeCloseTo((pinned.x + free.x) / 2, 10);
+    expect(halfway.y).toBeCloseTo((pinned.y + free.y) / 2, 10);
+    expect(applyCoherentPoseField(field, hair, tip, 0, 0, undefined, { attachment: 1 })).toEqual(tip);
+  });
+  it("keeps eye drawing corrections on the original tilted axis on rectangular canvases", () => {
+    for (const role of ["eyeWhite", "iris", "eyelash", "eyebrow"] as const) {
+      const eye = layer(role, "left");
+      const aspect = 0.65, angle = -0.37;
+      const rotate = (p: { x: number; y: number }) => {
+        const x = (p.x - eye.pivot.x) * aspect, y = p.y - eye.pivot.y;
+        return { x: eye.pivot.x + (x * Math.cos(angle) - y * Math.sin(angle)) / aspect,
+          y: eye.pivot.y + x * Math.sin(angle) + y * Math.cos(angle) };
+      };
+      const point = { x: 0.57, y: 0.32 };
+      for (const yaw of [-0.8, 0.8]) for (const pitch of [-0.8, 0.8]) {
+        const straight = applyEyePerspective(eye, point, point, eye.pivot, yaw, pitch, undefined, aspect);
+        const tilted = applyEyePerspective(eye, rotate(point), rotate(point), eye.pivot, yaw, pitch,
+          { x: Math.cos(angle) / aspect, y: Math.sin(angle) }, aspect);
+        expect(tilted.x).toBeCloseTo(rotate(straight).x, 10);
+        expect(tilted.y).toBeCloseTo(rotate(straight).y, 10);
+      }
+    }
+  });
   it("interpolates the authored semantic side-depth curve without changing neutral points", () => {
     const profiled: CoherentPoseField = {
       ...field,

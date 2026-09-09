@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import {
   createModelAgentSpecificationTemplate,
   describeAuthoringProject,
+  describeGeometry,
+  inspectShape,
+  previewAuthoringPatch,
   describeProject,
   loadCalibration,
   loadProject,
@@ -79,6 +82,49 @@ export function registerAuthoringCommands(program: Command): void {
     });
 
   const author = program.command("author").description("供 Agent 检查和修改参数、关键形态与变形器");
+
+  author.command("inspect-shape").description("导出准确原图坐标、单层纹理、网格和中立合成，供外部 Agent 标记结构")
+    .requiredOption("--project <directory>", "项目目录").requiredOption("--layer <id>", "图层 ID")
+    .requiredOption("--output <directory>", "检查输出目录").option("--json", "输出 JSON")
+    .action(async (options: { project: string; layer: string; output: string; json?: boolean }) => {
+      await run(async () => print(await inspectShape(options.project, options.layer, options.output), options), options);
+    });
+
+  author.command("preview").description("预览目标标记、修改前后及关键形中间姿态，不写入项目 revision")
+    .requiredOption("--project <directory>", "项目目录").requiredOption("--patch <json>", "Authoring 补丁")
+    .requiredOption("--output <directory>", "预览输出目录").option("--focus <scope>", "whole、eyes、headFace 等部位", "whole").option("--size <pixels>", "证据边长，300..1600", "1080").option("--json", "输出 JSON")
+    .action(async (options: { project: string; patch: string; output: string; focus: string; size: string; json?: boolean }) => {
+      await run(async () => {
+        if (!(modelAgentScopes as readonly string[]).includes(options.focus)) throw new PuppetLoomError("INVALID_INPUT", "不支持的 focus。");
+        const patch = JSON.parse(await readFile(resolve(options.patch), "utf8")) as AuthoringPatch;
+        print(await previewAuthoringPatch(options.project, patch, options.output, options.focus as "whole", Number(options.size)), options);
+      }, options);
+    });
+
+  author.command("geometry")
+    .description("分页读取中性网格或指定关键形的实际控制点；坐标位于父级变换之前")
+    .requiredOption("--project <project-dir>", "PuppetLoom 项目目录")
+    .option("--binding <id>", "绑定 ID")
+    .option("--layer <id>", "图层 ID；不与 binding/deformer 混用")
+    .option("--deformer <id>", "warp 变形器 ID")
+    .option("--values <numbers>", "关键形参数值，按绑定轴顺序以逗号分隔")
+    .option("--revision <number>", "准确校准修订")
+    .option("--offset <number>", "首个顶点序号", "0")
+    .option("--limit <number>", "返回顶点数，1..256", "64")
+    .option("--json", "输出 JSON")
+    .action(async (options: { project: string; binding?: string; layer?: string; deformer?: string; values?: string; revision?: string; offset: string; limit: string; json?: boolean }) => {
+      await run(async () => {
+        if (options.values !== undefined && options.values.split(",").some((value) => value.trim() === "" || !Number.isFinite(Number(value)))) throw new PuppetLoomError("INVALID_INPUT", "values 必须是逗号分隔的有限数字。" );
+        print(await describeGeometry(options.project, {
+          ...(options.binding ? { bindingId: options.binding } : {}),
+          ...(options.layer ? { layerId: options.layer } : {}),
+          ...(options.deformer ? { deformerId: options.deformer } : {}),
+          ...(options.values !== undefined ? { values: options.values.split(",").map(Number) } : {}),
+          ...(options.revision !== undefined ? { revision: Number(options.revision) } : {}),
+          offset: Number(options.offset), limit: Number(options.limit)
+        }), options);
+      }, options);
+    });
 
   const actions = program.command("actions").description("建立并检查可由快捷键、CLI 和表演输入触发的标准表情与动作库");
 

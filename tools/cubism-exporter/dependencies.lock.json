@@ -1,0 +1,90 @@
+{
+  "reference": {
+    "version": "0.4.0",
+    "url": "https://github.com/tsunehimatoi/psd2live/releases/download/v0.4.0/PSD2Live-0.4.0-windows-x86_64-portable.zip",
+    "sha256": "554a11fb2676d0ceee64e7802bf7746fc3dd09d24625bef43e1f0de310a1da22"
+  },
+  "compiler": {
+    "version": "2.2.20",
+    "url": "https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/2.2.20/kotlin-compiler-embeddable-2.2.20.jar",
+    "sha256": "1c6c3f810bfe6a41abcbc34b3a2ef639f1e3f4aeed3a953a4b0974eea4f41889"
+  },
+  "jars": [
+    {
+      "file": "annotations-23.0.0-8484cd17d040d837983323f760b2c660.jar",
+      "sha256": "7b0f19724082cbfcbc66e5abea2b9bc92cf08a1ea11e191933ed43801eb3cd05"
+    },
+    {
+      "file": "atomicfu-jvm-0.28.0-70921245a0aed3c3e3d17c34ca3dbd87.jar",
+      "sha256": "39576ec46b83412ff7a2909d24cccbba90400e91f9aa67b250309bc0872ecf52"
+    },
+    {
+      "file": "format-jvm-5afa46402b5ce4339a42f9d6d97b5933.jar",
+      "sha256": "ae4b151792a8fd6f5b905734b52ab8bd8a2afa0deb21f125f90449f9f55c84e1"
+    },
+    {
+      "file": "interop-jvm-d122dda7b940271029d9362579dc726.jar",
+      "sha256": "376b5afed5fd1220633f9f1169f90039dca94c61d77f9daec5e0f49c8ccc18d6"
+    },
+    {
+      "file": "kotlin-logging-jvm-8.0.4-89994faeb0438bcc8d8d75743acea0c9.jar",
+      "sha256": "0bbac3f9dac5067b40d02fe461a053782bc8d3ef5162a923581b369adef7e02d"
+    },
+    {
+      "file": "kotlin-reflect-2.4.10-6df7a8c62c64ecab738cc3169c94493.jar",
+      "sha256": "25a1aef7454d46548ecaaf51021b0e52e38141a62ed75af124da109b7324c4e5"
+    },
+    {
+      "file": "kotlin-stdlib-2.4.10-5b757154baf259203dc5a025571bec14.jar",
+      "sha256": "4ec0293bc3751423b203f1d8493251c57c42e73eb6377a6b8560d0974ff0a6df"
+    },
+    {
+      "file": "kotlinx-collections-immutable-jvm-0.5.1-91df29e885e61456349be468996db1.jar",
+      "sha256": "d5e4bb25d6e90f7471662b3500259e247523a410e6a820dcc4000d386b0c248c"
+    },
+    {
+      "file": "kotlinx-coroutines-core-jvm-1.11.0-41a5e9a2f2c9affb9d9ab254be5a984f.jar",
+      "sha256": "d1d75aa01dffbb4d1c520e67e4c4e7f5f6174718e7cb4632412503f2f0e604fa"
+    },
+    {
+      "file": "kotlinx-datetime-jvm-0.8.0-74607e75425578a6983dcb8528507cd.jar",
+      "sha256": "ee44b51f8977c2f51d575299a4fc6782ab3700eba4cfc7fad548cced1543936a"
+    },
+    {
+      "file": "kotlinx-io-bytestring-jvm-0.9.1-1fa18e5bc2d9838cb1e3967a5455d62.jar",
+      "sha256": "8589de0b7c476bfdd02a24641685f609ade72f5e595cf2909c168acdba7e6ba4"
+    },
+    {
+      "file": "kotlinx-io-core-jvm-0.9.1-e6e3ee3c3352736bc91761df2e51d056.jar",
+      "sha256": "765d8851d8ca694706931331b92386844800867e041b720f1f193dbda874d370"
+    },
+    {
+      "file": "kotlinx-serialization-core-jvm-1.11.0-cce19040b3217192d383e28af7ffcb58.jar",
+      "sha256": "f4a801c647d4351327cd9e1ac4113e2be9ea37a64ab0abae269c25a52e28f35d"
+    },
+    {
+      "file": "kotlinx-serialization-json-io-jvm-1.11.0-18fa3980a634626154439afcf274a88.jar",
+      "sha256": "bbf3005522426ac4ba2acd6dc38f47ea5a3274ee82b932b8841835c7eaddab74"
+    },
+    {
+      "file": "kotlinx-serialization-json-jvm-1.11.0-22c7504f2965bec48288d5efa4886c52.jar",
+      "sha256": "563a25b4eb5c9128ae9c2479f3d1a5c44dcd176112b91cf03682e906eba5c935"
+    },
+    {
+      "file": "runtime-jvm-1842c44923e3eb1426b307817182b41.jar",
+      "sha256": "f99d12e75255b182ea9899b89007666395687eaed2039d9f919cf68bc184ca9c"
+    },
+    {
+      "file": "slf4j-api-2.0.18-fe2837bd49bfb7665741902fed2ca9.jar",
+      "sha256": "44508fd1576500688c790b190acdd16fec4f8c79a3e0b900afd70503cf055f55"
+    },
+    {
+      "file": "jdom-1.1.3-14bfed13341fe2039eee0f26a16d75.jar",
+      "sha256": "02bd61a725e8af9b0176b43bf29816d0c748b8ab951385bd127be37489325a0a"
+    },
+    {
+      "file": "okio-jvm-3.17.0-96ad357689fd2841747aec56e94a7162.jar",
+      "sha256": "3b13dcc3e1573047c2d507fc4f7fcb0bb0cbcd9d395da21d20e09406e2cd6a73"
+    }
+  ]
+}

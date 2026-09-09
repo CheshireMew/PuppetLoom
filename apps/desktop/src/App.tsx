@@ -715,6 +715,8 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [creatorCapabilities, setCreatorCapabilities] = useState<ViewerCapabilities>({ hotkeys: {} });
   const [exportBusy, setExportBusy] = useState(false);
+  const [cubismEditorVersion, setCubismEditorVersion] = useState<'5.3'|'5.4'>('5.3');
+  const [cubismRuntimeVersion, setCubismRuntimeVersion] = useState<'4.2'|'5.0'|'5.3'>('5.0');
   const inspectionGeneration = useRef(0);
   const createOperationId = useRef<string | undefined>(undefined);
 
@@ -807,7 +809,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
     if (!projectDirectory) return;
     setExportBusy(true); setError("");
     try {
-      const result = await window.puppetloom.exportProject(projectDirectory, format);
+      const result = await window.puppetloom.exportProject(projectDirectory, format, {editorVersion:cubismEditorVersion,runtimeVersion:cubismRuntimeVersion});
       const target = result?.outputDirectory ?? result?.output;
       if (target) { await window.puppetloom.revealPath(target); }
     } catch (cause) { setError(`导出失败：${messageOf(cause)}`); }
@@ -881,7 +883,11 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
               <p>项目已写入：<br/><code>{projectDirectory}</code></p><div className="path-actions"><button className="with-icon" onClick={() => void window.puppetloom.revealPath(projectDirectory)}><FolderOpen aria-hidden="true" />在文件夹中显示</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(projectDirectory)}><ClipboardCopy aria-hidden="true" />复制路径</button></div>
               <button className="primary with-icon" onClick={() => onEdit(projectDirectory)}><ExternalLink aria-hidden="true" />打开绑定与校准编辑器</button>
               <button className="primary with-icon" onClick={() => void launch()}><Play aria-hidden="true" />打开透明角色窗口</button>
-              <details className="export-center"><summary><FolderOutput aria-hidden="true" />导出中心</summary><p>导出不会覆盖现有目录。视频与 Take 在角色窗口中管理。</p><div><button disabled={exportBusy} onClick={() => void exportProject("portable")}>可移植项目</button><button disabled={exportBusy} onClick={() => void exportProject("web")}>Web / OBS</button><button disabled={exportBusy} onClick={() => void exportProject("cubism")}>Cubism 交接包</button></div></details>
+              <details className="export-center"><summary><FolderOutput aria-hidden="true" />导出中心</summary><p>导出不会覆盖现有目录。视频与 Take 在角色窗口中管理。</p><div><button disabled={exportBusy} onClick={() => void exportProject("portable")}>可移植项目</button><button disabled={exportBusy} onClick={() => void exportProject("web")}>Web / OBS</button></div>
+                <label>CMO3 编辑器版本 <select disabled={exportBusy} value={cubismEditorVersion} onChange={event=>setCubismEditorVersion(event.target.value as '5.3'|'5.4')}><option value="5.3">Cubism 5.3.01 及以上</option><option value="5.4">Cubism 5.4</option></select></label>
+                <label>MOC3 运行时版本 <select disabled={exportBusy} value={cubismRuntimeVersion} onChange={event=>setCubismRuntimeVersion(event.target.value as '4.2'|'5.0'|'5.3')}><option value="4.2">SDK 4.2</option><option value="5.0">SDK 5.0</option><option value="5.3">SDK 5.3</option></select></label>
+                <p>工程版本按使用的 Cubism 编辑器选择；运行时版本按接收模型的软件要求选择。</p><button disabled={exportBusy} onClick={() => void exportProject("cubism")}>{exportBusy?'正在导出…':'CMO3 工程与 MOC3 运行时'}</button>
+              </details>
               {viewerId !== undefined && <div className="remote-controls">
                 <button className="with-icon" onClick={() => void controlRemote("pause")}><Pause aria-hidden="true" />暂停 / 继续</button>
                 <button className="with-icon" disabled={creatorCapabilities.hotkeys["CommandOrControl+Shift+P"] === false} title={creatorCapabilities.hotkeys["CommandOrControl+Shift+P"] === false ? "恢复快捷键被占用，已停用鼠标穿透" : "切换鼠标穿透"} onClick={() => void controlRemote("click-through")}><PointerOff aria-hidden="true" />鼠标穿透</button>
