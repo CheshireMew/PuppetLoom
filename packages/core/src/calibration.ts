@@ -64,6 +64,7 @@ function mergeParsedCalibrationOverrides(base: CalibrationOverrides, patch: Cali
     return [id, next ? mergeLayerOverride(base.layers?.[id], next) : base.layers![id]!];
   }));
   return {
+    ...(base.assetLayers || patch.assetLayers ? { assetLayers: { ...(base.assetLayers ?? {}), ...(patch.assetLayers ?? {}) } } : {}),
     ...(patch.model ? { model: patch.model } : base.model ? { model: base.model } : {}),
     ...(base.anchors || patch.anchors ? { anchors: { ...(base.anchors ?? {}), ...(patch.anchors ?? {}) } } : {}),
     ...(base.semanticPoints || patch.semanticPoints ? {
@@ -285,6 +286,12 @@ function applyLayerOverride(layer: LayerBinding, override: LayerCalibrationOverr
   if (override.garmentFlexibility !== undefined) next.garmentFlexibility = override.garmentFlexibility;
   if (override.headwearPerspective === null) delete next.headwearPerspective;
   else if (override.headwearPerspective !== undefined) next.headwearPerspective = override.headwearPerspective;
+  if (override.blinkMode === null) delete next.blinkMode;
+  else if (override.blinkMode !== undefined) next.blinkMode = override.blinkMode;
+  if (override.headPoseMode === null) delete next.headPoseMode;
+  else if (override.headPoseMode !== undefined) next.headPoseMode = override.headPoseMode;
+  if (override.clipLayerId === null) delete next.clipLayerId;
+  else if (override.clipLayerId !== undefined) next.clipLayerId = override.clipLayerId;
   if (override.secondaryAnchors) {
     for (const [name, point] of Object.entries(override.secondaryAnchors)) if (point) assertNormalized(point, `${layer.sourceName} 的 ${name}`);
     next.secondaryAnchors = { ...(next.secondaryAnchors ?? {}), ...clone(override.secondaryAnchors) };
@@ -350,9 +357,18 @@ function applyParsedCalibrationOverrides(project: PuppetLoomProject, overrides: 
     version: PUPPETLOOM_PROJECT_VERSION,
     ...(overrides.model ? { model: clone(overrides.model) } : {}),
     ...(overrides.anchors ? { anchors: { ...project.anchors } } : {}),
-    ...(overrides.layers ? { layers: [...project.layers] } : {}),
+    ...(overrides.layers || overrides.assetLayers ? { layers: [...project.layers] } : {}),
     ...(overrides.semanticPoints || overrides.runtime ? { runtime: { ...project.runtime } } : {})
   };
+  if (overrides.assetLayers) {
+    for (const [id, layer] of Object.entries(overrides.assetLayers)) {
+      if (id !== layer.id || !layer.generatedAsset) throw new Error("补件图层必须带有对应的素材登记身份。" );
+      const existing = next.layers.findIndex((candidate) => candidate.id === id);
+      if (existing >= 0 && !next.layers[existing]!.generatedAsset) throw new Error(`补件不能覆盖源图层身份：${id}`);
+      if (existing >= 0) next.layers[existing] = clone(layer);
+      else next.layers.push(clone(layer));
+    }
+  }
   if (overrides.model) next.model = clone(overrides.model);
   if (overrides.anchors) {
     for (const [name, point] of Object.entries(overrides.anchors)) if (point) assertNormalized(point, `锚点 ${name}`);
@@ -394,6 +410,7 @@ function applyParsedCalibrationOverrides(project: PuppetLoomProject, overrides: 
     }
   }
   if (overrides.runtime?.envelope) next.runtime.envelope = { ...next.runtime.envelope, ...overrides.runtime.envelope };
+  if (overrides.runtime?.features) next.runtime.features = { ...next.runtime.features, ...overrides.runtime.features };
   if (overrides.runtime?.poseField) {
     if (!next.runtime.poseField) throw new Error("当前项目没有可校准的统一头部姿态场。");
     next.runtime.poseField = { ...next.runtime.poseField, ...overrides.runtime.poseField };

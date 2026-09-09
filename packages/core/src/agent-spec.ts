@@ -137,11 +137,11 @@ function headFaceIntent(value: unknown, path: string): PrimaryPartIntentSpecific
   if (!isRecord(value)) throw new PuppetLoomError("INVALID_INPUT", `${path} 必须是对象。`);
   return {
     ...primaryIntent(value, path),
-    yawDegrees: numberIn(value, "yawDegrees", 10, 25, path),
-    pitchUpDegrees: numberIn(value, "pitchUpDegrees", 8, 20, path),
-    pitchDownDegrees: numberIn(value, "pitchDownDegrees", 8, 20, path),
-    contourStrength: value.contourStrength === undefined ? 1 : numberIn(value, "contourStrength", 0.4, 1.6, path),
-    depthStrength: value.depthStrength === undefined ? 1 : numberIn(value, "depthStrength", 0.4, 1.6, path),
+    yawDegrees: numberIn(value, "yawDegrees", 0, 25, path),
+    pitchUpDegrees: numberIn(value, "pitchUpDegrees", 0, 20, path),
+    pitchDownDegrees: numberIn(value, "pitchDownDegrees", 0, 20, path),
+    ...(value.contourStrength === undefined ? {} : { contourStrength: numberIn(value, "contourStrength", 0, 1.6, path) }),
+    ...(value.depthStrength === undefined ? {} : { depthStrength: numberIn(value, "depthStrength", 0, 1.6, path) }),
     farEyeOpacity: value.farEyeOpacity === undefined ? 1 : numberIn(value, "farEyeOpacity", 0, 1, path),
     farBrowOpacity: value.farBrowOpacity === undefined ? 1 : numberIn(value, "farBrowOpacity", 0, 1, path),
     farEarOpacity: value.farEarOpacity === undefined ? 0.55 : numberIn(value, "farEarOpacity", 0, 1, path),

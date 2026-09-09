@@ -102,9 +102,7 @@ type SemanticCageMapping =
   | { kind: "triangle"; ids: [SemanticCagePointId, SemanticCagePointId, SemanticCagePointId]; weights: Barycentric }
   | { kind: "weighted"; entries: Array<{ id: SemanticCagePointId; weight: number }>; total: number };
 
-type SemanticCageTopology =
-  | { kind: "triangle"; ids: [SemanticCagePointId, SemanticCagePointId, SemanticCagePointId] }
-  | { kind: "weighted"; ids: SemanticCagePointId[] };
+type SemanticCageTopology = { x: number; y: number; mapping: SemanticCageMapping };
 
 interface SemanticCageMappingCache {
   face: SemanticCageRegionMappingCache;
@@ -295,7 +293,7 @@ function surfaceProjectionProfile(
     surface,
     nx,
     ny,
-    z: surfaceDepth + (roleDepth(role) + authoredDepth) * clamp(field.depthStrength ?? 1, 0.4, 1.6),
+    z: surfaceDepth + (roleDepth(role) + authoredDepth) * clamp(field.depthStrength ?? 1, 0, 1.6),
     blend: rolePoseBlend(layer, base, role) * layer.weights.head,
     rootWeight: layer.weights.head,
     skullAligned: field.kind === "head-surfaces-v2" && skullRoles.has(role)
@@ -374,7 +372,7 @@ function semanticLandmarkAdjustment(
 ): Point {
   const turn = clamp(yaw, -1, 1);
   const amount = Math.abs(turn);
-  const contourStrength = clamp(field.contourStrength ?? 1, 0.4, 1.6);
+  const contourStrength = clamp(field.contourStrength ?? 1, 0, 1.6);
   let adjusted = projected;
   const direction = Math.sign(turn);
   const screenSide = base.x < field.center.x ? -1 : base.x > field.center.x ? 1 : 0;
@@ -487,12 +485,10 @@ function semanticCageMapping(
 
   if (topologyKey) {
     const topology = cache.byTopologyIdentity.get(topologyKey);
-    if (topology?.kind === "triangle") {
-      const [aId, bId, cId] = topology.ids;
-      const weights = barycentric(base, cage.points[aId].position, cage.points[bId].position, cage.points[cId].position);
-      if (weights && Math.min(weights.a, weights.b, weights.c) >= -0.015) return { kind: "triangle", ids: topology.ids, weights };
-      cache.byTopologyIdentity.delete(topologyKey);
-    } else if (topology?.kind === "weighted") return weightedMapping(topology.ids);
+    // The same rest vertex can enter another cage triangle after local keyforms.
+    // Cache the sampled coordinates too; retaining a prior triangle/weighted fallback
+    // made the result depend on the order in which poses were evaluated.
+    if (topology && topology.x === base.x && topology.y === base.y) return topology.mapping;
   } else {
     const cached = cachedSemanticCageMapping(cache, base);
     if (cached) return cached;
@@ -502,14 +498,14 @@ function semanticCageMapping(
     const weights = barycentric(base, cage.points[aId].position, cage.points[bId].position, cage.points[cId].position);
     if (!weights || Math.min(weights.a, weights.b, weights.c) < -0.015) continue;
     const mapping: SemanticCageMapping = { kind: "triangle", ids: [aId, bId, cId], weights };
-    if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { kind: "triangle", ids: mapping.ids });
+    if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { x: base.x, y: base.y, mapping });
     else rememberSemanticCageMapping(cache, base, mapping);
     return mapping;
   }
 
   const ids = [...new Set(triangles.flat())];
   const mapping = weightedMapping(ids);
-  if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { kind: "weighted", ids });
+  if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { x: base.x, y: base.y, mapping });
   else rememberSemanticCageMapping(cache, base, mapping);
   return mapping;
 }
@@ -973,7 +969,7 @@ function applyBackHairVolume(
   const vertical = clamp(pitch, -1, 1);
   const freeLength = explicitAttachment === undefined
     ? profile.geometricFreeLength
-    : Math.max(profile.geometricFreeLength, 1 - clamp(explicitAttachment, 0, 1));
+    : 1 - clamp(explicitAttachment, 0, 1);
   const attached = {
     x: posedPivot.x + profile.localX * (1 + depth.near * 0.035 - depth.far * 0.055),
     y: posedPivot.y + profile.localY * (1 - Math.max(0, -vertical) * 0.08 + Math.max(0, vertical) * 0.09)
@@ -1053,7 +1049,7 @@ function applyFrontHairVolume(
   const geometricRelease = smoothstep01((base.y - flexibleRootY) / Math.max(1e-6, layer.bounds.height * 0.18));
   const flexibleRelease = explicitAttachment === undefined
     ? geometricRelease
-    : Math.max(geometricRelease, 1 - clamp(explicitAttachment, 0, 1));
+    : 1 - clamp(explicitAttachment, 0, 1);
 
   // The scalp follows the stable skull perspective. Below the detected root,
   // bangs gradually leave that curved head surface and hang from the shared
@@ -1092,7 +1088,7 @@ function applyFrontHairVolume(
     // face cage, which opens a visible notch and can fold the first mesh row.
     const attachment = explicitAttachment === undefined
       ? Math.max(strand.faceFollow, strand.rootLock)
-      : Math.max(strand.faceFollow, strand.rootLock, clamp(explicitAttachment, 0, 1));
+      : clamp(explicitAttachment, 0, 1);
     const attached = {
       x: base.x + faceDisplacement.x,
       y: base.y + faceDisplacement.y
@@ -1162,7 +1158,7 @@ function projectSurface(
   };
 }
 
-function applyEyePerspective(layer: LayerBinding, base: Point, posed: Point, posedPivot: Point, yaw: number, pitch: number): Point {
+export function applyEyePerspective(layer: LayerBinding, base: Point, posed: Point, posedPivot: Point, yaw: number, pitch: number, eyeAxis?: Point, canvasAspect = 1): Point {
   if (layer.side === "center" || (!eyeSocketRoles.has(layer.role) && layer.role !== "eyebrow")) return posed;
   const { near, far } = sidePerspective(yaw, layerScreenSide(layer));
   const scaleX = eyeSocketRoles.has(layer.role)
@@ -1178,12 +1174,22 @@ function applyEyePerspective(layer: LayerBinding, base: Point, posed: Point, pos
   // The eye centre already follows the semantic face cage. Preserve the
   // neutral eye drawing around that centre and apply perspective once; using
   // the already-projected local coordinates here compressed the far eye twice.
-  const localX = base.x - layer.pivot.x;
-  const localY = base.y - layer.pivot.y;
+  // Resolve the drawing plane in pixel proportions. All eye surfaces and brows
+  // use the same original eye line, including artwork with a tilted head.
+  const aspect = Number.isFinite(canvasAspect) && canvasAspect > 0 ? canvasAspect : 1;
+  const angle = eyeAxis && Math.hypot(eyeAxis.x, eyeAxis.y) > 1e-9
+    ? Math.atan2(eyeAxis.y, eyeAxis.x * aspect) : 0;
+  const cosine = Math.cos(angle), sine = Math.sin(angle);
+  const dx = (base.x - layer.pivot.x) * aspect;
+  const dy = base.y - layer.pivot.y;
+  const localX = dx * cosine + dy * sine;
+  const localY = -dx * sine + dy * cosine;
   const turn = clamp(yaw, -1, 1);
+  const x = localX * scaleX * pitchScaleX;
+  const y = localY * scaleY + localX * turn * 0.018;
   return {
-    x: posedPivot.x + localX * scaleX * pitchScaleX,
-    y: posedPivot.y + localY * scaleY + localX * turn * 0.018
+    x: posedPivot.x + (x * cosine - y * sine) / aspect,
+    y: posedPivot.y + x * sine + y * cosine
   };
 }
 
@@ -1200,7 +1206,7 @@ function applyFaceSilhouette(field: CoherentPoseField, layer: LayerBinding, base
   const jawWeight = clamp((v - 0.55) / 0.45, 0, 1);
   const { near, far } = sidePerspective(turn, screenSide);
   const direction = Math.sign(turn);
-  const contourStrength = clamp(field.contourStrength ?? 1, 0.4, 1.6);
+  const contourStrength = clamp(field.contourStrength ?? 1, 0, 1.6);
   const cheekShift = -direction * field.radiusX * edge * cheekWeight * (far * 0.08 + near * 0.02) * contourStrength;
   const chinShift = direction * field.radiusX * (1 - edge) * jawWeight * amount * 0.08 * contourStrength;
   return { x: posed.x + cheekShift + chinShift, y: posed.y };
@@ -1213,7 +1219,7 @@ export function applyCoherentPoseField(
   yaw: number,
   pitch: number,
   semanticCage?: SemanticControlCage,
-  cageInfluence: { face?: number; skull?: number; attachment?: number; topologyKey?: Point } = {}
+  cageInfluence: { face?: number; skull?: number; attachment?: number; topologyKey?: Point; canvasAspect?: number } = {}
 ): Point {
   const yawAngle = clamp(yaw, -1, 1) * field.maxYawRadians;
   const pitchLimit = pitch < 0
@@ -1281,6 +1287,9 @@ export function applyCoherentPoseField(
     y: surfacePivot.y + (cagePivot.y - surfacePivot.y) * cageBlend
   };
   posed = applyFrontHairContourPlane(field, semanticCage, layer, base, posed, yawAngle, pitchAngle, yaw, pitch);
-  const perspective = applyEyePerspective(layer, base, posed, posedPivot, yaw, pitch);
+  const eyeLeft = semanticCage?.points.eyeLeft.position;
+  const eyeRight = semanticCage?.points.eyeRight.position;
+  const eyeAxis = eyeLeft && eyeRight ? { x: eyeRight.x - eyeLeft.x, y: eyeRight.y - eyeLeft.y } : undefined;
+  const perspective = applyEyePerspective(layer, base, posed, posedPivot, yaw, pitch, eyeAxis, cageInfluence.canvasAspect);
   return semanticCage ? perspective : applyFaceSilhouette(field, layer, base, perspective, yaw);
 }

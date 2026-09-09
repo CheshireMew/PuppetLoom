@@ -14,6 +14,7 @@ import type {
   PuppetLoomProject,
   WarpDeformer
 } from "./types.js";
+import { meshPointAtUv } from "./mesh.js";
 
 const semanticFields: Record<MotionParameterSemantic, keyof MotionState> = {
   "head-yaw": "headYaw",
@@ -390,6 +391,26 @@ function sampledTransform(weights: WeightedKeyform[]): Required<KeyformTransform
   return transform;
 }
 
+/** Capture one binding using the same interpolation and defaults as the renderer. */
+export function sampleBindingKeyform(binding: ModelBinding, values: ModelKeyform["values"]): ModelKeyform {
+  if (values.length !== binding.parameterIds.length || values.some((value) => !Number.isFinite(value))) throw new Error("采样参数维度或数值无效。" );
+  const weights = weightedKeyforms(binding, Object.fromEntries(binding.parameterIds.map((id, axis) => [id, values[axis]!])));
+  const result: ModelKeyform = { values: [...values] as ModelKeyform["values"] };
+  for (const property of ["meshPointDeltas", "warpPointDeltas"] as const) {
+    const keys = new Set(weights.flatMap(({ keyform }) => Object.keys(keyform[property] ?? {})));
+    if (keys.size === 0) continue;
+    result[property] = Object.fromEntries([...keys].map((index) => {
+      const point = { x: 0, y: 0 };
+      addSampledPoint(point, weights, property, Number(index));
+      return [index, point];
+    }));
+  }
+  if (weights.some(({ keyform }) => keyform.transform)) result.transform = sampledTransform(weights);
+  if (weights.some(({ keyform }) => keyform.opacityMultiplier !== undefined)) result.opacityMultiplier = sampledNumber(weights, "opacityMultiplier", 1);
+  if (weights.some(({ keyform }) => keyform.drawOrderOffset !== undefined)) result.drawOrderOffset = sampledNumber(weights, "drawOrderOffset", 0);
+  return result;
+}
+
 function transformPoint(point: Point, pivot: Point, transform: Required<KeyformTransform>): Point {
   const radians = transform.rotationDegrees * Math.PI / 180;
   const x = (point.x - pivot.x) * transform.scale.x;
@@ -453,7 +474,7 @@ export interface EvaluatedLayerAuthoring {
 }
 
 function evaluateLayerAuthoringParameters(project: PuppetLoomProject, layer: LayerBinding, parameters: Record<string, number>, reusable?: EvaluatedLayerAuthoring): EvaluatedLayerAuthoring {
-  const bindings = bindingsFor(project, "layer", layer.id);
+  const bindings = bindingsFor(project, "layer", layer.id).filter((binding) => !binding.blinkMode || binding.blinkMode === (layer.blinkMode ?? "texture"));
   if (bindings.length === 0 && !layer.deformerId) {
     if (reusable) {
       reusable.points = layer.mesh.points;
@@ -464,6 +485,23 @@ function evaluateLayerAuthoringParameters(project: PuppetLoomProject, layer: Lay
     return { points: layer.mesh.points, opacityMultiplier: 1, drawOrderOffset: 0 };
   }
   const bindingWeights = bindings.map((binding) => weightedKeyforms(binding, parameters));
+  // A complete head grid is the parent surface of local expressions. Adding
+  // its vertex offsets after a blink would reuse the open eye's offsets and
+  // can turn a closed aperture inside out.
+  const headIndex = layer.headPoseMode === "keyforms" ? bindings.findIndex(binding =>
+    binding.parameterIds.length === 2 && ["head-yaw", "head-pitch"].every(semantic =>
+      binding.parameterIds.some(id => modelFor(project).parameters.some(parameter => parameter.id === id && parameter.semantic === semantic)))) : -1;
+  const localWeights = bindingWeights.filter((_weights, index) => index !== headIndex);
+  const headWeights = headIndex >= 0 ? bindingWeights[headIndex] : undefined;
+  const headSurface = headWeights ? {
+    ...layer.mesh,
+    uvs: layer.mesh.points,
+    points: layer.mesh.points.map((base, index) => {
+      const delta = { x: 0, y: 0 };
+      addSampledPoint(delta, headWeights, "meshPointDeltas", index);
+      return delta;
+    })
+  } : undefined;
   const points = reusable?.points !== layer.mesh.points && reusable?.points.length === layer.mesh.points.length
     ? reusable.points
     : new Array<Point>(layer.mesh.points.length);
@@ -472,9 +510,17 @@ function evaluateLayerAuthoringParameters(project: PuppetLoomProject, layer: Lay
     let current = points[index] ?? { x: base.x, y: base.y };
     current.x = base.x;
     current.y = base.y;
-    for (const weights of bindingWeights) addSampledPoint(current, weights, "meshPointDeltas", index);
-    for (const weights of bindingWeights) {
+    for (const weights of localWeights) addSampledPoint(current, weights, "meshPointDeltas", index);
+    for (const weights of localWeights) {
       const transformed = transformPoint(current, layer.pivot, sampledTransform(weights));
+      current.x = transformed.x;
+      current.y = transformed.y;
+    }
+    if (headSurface && headWeights) {
+      const delta = meshPointAtUv(headSurface, current);
+      current.x += delta.x;
+      current.y += delta.y;
+      const transformed = transformPoint(current, layer.pivot, sampledTransform(headWeights));
       current.x = transformed.x;
       current.y = transformed.y;
     }

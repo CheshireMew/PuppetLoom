@@ -30,7 +30,7 @@ import type {
   RigLevel
 } from "./types.js";
 
-function projectFingerprint(project: PuppetLoomProject): string {
+export function projectFingerprint(project: PuppetLoomProject): string {
   return createHash("sha256").update(JSON.stringify(project)).digest("hex");
 }
 
@@ -232,6 +232,9 @@ async function commitCalibrationPatch(root: string, patch: CalibrationPatch, rep
       throw new PuppetLoomError("INVALID_INPUT", "当前校准已经是目标状态，没有创建新版本。" );
     }
     const after = applySafetyLimits(applyCalibrationOverrides(base, overrides));
+    if (calibrationInitialized && isDeepStrictEqual(before, after)) {
+      throw new PuppetLoomError("INVALID_INPUT", "当前校准已经是目标状态，没有创建新版本。" );
+    }
     const rebuiltLayers = rebuiltMeshLayerIds(before, after);
     if (replacementOverrides === undefined && rebuiltLayers.length > 1) {
       throw new PuppetLoomError(

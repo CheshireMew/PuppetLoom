@@ -4,6 +4,7 @@ import { makeGridMesh } from "../src/rig.js";
 import type { LayerBinding, PuppetLoomProject, SemanticRole } from "../src/types.js";
 
 const project = {
+  canvas: { width: 1000, height: 1000 },
   anchors: {},
   runtime: {
     envelope: {
@@ -82,12 +83,28 @@ describe("posed mesh editing", () => {
 });
 
 describe("blink deformation", () => {
-  it("briefly closes the height of open eye artwork around its own center", () => {
+  it("preserves legacy eyelash compression for texture rigs", () => {
     const layer = eyeLayer("eyelash");
     const top = { x: 0.45, y: 0.2 };
-    const closed = deformPoint(project, layer, top, { ...neutralMotionState, blink: 1 });
+    const lid = eyeLayer("eyeClosed");
+    lid.mesh = { ...makeGridMesh({ x: 0.4, y: 0.225, width: 0.1, height: 0.01 }, 4, 4), topology: "art" };
+    const value = { ...project, layers: [layer, lid] };
+    const closed = deformPoint(value, layer, top, { ...neutralMotionState, blink: 1 });
     expect(closed.y).toBeGreaterThan(top.y);
     expect(Math.abs(closed.y - layer.pivot.y)).toBeLessThan(Math.abs(top.y - layer.pivot.y) * 0.3);
+  });
+
+  it("leaves geometry-mode closure entirely to authored keyforms", () => {
+    const iris = eyeLayer("iris"), white = eyeLayer("eyeWhite");
+    iris.blinkMode = "geometry";
+    white.blinkMode = "geometry";
+    const lid = eyeLayer("eyeClosed");
+    lid.mesh = { ...lid.mesh, topology: "art" };
+    const value = { ...project, layers: [iris, white, lid] };
+    const point = { x: 0.45, y: 0.2 };
+    expect(deformPoint(value, iris, point, { ...neutralMotionState, blink: 0.65 })).toEqual(point);
+    expect(deformPoint({ ...project, layers: [white] }, white, point, { ...neutralMotionState, blink: 0.65 })).toEqual(point);
+    expect(deformPoint(value, white, point, { ...neutralMotionState, blink: 0.65 })).toEqual(point);
   });
 
   it("does not compress the generated closed-eyelid artwork", () => {
@@ -321,6 +338,7 @@ describe("secondary motion anchoring", () => {
 
 describe("connected head and upper-body motion", () => {
   const connectedProject = {
+    canvas: { width: 1000, height: 1000 },
     anchors: {
       chin: { x: 0.5, y: 0.28 },
       neck: { x: 0.5, y: 0.33 },

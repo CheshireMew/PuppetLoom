@@ -1,6 +1,7 @@
 import { parentPort } from "node:worker_threads";
 import {
   createProject,
+  exportNativeCubism,
   inspectPsd,
   inspectProjectHealth,
   loadCalibrationWorkspace,
@@ -48,6 +49,7 @@ async function run(request: ProjectWorkerRequest): Promise<unknown> {
       : loadProjectRevision(request.directory, request.revision);
   }
   if (request.operation === "load-workspace") return loadCalibrationWorkspace(request.directory);
+  if (request.operation === "export-cubism") return exportNativeCubism(request.directory,request.output,{...request.options,onProgress:phase=>parentPort!.postMessage({kind:"progress",phase})});
   if (request.operation === "project-health") return inspectProjectHealth(request.directory);
   if (request.operation === "project-library") return scanProjectLibrary(request.root, { ...(request.maxDepth === undefined ? {} : { maxDepth: request.maxDepth }), ...(request.maximumProjects === undefined ? {} : { maximumProjects: request.maximumProjects }) });
   if (request.operation === "source-prepare") return prepareSourceTask({ reference: request.reference, output: request.output, ...(request.name ? { name: request.name } : {}), ...(request.provider ? { provider: request.provider } : {}) });

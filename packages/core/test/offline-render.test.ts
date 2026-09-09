@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { neutralMotionState } from "../src/deform.js";
 import { renderProjectPoseWithSources } from "../src/offline-render.js";
 import { featureGatedMotionState } from "../src/render-contract.js";
+import { createDefaultAuthoringModel } from "../src/model.js";
 import type { LayerBinding, PuppetLoomProject } from "../src/types.js";
 
 function layer(id: string, order: number, blendMode = "normal"): LayerBinding {
@@ -37,6 +38,25 @@ function pixel(red: number, green: number, blue: number, alpha: number) {
 }
 
 describe("offline renderer contract", () => {
+  it("occludes a saturated iris during partial closure instead of crossfading it into the face", () => {
+    const skin = layer("skin", 0), white = { ...layer("white", 1), role: "eyeWhite" as const };
+    const iris = { ...layer("iris", 2), role: "iris" as const, clipLayerId: white.id };
+    const closed = { ...layer("closed", 3), role: "eyeClosed" as const };
+    closed.mesh = { ...closed.mesh, topology: "art" };
+    const value = project([skin, white, iris, closed]);
+    for (const surface of [white, iris, closed]) (surface as LayerBinding).blinkMode = "geometry";
+    value.model = createDefaultAuthoringModel();
+    value.model.bindings.push({ id: "test-aperture", parameterIds: ["param-blink"], target: { kind: "layer", id: white.id }, keyforms: [
+      { values: [0] }, { values: [1], transform: { scale: { x: 1, y: 0.02 } } }
+    ] });
+    value.runtime.features.blink = true;
+    const sources = new Map([[skin.id, pixel(250, 220, 210, 255)], [white.id, pixel(255, 255, 255, 255)], [iris.id, pixel(240, 0, 0, 255)], [closed.id, pixel(0, 0, 0, 255)]]);
+    const result = renderProjectPoseWithSources(value, sources, { ...neutralMotionState, blink: 0.65 }, 40, 40);
+    const colors = Array.from({ length: 1600 }, (_, i) => Array.from(result.data.slice(i * 4, i * 4 + 3)).join(","));
+    expect(colors).toContain("240,0,0");
+    expect(colors).toContain("250,220,210");
+    expect(colors.every((color) => ["240,0,0", "250,220,210", "255,255,255"].includes(color))).toBe(true);
+  });
   it("lets the global blink drive both eyes until an asymmetric side is explicitly controlled", () => {
     const value = project([]);
     value.runtime.features.blink = true;

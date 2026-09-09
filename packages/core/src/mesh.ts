@@ -126,6 +126,15 @@ function sampleLocation(mesh: MeshBinding, uv: Point): BarycentricSample {
 }
 
 /** Reprojects every influence channel by UV, so remeshing does not reset authored weights. */
+/** Maps texture coordinates through the current mesh, using the same boundary policy as remeshing. */
+export function meshPointAtUv(mesh: MeshBinding, uv: Point): Point {
+  const sample = sampleLocation(mesh, uv);
+  return sample.indices.reduce((point, index, slot) => ({
+    x: point.x + mesh.points[index]!.x * sample.weights[slot]!,
+    y: point.y + mesh.points[index]!.y * sample.weights[slot]!
+  }), { x: 0, y: 0 });
+}
+
 export function reprojectMeshInfluences(source: MeshBinding, target: MeshBinding): MeshInfluences {
   const samples = target.uvs.map((uv) => sampleLocation(source, uv));
   return Object.fromEntries(meshInfluenceChannels.flatMap((channel) => {

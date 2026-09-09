@@ -122,6 +122,16 @@ describe("automatic semantic control cage", () => {
     expect(buildSemanticControlCage(imported)).toBeUndefined();
   });
 
+  it("does not retain a previous cage region when an authored vertex moves", () => {
+    const project=rigFixture(),field=project.runtime.poseField!,cage=project.runtime.semanticCage!;
+    const face=project.layers.find(l=>l.role==='face')!,identity={x:0,y:0};
+    const evaluate=(point:{x:number;y:number},key=identity)=>applyCoherentPoseField(field,face,point,.8,.6,cage,{topologyKey:key});
+    // Warm the weighted fallback outside the cage, then move the same vertex inside.
+    evaluate({x:-.5,y:-.5});
+    const points=cage.faceTriangles.map(([a,b,c])=>({x:(cage.points[a].position.x+cage.points[b].position.x+cage.points[c].position.x)/3,y:(cage.points[a].position.y+cage.points[b].position.y+cage.points[c].position.y)/3}));
+    for(const point of [...points,...points.toReversed()])expect(evaluate(point)).toEqual(evaluate(point,{...identity}));
+  });
+
   it("promotes complete semantic projects to the coherent-v3 runtime", () => {
     const project = rigFixture();
     expect(project.rigLevel).toBe("semantic");

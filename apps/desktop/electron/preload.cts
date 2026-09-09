@@ -144,7 +144,7 @@ contextBridge.exposeInMainWorld("puppetloom", {
   updateCheck: () => ipcRenderer.invoke("system:update-check"),
   updateDownload: () => ipcRenderer.invoke("system:update-download"),
   updateInstall: (installer: string) => ipcRenderer.invoke("system:update-install", installer),
-  exportProject: (projectDirectory: string, format: string) => ipcRenderer.invoke("system:export-project", projectDirectory, format),
+  exportProject: (projectDirectory: string, format: string, options?: {editorVersion?:'5.3'|'5.4';runtimeVersion?:'4.2'|'5.0'|'5.3'}) => ipcRenderer.invoke("system:export-project", projectDirectory, format, options),
   spoutOutput: (action: "status" | "start" | "stop", options?: unknown) => ipcRenderer.invoke("viewer:spout-output", action, options),
   controlViewer: (id: number, action: string) => ipcRenderer.invoke("viewer:control", id, action),
   viewerAction: (action: string) => ipcRenderer.invoke("viewer:self-control", action),

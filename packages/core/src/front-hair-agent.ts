@@ -525,7 +525,7 @@ function frontHairGeometryChecks(project: PuppetLoomProject, layer: LayerBinding
   const rightMid = midpoint(rightRoot, rightTip);
   const sampleY = (leftMid.y + rightMid.y) * 0.5;
   const center = { x: layer.bounds.x + layer.bounds.width * 0.5, y: sampleY };
-  const unifiedPose = project.runtime.poseField && project.runtime.semanticCage;
+  const unifiedPose = layer.headPoseMode !== "keyforms" && project.runtime.poseField && project.runtime.semanticCage;
   const samples = [leftRoot, rightRoot, leftMid, rightMid, center];
   const indices = unifiedPose
     ? { leftRoot: 0, rightRoot: 1, leftMid: 2, rightMid: 3, center: 4 }
@@ -810,7 +810,7 @@ export function createFrontHairAgentProposal(project: PuppetLoomProject, rawInst
   const layer = selectFrontHairLayer(workingProject, selectedLayer.id);
   if (!workingProject.runtime.features.hairPhysics) throw new PuppetLoomError("INVALID_INPUT", "当前项目关闭了头发物理，无法建立完整的前发动态闭环。" );
   const topology = topologySummary(layer);
-  const unifiedPose = Boolean(workingProject.runtime.poseField && workingProject.runtime.semanticCage);
+  const unifiedPose = layer.headPoseMode === "keyforms" || Boolean(workingProject.runtime.poseField && workingProject.runtime.semanticCage);
   let lastProposal: PreparedFrontHairProposal | undefined;
   const protectedVertices = new Set<number>();
   const repairs: ModelAgentRepair[] = [];
@@ -909,13 +909,14 @@ function draftBlockers(draft: CalibrationDraftDocument | undefined, targetLayerI
 }
 
 function operationId(operation: AuthoringOperation): string {
+  if (operation.op === "transform-keyform" || operation.op === "insert-binding-key") return operation.bindingId;
   if (operation.op === "upsert-parameter") return operation.parameter.id;
   if (operation.op === "upsert-binding") return operation.binding.id;
   if (operation.op === "upsert-physics") return operation.physics.id;
   if (operation.op === "upsert-deformer") return operation.deformer.id;
   if (operation.op === "upsert-expression") return operation.expression.id;
   if (operation.op === "upsert-behavior") return operation.behavior.id;
-  if (operation.op === "set-layer-deformer") return operation.layerId;
+  if (operation.op === "set-layer-deformer" || operation.op === "set-layer-head-pose") return operation.layerId;
   if (operation.op === "move-layer") return operation.layerId;
   return operation.id;
 }

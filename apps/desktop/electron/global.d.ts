@@ -168,7 +168,7 @@ export interface PuppetLoomDesktopApi {
   updateCheck(): Promise<import("./windows-updater.js").WindowsUpdateStatus>;
   updateDownload(): Promise<import("./windows-updater.js").WindowsUpdateStatus>;
   updateInstall(installer: string): Promise<boolean>;
-  exportProject(projectDirectory: string, format: "portable" | "web" | "cubism"): Promise<{ outputDirectory?: string; output?: string } | undefined>;
+  exportProject(projectDirectory: string, format: "portable" | "web" | "cubism", options?: {editorVersion?:'5.3'|'5.4';runtimeVersion?:'4.2'|'5.0'|'5.3'}): Promise<{ outputDirectory?: string; output?: string } | undefined>;
   spoutOutput(action: "status" | "start" | "stop", options?: import("./spout-output-service.js").SpoutOutputOptions): Promise<import("./spout-output-service.js").SpoutOutputStatus>;
   controlViewer(id: number, action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;
   viewerAction(action: "pause" | "top" | "click-through" | "pointer-tracking" | "larger" | "smaller" | "close"): Promise<ViewerState | null>;

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { artifactPath } from "../../../test/support/artifacts.js";
-import { commitModelAgentProposal, createProject, listCalibrationSessions, loadCalibration, loadProject, planPrimaryPartAgent, saveCalibrationPatch } from "../src/index.js";
+import { commitModelAgentProposal, createProject, listCalibrationSessions, loadCalibration, loadProject, planPrimaryPartAgent, saveAuthoringPatch, saveCalibrationPatch } from "../src/index.js";
 
 const output = artifactPath("calibration-noop-" + process.pid + "-" + Date.now());
 
@@ -10,6 +10,14 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("calibration no-op guard", () => {
+  it("does not create a revision when authoring writes the unchanged base model as an override", async () => {
+    const project = await loadProject(output);
+    await expect(saveAuthoringPatch(output, { version: 1, baseRevision: 0, operations: [
+      { op: "upsert-parameter", parameter: project.model.parameters[0]! }
+    ] })).rejects.toThrow("当前校准已经是目标状态");
+    expect((await loadCalibration(output)).revision).toBe(0);
+    expect(await listCalibrationSessions(output)).toEqual([]);
+  });
   it("rejects an exact no-op before creating evidence or a revision", async () => {
     await expect(saveCalibrationPatch(output, {
       baseRevision: 0,

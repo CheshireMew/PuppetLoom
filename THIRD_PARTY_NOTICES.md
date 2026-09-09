@@ -2,6 +2,18 @@
 
 PuppetLoom contains selectively adapted ideas and independently reimplemented algorithms from the following projects. No upstream application is vendored; the relevant licenses and notices are retained below.
 
+## PSD2Live and Umamo
+
+- Projects: [tsunehimatoi/psd2live](https://github.com/tsunehimatoi/psd2live) and [umamoorg/umamo](https://github.com/umamoorg/umamo)
+- Research inputs: user-provided PSD2Live 0.4.0 source and Windows portable archives; Umamo revision `f9a2dc0`
+- Use: reference-driven asset assembly, explicit registration, region-based keyform editing, interpolation-preserving key insertion, source-layer identity, mesh quality, and external-Agent workflow guidance
+
+The asset and authoring mechanisms are implemented in PuppetLoom's TypeScript core. Native Cubism export additionally executes Umamo's format/runtime/interop JVM libraries from the pinned PSD2Live 0.4.0 distribution. `scripts/setup-cubism-exporter.mjs` configures these external dependencies and verifies their hashes against `tools/cubism-exporter/dependencies.lock.json`; upstream binaries and artwork are not committed here.
+
+`packages/core/src/cubism-atlas.ts` adapts PSD2Live's `AtlasPacker.kt` shelf packing algorithm to TypeScript/sharp, preserving source resolution, padding and deterministic placement. `tools/cubism-exporter/Physics.kt` adapts the editable physics conversion used by PSD2Live. The Kotlin adapter follows `PSD2LivePipeline.kt`: build the Umamo model, encode runtime and editable formats, inject physics, and read outputs back. PSD2Live and Umamo are licensed under GNU GPL version 3; the license is retained in [Umamo-GPL-3.0.txt](docs/licenses/Umamo-GPL-3.0.txt). The linked source repositories and pinned distribution identify corresponding upstream source. These adaptations operate within PuppetLoom's AGPL-3.0-or-later project.
+
+The local Skill incorporates workflow lessons rather than copying the upstream instruction set. See [REFERENCE_ADOPTION.md](docs/REFERENCE_ADOPTION.md) and [PSD2LIVE_NATIVE_EXPORT_REVIEW.md](docs/PSD2LIVE_NATIVE_EXPORT_REVIEW.md) for implementation and verification boundaries.
+
 ## Anime2.5DRig
 
 - Project: `hakoniwa/Anime2.5DRig`, based on `852wa/Anime2.5DRig`
@@ -85,7 +97,7 @@ The applicable ISC and MIT license texts are reproduced in `docs/licenses/Lucide
 - Project and documentation: Live2D Cubism Editor, Cubism SDK manuals, External Application Integration API, and `Live2D/CubismWebSamples`
 - Use: public model3/exp3/motion3/physics3/cdi3 structure, Editor WebSocket protocol, and local compatibility validation
 
-PuppetLoom does not distribute Cubism Editor, Cubism Core, the Cubism SDK, `.moc3` compilers, or Live2D sample assets. A sparse checkout of the official Mao sample is used only for local D-drive validation and is excluded from this repository. Live2D and Cubism remain trademarks and copyrighted products of Live2D Inc.; using their editor, SDK, Core, or exported data remains subject to Live2D's terms and licenses.
+PuppetLoom does not distribute Cubism Editor, Cubism Core, the Cubism SDK, or Live2D sample assets. Direct `.moc3` encoding uses the third-party Umamo dependency described above. The optional Core probe loads the user's installed Core for local verification. A sparse checkout of the official Mao sample is used only for local D-drive validation and is excluded from this repository. Live2D and Cubism remain trademarks and copyrighted products of Live2D Inc.; using their editor, SDK, Core, or exported data remains subject to Live2D's terms and licenses.
 
 ## Third demonstration project
 

@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createProject, loadBaseProject, loadCalibration, saveCalibrationPatch } from "./project.js";
+import { PuppetLoomError } from "./errors.js";
+import { importPsd } from "./psd.js";
+import { copyRegisteredAsset } from "./asset-workflow.js";
 import type {
   CalibrationOverrides,
   LayerBinding,
@@ -80,6 +83,21 @@ export async function migrateProject(options: MigrationOptions): Promise<Migrati
     loadBaseProject(sourceDirectory),
     loadCalibration(sourceDirectory)
   ]);
+  const warnings: string[] = [];
+  if (sourceBase.layers.some((layer) => !layer.sourceLayerId)) {
+    try {
+      const sourcePsd = resolve(sourceDirectory, sourceBase.source.psdPath);
+      if (await fileSha256(sourcePsd) !== sourceBase.source.psdSha256) throw new Error("源 PSD 与项目保存的哈希不一致");
+      const imported = await importPsd(sourcePsd);
+      for (const layer of sourceBase.layers) {
+        if (layer.sourceLayerId) continue;
+        const candidates = imported.layers.filter((candidate) => candidate.id === layer.id && sourcePathKey(candidate.sourcePath) === sourcePathKey(layer.sourcePath));
+        if (candidates.length === 1 && candidates[0]!.sourceLayerId) layer.sourceLayerId = candidates[0]!.sourceLayerId;
+      }
+    } catch (error) {
+      warnings.push(`旧项目的原生图层身份无法补读，继续使用可证明的路径匹配：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   await createProject({
     input: resolve(options.input),
     output: outputDirectory,
@@ -89,28 +107,54 @@ export async function migrateProject(options: MigrationOptions): Promise<Migrati
   });
   const targetBase = await loadBaseProject(outputDirectory);
   const targetByPath = new Map<string, LayerBinding[]>();
+  const targetBySourceId = new Map<string, LayerBinding[]>();
+  const sourceIdCounts = new Map<string, number>();
+  for (const layer of sourceBase.layers) if (layer.sourceLayerId) sourceIdCounts.set(layer.sourceLayerId, (sourceIdCounts.get(layer.sourceLayerId) ?? 0) + 1);
   for (const layer of targetBase.layers) {
     const key = sourcePathKey(layer.sourcePath);
     targetByPath.set(key, [...(targetByPath.get(key) ?? []), layer]);
+    if (layer.sourceLayerId) targetBySourceId.set(layer.sourceLayerId, [...(targetBySourceId.get(layer.sourceLayerId) ?? []), layer]);
+  }
+
+  const explicit = options.layerMapping ?? {};
+  if (Object.keys(explicit).some((id) => !sourceBase.layers.some((layer) => layer.id === id))
+    || Object.values(explicit).some((id) => typeof id !== "string" || !targetBase.layers.some((layer) => layer.id === id))
+    || new Set(Object.values(explicit)).size !== Object.values(explicit).length) {
+    throw new PuppetLoomError("INVALID_INPUT", "layerMapping 必须是已有旧图层到已有新图层的一对一映射。" );
   }
 
   const idMapping = new Map<string, string>();
   const statuses = new Map<string, MigrationLayerMatch["status"]>();
+  const matchedBy = new Map<string, NonNullable<MigrationLayerMatch["matchedBy"]>>();
   const sameCanvas = sourceBase.canvas.width === targetBase.canvas.width && sourceBase.canvas.height === targetBase.canvas.height;
   for (const sourceLayer of sourceBase.layers) {
-    const candidates = targetByPath.get(sourcePathKey(sourceLayer.sourcePath)) ?? [];
+    const sourceIdCandidates = sourceLayer.sourceLayerId ? targetBySourceId.get(sourceLayer.sourceLayerId) : undefined;
+    const by = explicit[sourceLayer.id] ? "explicit" : sourceIdCandidates ? "source-id" : "path";
+    const candidates = by === "explicit" ? targetBase.layers.filter((layer) => layer.id === explicit[sourceLayer.id])
+      : by === "source-id" ? sourceIdCandidates!
+      : (targetByPath.get(sourcePathKey(sourceLayer.sourcePath)) ?? []).filter((target) => !sourceLayer.sourceLayerId || !target.sourceLayerId || target.sourceLayerId === sourceLayer.sourceLayerId);
+    if (by === "source-id" && sourceIdCounts.get(sourceLayer.sourceLayerId!) !== 1) { statuses.set(sourceLayer.id, "ambiguous"); continue; }
     if (candidates.length === 1) {
       const target = candidates[0]!;
       idMapping.set(sourceLayer.id, target.id);
-      const exact = sameCanvas
+      matchedBy.set(sourceLayer.id, by);
+      const sameGeometry = sameCanvas
         && sameRect(sourceLayer.bounds, target.bounds)
-        && sameMeshLayout(sourceLayer.mesh, target.mesh)
-        && await fileSha256(join(sourceDirectory, sourceLayer.texture)) === await fileSha256(join(outputDirectory, target.texture));
-      statuses.set(sourceLayer.id, exact ? "exact" : "geometry-changed");
+        && sameMeshLayout(sourceLayer.mesh, target.mesh);
+      const sameTexture = await fileSha256(join(sourceDirectory, sourceLayer.texture)) === await fileSha256(join(outputDirectory, target.texture));
+      statuses.set(sourceLayer.id, sameGeometry ? sameTexture ? "exact" : "texture-changed" : "geometry-changed");
     } else statuses.set(sourceLayer.id, candidates.length === 0 ? "missing" : "ambiguous");
   }
 
-  const warnings: string[] = [];
+  // Automatic matches must also be injective; explicit ownership wins over a fallback match.
+  for (const target of new Set(idMapping.values())) {
+    const sources = [...idMapping].filter(([, id]) => id === target).map(([id]) => id);
+    if (sources.length < 2) continue;
+    for (const source of sources) if (matchedBy.get(source) !== "explicit") {
+      idMapping.delete(source); matchedBy.delete(source); statuses.set(source, "ambiguous");
+    }
+  }
+
   const migratedLayers: NonNullable<CalibrationOverrides["layers"]> = {};
   const mapping: MigrationLayerMatch[] = sourceBase.layers.map((sourceLayer) => {
     const status = statuses.get(sourceLayer.id) ?? "missing";
@@ -119,7 +163,7 @@ export async function migrateProject(options: MigrationOptions): Promise<Migrati
     let migratedFields: string[] = [];
     let skippedFields: string[] = [];
     if (original && targetLayerId) {
-      const candidate = status === "exact" ? clone(original) : conservativeOverride(original);
+      const candidate = status === "exact" || status === "texture-changed" ? clone(original) : conservativeOverride(original);
       const remapped = remapParent(candidate, idMapping, warnings, sourceLayer);
       migratedFields = fields(remapped);
       skippedFields = fields(original).filter((field) => !migratedFields.includes(field));
@@ -136,14 +180,67 @@ export async function migrateProject(options: MigrationOptions): Promise<Migrati
       ...(targetLayerId ? { targetLayerId } : {}),
       sourcePath: sourceLayer.sourcePath,
       status,
+      ...(matchedBy.has(sourceLayer.id) ? { matchedBy: matchedBy.get(sourceLayer.id)! } : {}),
+      ...(targetLayerId ? { renamed: sourcePathKey(sourceLayer.sourcePath) !== sourcePathKey(targetBase.layers.find((layer) => layer.id === targetLayerId)!.sourcePath) } : {}),
       migratedFields,
       skippedFields
     };
   });
 
   const allGeometryExact = sameCanvas
-    && sourceBase.layers.every((layer) => statuses.get(layer.id) === "exact");
+    && sourceBase.layers.every((layer) => statuses.get(layer.id) === "exact" || statuses.get(layer.id) === "texture-changed");
+  const skippedBindingIds: string[] = [];
+  const assetLayers: NonNullable<CalibrationOverrides["assetLayers"]> = {};
+  const sourceAssets = sourceCalibration.overrides.assetLayers ?? {};
+  const pendingAssets = new Map(Object.entries(sourceAssets));
+  // Resolve dependencies before their consumers; missing or cyclic relationships stay unadopted.
+  while (pendingAssets.size > 0) {
+    let progressed = false;
+    for (const [id, asset] of pendingAssets) {
+      if (!sameCanvas || !asset.generatedAsset) continue;
+      const references = [asset.generatedAsset.templateLayerId, asset.parentLayerId, asset.clipLayerId].filter((value): value is string => Boolean(value));
+      if (!references.every((reference) => idMapping.has(reference) && ["exact", "texture-changed"].includes(statuses.get(reference) ?? ""))) continue;
+      if (targetBase.layers.some((layer) => layer.id === id)) continue;
+      const adopted = clone(asset);
+      adopted.generatedAsset!.templateLayerId = idMapping.get(asset.generatedAsset.templateLayerId)!;
+      if (asset.parentLayerId) adopted.parentLayerId = idMapping.get(asset.parentLayerId)!;
+      if (asset.clipLayerId) adopted.clipLayerId = idMapping.get(asset.clipLayerId)!;
+      await copyRegisteredAsset(sourceDirectory, outputDirectory, asset.generatedAsset.registrationId);
+      assetLayers[id] = adopted;
+      idMapping.set(id, id); statuses.set(id, "exact");
+      const override = sourceCalibration.overrides.layers?.[id];
+      if (override) migratedLayers[id] = remapParent(override, idMapping, warnings, asset);
+      mapping.push({ sourceLayerId: id, targetLayerId: id, sourcePath: asset.sourcePath, status: "exact", migratedFields: ["assetLayer", ...fields(override ?? {})], skippedFields: [] });
+      pendingAssets.delete(id); progressed = true;
+    }
+    if (!progressed) break;
+  }
+  for (const [id, asset] of pendingAssets) {
+    mapping.push({ sourceLayerId: id, sourcePath: asset.sourcePath, status: "geometry-changed", migratedFields: [], skippedFields: ["assetLayer", ...fields(sourceCalibration.overrides.layers?.[id] ?? {})] });
+    warnings.push(`补件 ${asset.sourceName} 的原画或连接关系不再兼容，未自动迁移；需要重新配准。`);
+    // Do not leave the source artwork hidden when its replacement could not migrate.
+    const targetTemplate = asset.generatedAsset && idMapping.get(asset.generatedAsset.templateLayerId);
+    if (targetTemplate && migratedLayers[targetTemplate]?.visible === false) delete migratedLayers[targetTemplate]!.visible;
+  }
+  const migratedModel = sourceCalibration.overrides.model ? clone(sourceCalibration.overrides.model) : undefined;
+  if (migratedModel) {
+    migratedModel.bindings = migratedModel.bindings.flatMap((binding) => {
+      const targetId = binding.target.kind === "layer" ? idMapping.get(binding.target.id) : binding.target.id;
+      const compatible = binding.target.kind === "layer"
+        ? targetId && ["exact", "texture-changed"].includes(statuses.get(binding.target.id) ?? "")
+        : allGeometryExact;
+      if (!compatible) { skippedBindingIds.push(binding.id); return []; }
+      return [{ ...binding, target: { ...binding.target, id: targetId! } }];
+    });
+    if (!sameCanvas) {
+      migratedModel.deformers = [];
+      for (const override of Object.values(migratedLayers)) delete override.deformerId;
+    }
+    if (skippedBindingIds.length) warnings.push(`几何或目标身份不能证明兼容，未迁移绑定：${skippedBindingIds.join("、")}；参数、表情和动作仍保留。`);
+  }
   const overrides: CalibrationOverrides = {
+    ...(Object.keys(assetLayers).length > 0 ? { assetLayers } : {}),
+    ...(migratedModel ? { model: migratedModel } : {}),
     ...(Object.keys(migratedLayers).length > 0 ? { layers: migratedLayers } : {}),
     ...(sourceCalibration.overrides.runtime ? { runtime: clone(sourceCalibration.overrides.runtime) } : {}),
     ...(allGeometryExact && sourceCalibration.overrides.anchors ? { anchors: clone(sourceCalibration.overrides.anchors) } : {}),
@@ -175,7 +272,9 @@ export async function migrateProject(options: MigrationOptions): Promise<Migrati
     mapping,
     warnings,
     patchPath,
-    reportPath
+    reportPath,
+    addedLayerIds: targetBase.layers.filter((layer) => ![...idMapping.values()].includes(layer.id)).map((layer) => layer.id),
+    skippedBindingIds
   };
   await writeFile(reportPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return result;

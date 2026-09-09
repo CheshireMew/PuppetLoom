@@ -1,4 +1,6 @@
 import { parsePuppetLoomProject } from "./project-format.js";
+import { transformKeyform } from "./geometry-edit.js";
+import { sampleBindingKeyform } from "./model.js";
 import type {
   AuthoringAudit,
   AuthoringOperation,
@@ -68,6 +70,23 @@ function moveLayer(project: PuppetLoomProject, operation: Extract<AuthoringOpera
 export function applyAuthoringOperations(project: PuppetLoomProject, operations: AuthoringOperation[]): PuppetLoomProject {
   const next = clone(parsePuppetLoomProject(project));
   for (const operation of operations) {
+    if (operation.op === "insert-binding-key") {
+      const binding = requireExisting(next.model.bindings, operation.bindingId, "绑定");
+      const axis = binding.parameterIds.indexOf(operation.parameterId);
+      if (axis < 0) throw new Error(`绑定 ${binding.id} 不包含参数 ${operation.parameterId}。`);
+      const parameter = requireExisting(next.model.parameters, operation.parameterId, "参数");
+      if (!Number.isFinite(operation.value) || operation.value < parameter.min || operation.value > parameter.max) throw new Error("插入值超出参数范围。" );
+      if (binding.keyforms.some((keyform) => keyform.values[axis] === operation.value)) continue;
+      const otherValues = binding.parameterIds.length === 1 ? [0] : [...new Set(binding.keyforms.map((keyform) => keyform.values[1 - axis]!))];
+      const additions = otherValues.map((other) => sampleBindingKeyform(binding, binding.parameterIds.length === 1 ? [operation.value] : axis === 0 ? [operation.value, other] : [other, operation.value]));
+      // Replace the binding identity so cached interpolation indexes cannot describe the old grid.
+      upsertById(next.model.bindings, { ...binding, keyforms: [...binding.keyforms, ...additions] });
+      continue;
+    }
+    if (operation.op === "transform-keyform") {
+      transformKeyform(next, operation);
+      continue;
+    }
     if (operation.op === "upsert-parameter") {
       upsertById(next.model.parameters, operation.parameter);
       continue;
@@ -107,6 +126,13 @@ export function applyAuthoringOperations(project: PuppetLoomProject, operations:
       next.model.deformers = next.model.deformers.filter((deformer) => !removedIds.has(deformer.id));
       next.model.bindings = next.model.bindings.filter((binding) => binding.target.kind !== "deformer" || !removedIds.has(binding.target.id));
       for (const layer of next.layers) if (layer.deformerId && removedIds.has(layer.deformerId)) delete layer.deformerId;
+      continue;
+    }
+    if (operation.op === "set-layer-head-pose") {
+      const layer = next.layers.find((candidate) => candidate.id === operation.layerId);
+      if (!layer) throw new Error(`图层不存在：${operation.layerId}`);
+      if (operation.mode === "keyforms") layer.headPoseMode = "keyforms";
+      else delete layer.headPoseMode;
       continue;
     }
     if (operation.op === "set-layer-deformer") {
@@ -198,6 +224,7 @@ function validatePreviews(previews: AuthoringPreview[], projects: PuppetLoomProj
 }
 
 function bindingFromOperation(operation: AuthoringOperation, before: PuppetLoomProject): ModelBinding | undefined {
+  if (operation.op === "insert-binding-key") return before.model.bindings.find((binding) => binding.id === operation.bindingId);
   if (operation.op === "upsert-binding") return operation.binding;
   if (operation.op === "remove-binding") return before.model.bindings.find((binding) => binding.id === operation.id);
   return undefined;
@@ -222,8 +249,14 @@ function behaviorFromOperation(operation: AuthoringOperation, before: PuppetLoom
 }
 
 export function buildAuthoringAudit(patch: AuthoringPatch, before: PuppetLoomProject, after: PuppetLoomProject): AuthoringAudit {
+  before = parsePuppetLoomProject(before);
+  after = parsePuppetLoomProject(after);
   const explicit = patch.previews ?? [];
   const inferred = explicit.length > 0 ? [] : patch.operations.flatMap((operation, index) => {
+    if (operation.op === "transform-keyform") {
+      const binding = after.model.bindings.find((candidate) => candidate.id === operation.bindingId)!;
+      return [{ id: previewId(`op-${index + 1}-${binding.id}`), label: `${binding.id} · ${operation.values.join(", ")}`, parameters: Object.fromEntries(binding.parameterIds.map((id, axis) => [id, operation.values[axis]!])) }];
+    }
     const binding = bindingFromOperation(operation, before);
     if (binding) return bindingPreviews(binding, `op-${index + 1}`);
     const expression = expressionFromOperation(operation, before);
@@ -260,7 +293,23 @@ export function buildAuthoringAudit(patch: AuthoringPatch, before: PuppetLoomPro
     behavior: preview.behavior,
     settleSeconds: preview.settleSeconds
   })) === index).slice(0, 12);
-  return { version: 1, operations: clone(patch.operations), previews: validatePreviews(deduplicated, [before, after]) };
+  const changes: NonNullable<AuthoringAudit["changes"]> = [];
+  const content = (value: unknown) => JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+  for (const collection of ["parameters", "deformers", "bindings", "expressions", "physics", "behaviors", "layers"] as const) {
+    const oldValues = collection === "layers" ? before.layers : before.model[collection];
+    const newValues = collection === "layers" ? after.layers : after.model[collection];
+    const previous = new Map(oldValues.map((value) => [value.id, value as unknown as Record<string, unknown>]));
+    const current = new Map(newValues.map((value) => [value.id, value as unknown as Record<string, unknown>]));
+    for (const id of new Set([...previous.keys(), ...current.keys()])) {
+      const oldValue = previous.get(id), newValue = current.get(id);
+      const fields = [...new Set([...Object.keys(oldValue ?? {}), ...Object.keys(newValue ?? {})])]
+        .filter((field) => content(oldValue?.[field]) !== content(newValue?.[field])).sort();
+      if (fields.length) changes.push({ collection, id, kind: !oldValue ? "added" : !newValue ? "removed" : "updated", fields });
+    }
+  }
+  return { version: 1, operations: clone(patch.operations), previews: validatePreviews(deduplicated, [before, after]), changes };
 }
 
 export function authoringLayerOverrides(before: PuppetLoomProject, after: PuppetLoomProject): Record<string, LayerCalibrationOverride> {
@@ -269,6 +318,7 @@ export function authoringLayerOverrides(before: PuppetLoomProject, after: Puppet
     if (!previous) return [];
     const override: LayerCalibrationOverride = {};
     if (previous.deformerId !== layer.deformerId) override.deformerId = layer.deformerId ?? null;
+    if (previous.headPoseMode !== layer.headPoseMode) override.headPoseMode = layer.headPoseMode ?? null;
     if (previous.order !== layer.order) override.order = layer.order;
     return Object.keys(override).length > 0 ? [[layer.id, override]] : [];
   }));

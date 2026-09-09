@@ -4,6 +4,10 @@
 
 ## 顶层字段
 
+眼部图层可选 `blinkMode: "geometry" | "texture"`。`geometry` 表示闭合由可编辑关键形驱动，眼白、虹膜和睫毛保持自身不透明度，虹膜由 `clipLayerId` 指向眼白；同模式的 `eyeClosed` 补充图不显示，也不叠加旧程序压缩。`texture` 或未指定时保留原有压缩和闭眼图淡入淡出。校准可写入或清除 `blinkMode`、`clipLayerId`，并可通过 `runtime.features.blink/asymmetricBlink` 启停眼部功能。仅设置模式不会自动生成关键形，应使用眼部制作入口或同时提供完整绑定和遮罩。
+
+图层绑定也可带 `blinkMode` 条件。条件与目标图层的模式不同则暂不参与计算，关键形仍保留。自动眼部制作生成 `blinkMode: "geometry"` 的绑定，因此切回贴图模式不叠加几何闭合，恢复几何模式时重用原关键形。没有条件的旧绑定不受此规则影响。
+
 | 字段 | 含义 |
 | --- | --- |
 | `version` | 项目格式版本，当前为 `4` |
@@ -21,6 +25,8 @@
 所有几何坐标在运行项目中归一化为 `0..1`，原点位于画面左上角，X 向右、Y 向下。图层 `side` 始终表示角色自身的解剖学左右，因此正面角色的 `left` 通常显示在画面右侧；画面左右会明确写成 screen-left 或 screen-right。纹理和源文件路径使用项目目录内的正斜杠相对路径。
 
 ## 运行姿态字段
+
+图层可选 `headPoseMode: "keyforms"`，表示完整左右/上下转头由该层唯一的 yaw/pitch 双参数关键形负责，跳过程序化 yaw/pitch。局部表情先计算，再通过头部关键形构成的网格表面传递，避免把睁眼时的转头位移直接加到闭眼顶点上。歪头、身体、视线和次级运动仍保留。`author apply` 的 `set-layer-head-pose` 操作以 `mode: "keyforms"` 启用，以 `mode: "procedural"` 清除字段；清除字段不删除关键形。只有完整关键形准备好才启用，不能把局部修形误当作完整头部。程序化头脸制作入口遇到该模式会说明应编辑现有关键形，不再用无效的投影参数变更报告成功。
 
 新建且能可靠定位脸部的语义项目使用 `runtime.profile: "coherent-v3"`。`runtime.poseField` 保存由角色关键点推导的脸部与头骨中心、横纵半径、最大 yaw/pitch 角度、透视强度，以及可选的轮廓和语义深度强度。`faceDepthProfile` 用从脸顶到脸底的标准位置保存额头、鼻根、鼻尖、上唇、下唇和下巴六个语义深度点；它只参与非中立姿态的 Z 投影。`runtime.poseOcclusion` 保存外围远侧部件开始淡出的 yaw 阈值、耳朵/侧发的最低透明度，以及侧发是否按转向交换前后深度。旧格式中的 `farEyeOpacity` 与 `farBrowOpacity` 字段继续解析，但运行时固定按 1 处理，防止浅色脸底透出形成白雾。可选的 `runtime.torsoVolumeProfile` 用肩线到髋线的四个语义点描述角色或服装确实需要的侧面体积，不自动套用统一身体假设。没有显式字段的旧姿势场使用稳定默认值，不会改写项目。`runtime.semanticCage` 保存 23 个标准化控制点、脸部与头骨三角形、受作用语义组，以及定位后的检查、修正和综合置信度。运行时让脸型与五官使用脸部控制网，让头发、耳朵和头饰使用头骨控制网；两者共享头部根节点，再按语义深度和局部权重混合。
 
@@ -85,7 +91,7 @@
 
 桌面编辑器和 CLI 都会在 `reports/calibration/<operation-id>/evidence/` 生成同一份视觉证据：九个主姿态、九个次级运动、authoring 补丁涉及的关键形态/表情/物理/行为预览、`before-after.png`、`difference.png` 与机器可读哈希清单。离线证据与 WebGL 播放共用参数求值、变形器、图层顺序、表情透明度和混合模式约定，并按裁剪纹理的真实 Alpha 生成蒙版。项目级校准记录是对当前角色的事实；只有多个项目反复出现并经过复核的问题，才应进入自动绑定算法或 Agent Skill 的通用规则。
 
-源 PSD 更新使用 `migrate` 创建新项目目录，旧项目保持不变。新项目的 `reports/migration.json` 保存按 `sourcePath` 建立的图层映射、兼容等级、已迁移字段、跳过字段和警告；`reports/migration-patch.json` 保存提议补丁。范围或画布变化时，绝对锚点、语义点、轴心、次级锚点和稀疏顶点不会被静默迁移。
+源 PSD 更新使用 `migrate` 创建新项目目录，旧项目保持不变。新项目的 `reports/migration.json` 保存按明确映射、原生图层身份或唯一 `sourcePath` 建立的图层映射、兼容等级、已迁移字段、跳过字段和警告；`reports/migration-patch.json` 保存提议补丁。范围或画布变化时，绝对锚点、语义点、轴心、次级锚点和稀疏顶点不会被静默迁移。
 
 ## 补充素材请求
 
@@ -107,3 +113,14 @@
 - `source/source.psd` 和纹理是项目可复现依据，不应依赖仓库外绝对路径。
 - 项目目录无需打包即可复制；复制后相对路径继续有效。
 - `export` 会把当前有效修订烘焙为另一个经过 `verify` 的普通项目目录，revision 从 0 重新开始；它不压缩、不覆盖已有目录，来源 revision 写入 `reports/portable-export.json`。
+## 原画更新身份
+
+新导入图层可保存 `sourceLayerId`：它来自 PSD 原生图层 ID，自动拆分的部件附加确定的拆分后缀。这个身份只在同一原画的更新链内解释；它不替代 PuppetLoom 图层 ID。迁移优先使用原生身份，缺少身份时使用唯一源路径；重复或冲突不能自动合并。旧项目可从与保存哈希一致的源 PSD 补读原生身份，不改写旧项目。
+
+迁移报告区分 `exact`、`texture-changed`、`geometry-changed`、`missing` 和 `ambiguous`，另外记录匹配依据、改名、新增图层和跳过的绑定。仅颜色改变且画布、范围与网格一致时，允许保留几何校准和参数关键形；目标图层 ID 随映射更新。`migrate --mapping` 可提供明确的一对一图层映射。不能证明兼容的几何绑定会被报告并跳过，不把“创建了新项目”当作全部制作成果已迁移。
+
+## 补件资源与历史
+
+`assets/references`、`assets/registrations` 和 `assets/assemblies` 保存以内容 SHA-256 为 ID 的不可变 JSON。原始 PNG 位于 `assets/originals`，配准纹理位于 `textures/assets`；准备参考产生的干净图、上下文和标注图位于 `assets/images`。补件的 `generatedAsset` 记录 referenceId、registrationId、原始 imageSha256 与 templateLayerId，不伪造 PSD 原生图层身份。
+
+补件完整图层快照保存在现有 `calibration.overrides.assetLayers`，先插入图层再应用普通图层覆盖；关键形仍在同一 `overrides.model`。恢复历史会恢复相应图层集合，不删除原始素材和试装记录。迁移在画布、原画和连接关系兼容时复制补件及其来源资源；不兼容时记录跳过项并恢复被替换源图的可见性，供重新配准。没有新增独立的活动状态指针。

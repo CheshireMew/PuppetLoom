@@ -6,6 +6,7 @@ import { assetRequestDocumentSchema, calibrationDocumentSchema } from "./schema.
 import { parsePuppetLoomProject } from "./project-format.js";
 import { PUPPETLOOM_PROJECT_VERSION } from "./types.js";
 import { makeGridMesh } from "./rig.js";
+import { makeAdaptiveMesh } from "./art-mesh.js";
 import type { AssetRequest, AssetRequestDocument, EnhanceOptions, EnhanceResult, LayerBinding, PuppetLoomProject, Rect } from "./types.js";
 
 function paddedCrop(bounds: Rect, canvas: { width: number; height: number }): Rect {
@@ -29,6 +30,7 @@ export function makeAssetRequests(project: PuppetLoomProject, options: AssetRequ
     if (project.layers.some((layer) => layer.role === "eyeClosed" && layer.side === side)) continue;
     const sourceLayers = project.layers.filter((layer) => (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && layer.side === side);
     if (sourceLayers.length === 0) continue;
+    if (sourceLayers.every((layer) => layer.blinkMode === "geometry")) continue;
     const normalized = sourceLayers.reduce(
       (rect, layer) => ({
         x: Math.min(rect.x, layer.bounds.x),
@@ -178,7 +180,7 @@ async function loadProjectAndRequests(projectDirectory: string): Promise<{ proje
   return { project, requests };
 }
 
-function supplementalLayer(request: AssetRequest, project: PuppetLoomProject, existing: LayerBinding): LayerBinding {
+function supplementalLayer(request: AssetRequest, project: PuppetLoomProject, existing: LayerBinding, pixels: import("./psd.js").PixelBuffer): LayerBinding {
   const bounds = {
     x: request.crop.x / project.canvas.width,
     y: request.crop.y / project.canvas.height,
@@ -199,7 +201,7 @@ function supplementalLayer(request: AssetRequest, project: PuppetLoomProject, ex
     bounds,
     texture: request.output.path,
     pivot: request.kind === "closed-eye" ? { ...existing.pivot } : { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.5 },
-    mesh: makeGridMesh(bounds, 4, 4),
+    mesh: request.kind === "closed-eye" ? makeAdaptiveMesh({ bounds, pixels, detail: 4, fallbackRows: 4, fallbackCols: 4 }) : makeGridMesh(bounds, 4, 4),
     weights: { head: 1, body: 0, gaze: 0, physics: 0 },
     ...(request.kind === "mouth-shape" && request.variant ? { mouthVariant: request.variant } : {}),
     parentGroup: "head"
@@ -254,7 +256,7 @@ export async function enhanceProject(options: EnhanceOptions): Promise<EnhanceRe
       const target = join(projectDirectory, request.output.path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(candidate, target);
-      layers.push(supplementalLayer(request, project, existing));
+      layers.push(supplementalLayer(request, project, existing, { width: info.width, height: info.height, data: new Uint8ClampedArray(data) }));
       accepted.push(request.id);
     } catch (error) {
       rejected.push({ requestId: request.id, reason: error instanceof Error ? error.message : "无法读取补充素材。" });

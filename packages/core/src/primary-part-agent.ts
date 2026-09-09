@@ -1,4 +1,5 @@
 import { applyAuthoringOperations } from "./authoring.js";
+import { prepareEyeClosure } from "./eye-closure-proposal.js";
 import { makeAssetRequests } from "./assets.js";
 import { applyCalibrationOverrides } from "./calibration.js";
 import { deformedPoints, deformPoint, neutralMotionState } from "./deform.js";
@@ -61,6 +62,7 @@ export interface PrimaryPartAgentPlan {
   intent: PrimaryPartIntent;
   operations: Array<{ op: AuthoringOperation["op"]; id: string }>;
   checks: ModelAgentCheck[];
+  measurements: PrimaryPartMeasurement[];
   repairs: ModelAgentRepair[];
   assetRequests: AssetRequest[];
   draft: { found: boolean; compatible: boolean; blockers: string[] };
@@ -79,6 +81,8 @@ export interface PrimaryPartAgentRunResult {
   targetLayerIds: string[];
   adoptedDraftRevision?: number;
   checks: ModelAgentCheck[];
+  visualReview: "unreviewed";
+  measurements: PrimaryPartMeasurement[];
   repairs: ModelAgentRepair[];
   reportPath?: string;
   comparisonSheet?: string;
@@ -94,8 +98,16 @@ interface PreparedPrimaryProposal {
   previews: AuthoringPreview[];
   overrides: CalibrationOverrides;
   checks: ModelAgentCheck[];
+  measurements: PrimaryPartMeasurement[];
   repairs: ModelAgentRepair[];
   assetRequests: AssetRequest[];
+}
+
+/** Descriptive measurements, never a prescription for a character's proportions. */
+export interface PrimaryPartMeasurement {
+  id: string;
+  label: string;
+  values: Record<string, number | boolean>;
 }
 
 const roles: Record<PrimaryModelAgentPart, SemanticRole[]> = {
@@ -166,9 +178,11 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
   }
   if (part === "headFace") {
     const degreesToRadians = (degrees: number): number => degrees * Math.PI / 180;
-    const yawDegrees = clamp(intent.yawDegrees ?? 12, 10, 25);
-    const pitchUpDegrees = clamp(intent.pitchUpDegrees ?? 12, 8, 20);
-    const pitchDownDegrees = clamp(intent.pitchDownDegrees ?? 14, 8, 20);
+    const field = project.runtime.poseField;
+    const toDegrees = (radians: number | undefined, fallback: number) => radians === undefined ? fallback : radians * 180 / Math.PI;
+    const yawDegrees = clamp(intent.yawDegrees ?? toDegrees(field?.maxYawRadians, 12), 0, 25);
+    const pitchUpDegrees = clamp(intent.pitchUpDegrees ?? toDegrees(field?.maxPitchUpRadians ?? field?.maxPitchRadians, 12), 0, 20);
+    const pitchDownDegrees = clamp(intent.pitchDownDegrees ?? toDegrees(field?.maxPitchDownRadians ?? field?.maxPitchRadians, 14), 0, 20);
     return {
       model: {
         // Head/face work is additive. It may update the shared pose field below,
@@ -191,9 +205,9 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
             maxPitchRadians: rounded(degreesToRadians(Math.max(pitchUpDegrees, pitchDownDegrees))),
             maxPitchUpRadians: rounded(degreesToRadians(pitchUpDegrees)),
             maxPitchDownRadians: rounded(degreesToRadians(pitchDownDegrees)),
-            perspective: rounded(clamp(Math.max(project.runtime.poseField.perspective, 0.12), 0.1, 0.18)),
-            contourStrength: rounded(clamp(intent.contourStrength ?? 1, 0.4, 1.6)),
-            depthStrength: rounded(clamp(intent.depthStrength ?? 1, 0.4, 1.6))
+            perspective: project.runtime.poseField.perspective,
+            contourStrength: rounded(clamp(intent.contourStrength ?? field?.contourStrength ?? 1, 0, 1.6)),
+            depthStrength: rounded(clamp(intent.depthStrength ?? field?.depthStrength ?? 1, 0, 1.6))
           }
         } : {}),
         poseOcclusion: {
@@ -248,7 +262,8 @@ function layerOverrides(part: PrimaryModelAgentPart, project: PuppetLoomProject,
 function operationsFor(part: PrimaryModelAgentPart, project: PuppetLoomProject): AuthoringOperation[] {
   if (part === "eyes") return [{
     op: "upsert-expression",
-    expression: { id: "agent-eyes-closed", name: "自然闭眼", parameters: { "param-blink": 1 } }
+    expression: project.model.expressions.find(expression => expression.id === "agent-eyes-closed")
+      ?? { id: "agent-eyes-closed", name: "闭眼", parameters: { "param-blink": 1 } }
   }];
   if (part === "mouth") {
     const hasSlight = project.layers.some((layer) => layer.role === "mouth" && layer.mouthVariant === "slight" && layer.visible !== false);
@@ -400,69 +415,26 @@ function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, propo
     }
   ];
   if (part === "headFace") {
-    const movement = Math.max(stateMovement(proposed, layers, safetyPoseState(-1, 0, 0)), stateMovement(proposed, layers, safetyPoseState(1, 0, 0)));
-    const geometry = headPoseGeometry(proposed);
-    const faceLayerCount = before.layers.filter((layer) => layer.role === "face").length;
-    const materialYawLimit = faceLayerCount <= 1 ? 12 : 20;
-    const requestedYawDegrees = (proposed.runtime.poseField?.maxYawRadians ?? 0) * 180 / Math.PI;
-    checks.push({
-      id: "head-material-yaw-limit",
-      label: "侧转幅度没有超过现有脸部素材能够支持的范围",
-      // The stored radians are rounded for deterministic JSON. Converting the
-      // 12° boundary back to degrees can therefore be a few ten-thousandths
-      // above 12 even though the requested intent is exactly at the limit.
-      passed: requestedYawDegrees <= materialYawLimit + 0.001,
-      details: { faceLayerCount, requestedYawDegrees: rounded(requestedYawDegrees, 4), materialYawLimit }
-    });
-    checks.push({ id: "head-turn-visible", label: "头脸九向变化可见且不过量", passed: movement >= 0.002 && movement <= 0.085, details: { maximumMovement: rounded(movement, 8) } });
     checks.push({ id: "nine-pose", label: "九向头部检查全部通过", passed: previewsFor(part, proposed).every((preview) => validatePose(proposed, preview.id, {
       ...neutralMotionState,
       headYaw: preview.parameters?.["param-head-yaw"] ?? 0,
       headPitch: preview.parameters?.["param-head-pitch"] ?? 0
     }).passed), details: { poseCount: 9 } });
-    if (geometry.available) {
-      checks.push({
-        id: "head-turn-balance",
-        label: "左右转头幅度平衡，同时保留角色原本的不对称",
-        passed: geometry.turnBalanceError <= 0.18,
-        details: { turnBalanceError: rounded(geometry.turnBalanceError, 8), nearFarEyeRatio: rounded(geometry.nearFarEyeRatio, 6) }
-      });
-      checks.push({
-        id: "head-yaw-perspective",
-        label: "侧转时近眼大于远眼且差异克制",
-        passed: geometry.nearFarEyeRatio >= 1.05 && geometry.nearFarEyeRatio <= 1.25,
-        details: { nearFarEyeRatio: rounded(geometry.nearFarEyeRatio, 6) }
-      });
-      checks.push({
-        id: "head-pitch-volume",
-        label: "抬头展开下半脸并压缩头顶，低头执行相反透视",
-        passed: geometry.upLowerFaceRatio >= 1.05
-          && geometry.upLowerFaceRatio <= 1.25
-          && geometry.downLowerFaceRatio >= 0.75
-          && geometry.downLowerFaceRatio <= 0.95
-          && (!geometry.crownAvailable || (geometry.upCrownRatio >= 0.86
-            && geometry.upCrownRatio <= 0.97
-            && geometry.downCrownRatio >= 1.04
-            && geometry.downCrownRatio <= 1.16)),
-        details: {
-          upLowerFaceRatio: rounded(geometry.upLowerFaceRatio, 6),
-          downLowerFaceRatio: rounded(geometry.downLowerFaceRatio, 6),
-          upCrownRatio: rounded(geometry.upCrownRatio, 6),
-          downCrownRatio: rounded(geometry.downCrownRatio, 6)
-        }
-      });
-    }
   }
   if (part === "eyes") {
     const irises = layers.filter((layer) => layer.role === "iris");
     const left = stateMovement(proposed, irises, { ...neutralMotionState, gazeX: -1 });
     const right = stateMovement(proposed, irises, { ...neutralMotionState, gazeX: 1 });
-    const openVisible = layers.filter((layer) => ["eyeWhite", "iris", "eyelash"].includes(layer.role)).every((layer) => authoredOpacityFor(proposed, layer, { ...neutralMotionState, blink: 0 }) > 0 && authoredOpacityFor(proposed, layer, { ...neutralMotionState, blink: 1 }) === 0);
+    const geometry = layers.filter((layer) => ["eyeWhite", "iris", "eyelash"].includes(layer.role)).every((layer) => layer.blinkMode === "geometry");
+    const openVisible = layers.filter((layer) => ["eyeWhite", "iris", "eyelash"].includes(layer.role)).every((layer) => authoredOpacityFor(proposed, layer, { ...neutralMotionState, blink: 0 }) > 0 && (geometry || authoredOpacityFor(proposed, layer, { ...neutralMotionState, blink: 1 }) === 0));
     const closed = layers.filter((layer) => layer.role === "eyeClosed");
     const closedVisible = closed.length >= 2 && closed.every((layer) => authoredOpacityFor(proposed, layer, { ...neutralMotionState, blink: 0 }) === 0 && authoredOpacityFor(proposed, layer, { ...neutralMotionState, blink: 1 }) > 0);
-    checks.push({ id: "eye-assets", label: "左右闭眼素材完整", passed: assets.length === 0 && proposed.runtime.features.blink, details: { missingAssetCount: assets.length, closedEyeLayerCount: closed.length } });
+    checks.push({ id: "eye-assets", label: geometry ? "原眼部素材用于几何闭合" : "左右闭眼素材完整", passed: assets.length === 0 && proposed.runtime.features.blink, details: { missingAssetCount: assets.length, closedEyeLayerCount: closed.length } });
     checks.push({ id: "gaze", label: "双眼视线可跟随且范围克制", passed: irises.length >= 2 && left >= 0.0008 && right >= 0.0008 && Math.max(left, right) <= 0.012, details: { irisCount: irises.length, leftMovement: rounded(left, 8), rightMovement: rounded(right, 8) } });
-    checks.push({ id: "blink-composite", label: "睁眼与闭眼图层正确切换", passed: openVisible && closedVisible, details: { openVisible, closedVisible } });
+    const closureGeometry = layers.filter((layer) => layer.role === "eyelash");
+    const geometryReady = closureGeometry.length >= 2 && stateMovement(proposed, closureGeometry, { ...neutralMotionState, blink: 1 }) > 0.0001
+      && irises.every((layer) => layers.some((white) => white.id === layer.clipLayerId && white.role === "eyeWhite" && white.side === layer.side));
+    checks.push({ id: "blink-composite", label: geometry ? "睫毛关键形闭合且虹膜受眼白遮罩控制" : "睁眼与闭眼图层正确切换", passed: openVisible && (geometry ? geometryReady : closedVisible), details: { openVisible, closedVisible, geometryReady } });
   }
   if (part === "mouth") {
     const variants = new Set(layers.filter((layer) => layer.opacity > 0).map((layer) => layer.mouthVariant ?? "closed"));
@@ -491,9 +463,25 @@ function checksFor(part: PrimaryModelAgentPart, before: PuppetLoomProject, propo
   return checks;
 }
 
+function measurementsFor(part: PrimaryModelAgentPart, project: PuppetLoomProject, layers: LayerBinding[]): PrimaryPartMeasurement[] {
+  if (part !== "headFace") return [];
+  return [{
+    id: "head-shape", label: "当前头部变化测量；由外部 Agent 对照原画判断，不规定统一脸型比例",
+    values: {
+      ...headPoseGeometry(project),
+      faceLayerCount: project.layers.filter(layer => layer.role === "face").length,
+      yawDegrees: (project.runtime.poseField?.maxYawRadians ?? 0) * 180 / Math.PI,
+      maximumMovement: Math.max(stateMovement(project, layers, safetyPoseState(-1, 0, 0)), stateMovement(project, layers, safetyPoseState(1, 0, 0)))
+    }
+  }];
+}
+
 /** Builds one primary-body/expression proposal without file-system side effects. */
 export function createPrimaryPartAgentProposal(project: PuppetLoomProject, options: PrimaryPartAgentOptions): PreparedPrimaryProposal {
   const layers = targetLayers(project, options.part, options.layerIds);
+  if (options.part === "headFace" && layers.some(layer => layer.headPoseMode === "keyforms")) {
+    throw new PuppetLoomError("INVALID_INPUT", "目标包含完整头部关键形。请通过 author apply 编辑现有 yaw/pitch 关键形；程序化头脸制作参数不作用于这些图层，不能用它报告转头已改善。");
+  }
   const intent = options.intent ? clone(options.intent) : intentFor(options.instruction);
   const operations = operationsFor(options.part, project);
   const overrides = layerOverrides(options.part, project, layers, intent);
@@ -508,6 +496,7 @@ export function createPrimaryPartAgentProposal(project: PuppetLoomProject, optio
     previews: previewsFor(options.part, proposed),
     overrides,
     checks: checksFor(options.part, project, proposed, layers, assetRequests),
+    measurements: measurementsFor(options.part, proposed, layers),
     repairs: [],
     assetRequests
   };
@@ -526,15 +515,33 @@ function draftAssessment(draft: CalibrationDraftDocument | undefined, part: Prim
 }
 
 function operationId(operation: AuthoringOperation): string {
+  if (operation.op === "transform-keyform" || operation.op === "insert-binding-key") return operation.bindingId;
   if (operation.op === "upsert-expression") return operation.expression.id;
   if (operation.op === "upsert-parameter") return operation.parameter.id;
   if (operation.op === "upsert-binding") return operation.binding.id;
   if (operation.op === "upsert-physics") return operation.physics.id;
   if (operation.op === "upsert-deformer") return operation.deformer.id;
   if (operation.op === "upsert-behavior") return operation.behavior.id;
-  if (operation.op === "set-layer-deformer") return operation.layerId;
+  if (operation.op === "set-layer-deformer" || operation.op === "set-layer-head-pose") return operation.layerId;
   if (operation.op === "move-layer") return operation.layerId;
   return operation.id;
+}
+
+async function preparedPrimaryProposal(root: string, project: PuppetLoomProject, options: PrimaryPartAgentOptions): Promise<PreparedPrimaryProposal> {
+  const selected = targetLayers(project, options.part, options.layerIds);
+  const hasExistingTextureClosure = selected.some(layer => layer.role === "eyeClosed")
+    && !selected.some(layer => layer.blinkMode === "geometry");
+  if (options.part !== "eyes" || hasExistingTextureClosure || selected.some((layer) => layer.blinkMode === "texture")) return createPrimaryPartAgentProposal(project, options);
+  const closure = await prepareEyeClosure(root, project, selected);
+  const prepared = applyCalibrationOverrides(applyAuthoringOperations(project, closure.operations), closure.overrides);
+  const proposal = createPrimaryPartAgentProposal(prepared, options);
+  proposal.operations.unshift(...closure.operations);
+  for (const [id, patch] of Object.entries(closure.overrides.layers ?? {})) {
+    proposal.overrides.layers ??= {};
+    proposal.overrides.layers[id] = { ...proposal.overrides.layers[id], ...patch };
+  }
+  proposal.overrides.runtime = { ...proposal.overrides.runtime, features: { ...proposal.overrides.runtime?.features, blink: true } };
+  return proposal;
 }
 
 export async function planPrimaryPartAgent(projectDirectory: string, options: PrimaryPartAgentOptions): Promise<PrimaryPartAgentPlan> {
@@ -544,7 +551,7 @@ export async function planPrimaryPartAgent(projectDirectory: string, options: Pr
   const layers = targetLayers(planningProject, options.part, options.layerIds);
   const draftState = draftAssessment(draft, options.part, layers.map((layer) => layer.id));
   const effective = draftState.compatible && draft ? applyCalibrationOverrides(planningProject, clone(draft.overrides)) : planningProject;
-  const proposal = createPrimaryPartAgentProposal(effective, { ...options, layerIds: layers.map((layer) => layer.id) });
+  const proposal = await preparedPrimaryProposal(root, effective, { ...options, layerIds: layers.map((layer) => layer.id) });
   const failed = proposal.checks.filter((check) => !check.passed).map((check) => `自检未通过：${check.label}`);
   const assetBlockers = proposal.assetRequests.length > 0 ? [`缺少 ${proposal.assetRequests.length} 项必要素材，已生成素材请求。`] : [];
   const blockers = [...draftState.blockers, ...assetBlockers, ...failed];
@@ -559,6 +566,7 @@ export async function planPrimaryPartAgent(projectDirectory: string, options: Pr
     intent: proposal.intent,
     operations: proposal.operations.map((operation) => ({ op: operation.op, id: operationId(operation) })),
     checks: proposal.checks,
+    measurements: proposal.measurements,
     repairs: proposal.repairs,
     assetRequests: proposal.assetRequests,
     draft: draftState,
@@ -581,7 +589,7 @@ export async function runPrimaryPartAgent(projectDirectory: string, options: Pri
     await clearCalibrationDraft(root);
   }
   const project = await loadProject(root);
-  const proposal = createPrimaryPartAgentProposal(project, options);
+  const proposal = await preparedPrimaryProposal(root, project, options);
   const failed = proposal.checks.filter((check) => !check.passed);
   if (failed.length > 0) throw new PuppetLoomError("INVALID_INPUT", `${labels[options.part]}自检未通过：${failed.map((check) => check.label).join("；")}`);
   const committed = await commitModelAgentProposal(root, revision, {
@@ -594,7 +602,7 @@ export async function runPrimaryPartAgent(projectDirectory: string, options: Pri
     overrides: proposal.overrides,
     checks: proposal.checks,
     repairs: proposal.repairs,
-    reportDetails: { intent: proposal.intent, assetRequests: proposal.assetRequests, adoptedDraftRevision }
+    reportDetails: { intent: proposal.intent, measurements: proposal.measurements, assetRequests: proposal.assetRequests, adoptedDraftRevision }
   });
   await clearCalibrationDraft(root);
   if (!committed.changed) return {
@@ -608,6 +616,8 @@ export async function runPrimaryPartAgent(projectDirectory: string, options: Pri
     targetLayerIds: proposal.layers.map((layer) => layer.id),
     ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
     checks: proposal.checks,
+    visualReview: "unreviewed",
+    measurements: proposal.measurements,
     repairs: proposal.repairs
   };
   return {
@@ -621,6 +631,8 @@ export async function runPrimaryPartAgent(projectDirectory: string, options: Pri
     targetLayerIds: proposal.layers.map((layer) => layer.id),
     ...(adoptedDraftRevision !== undefined ? { adoptedDraftRevision } : {}),
     checks: proposal.checks,
+    visualReview: "unreviewed",
+    measurements: proposal.measurements,
     repairs: proposal.repairs,
     reportPath: committed.reportPath,
     comparisonSheet: committed.result.evidence.comparisonSheet,

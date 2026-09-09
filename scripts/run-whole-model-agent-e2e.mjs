@@ -77,13 +77,13 @@ await executeManagedRun({
     if (plan.parts.find((part) => part.part === required)?.status !== "ready") throw new Error(`真实模型的 ${required} 没有进入可执行状态。`);
   }
   const result = await runCliJson(["agent", "apply", "--project", projectDirectory, "--spec", specificationPath]);
-  if (!result.ok || result.status !== "completed") throw new Error(`整模 Agent 没有完成：${JSON.stringify(result.parts.filter((part) => part.status === "blocked"))}`);
+  if (!result.ok || result.status !== "awaiting-visual-review") throw new Error(`整模制作没有进入视觉复核：${JSON.stringify(result.parts.filter((part) => part.status === "blocked"))}`);
   if (!result.verification?.valid || result.blockers.length > 0) throw new Error(`CLI 没有返回通过的整模联合验证：${JSON.stringify({ blockers: result.blockers, verification: result.verification })}`);
   if (result.toRevision <= beforeCalibration.revision) throw new Error("整模 Agent 没有形成可回滚修订。" );
   await access(result.reportPath);
   const report = JSON.parse(await readFile(result.reportPath, "utf8"));
-  if (report.parts.filter((part) => part.status === "completed").length < 10) throw new Error("整模报告没有覆盖全部已存在部位。" );
-  for (const part of result.parts.filter((candidate) => candidate.status === "completed")) {
+  if (report.parts.filter((part) => part.status === "awaiting-visual-review").length < 10) throw new Error("整模报告没有覆盖全部已存在部位。" );
+  for (const part of result.parts.filter((candidate) => candidate.status === "awaiting-visual-review")) {
     if (!part.reportPath || !part.comparisonSheet) throw new Error(`${part.part} 缺少报告或前后证据。`);
     await Promise.all([access(part.reportPath), access(part.comparisonSheet)]);
     const partReport = JSON.parse(await readFile(part.reportPath, "utf8"));
@@ -106,7 +106,7 @@ await executeManagedRun({
     cloneReport,
     fromRevision: beforeCalibration.revision,
     toRevision: result.toRevision,
-    completedParts: result.parts.filter((part) => part.status === "completed").map((part) => part.part),
+    appliedParts: result.parts.filter((part) => part.status === "awaiting-visual-review").map((part) => part.part),
     notPresentParts: result.parts.filter((part) => part.status === "not-present").map((part) => part.part),
     reportPath: result.reportPath,
     specificationPath,

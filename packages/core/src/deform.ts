@@ -1,4 +1,5 @@
 import { clamp } from "./math.js";
+import { blinkPoint } from "./blink-geometry.js";
 import { applyLayerCollisionConstraints } from "./collision-constraints.js";
 import { characterMotionState } from "./character-state.js";
 import { constrainMotionState } from "./collision-constraints.js";
@@ -356,8 +357,9 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
 
   const eyeBlink = layer.side === "left" ? state.blinkLeft ?? state.blink : layer.side === "right" ? state.blinkRight ?? state.blink : state.blink;
   if ((layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && eyeBlink > 0) {
-    const closing = smoothstep01(eyeBlink);
-    point.y = layer.pivot.y + (point.y - layer.pivot.y) * (1 - closing * 0.72);
+    const closed = blinkPoint(project, layer, base, eyeBlink);
+    point.x = closed.x;
+    point.y = closed.y;
   }
 
   if (bodyLayerWeight > 0) {
@@ -402,7 +404,7 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
   if (headLayerWeight > 0) {
     const neckV = layer.role === "neck" ? clamp((base.y - layer.bounds.y) / Math.max(1e-6, layer.bounds.height), 0, 1) : 0;
     const headWeight = headLayerWeight * (layer.role === "neck" ? 1 - smoothstep01(neckV) : 1);
-    if (project.runtime.poseField) {
+    if (project.runtime.poseField && layer.headPoseMode !== "keyforms") {
       const blinkModified = (layer.role === "eyeWhite" || layer.role === "iris" || layer.role === "eyelash") && eyeBlink > 0;
       // Static head-only vertices retain their project object identity here so
       // the semantic-cage lookup can reuse topology weights across frames.
@@ -413,6 +415,7 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       const attachment = vertexIndex === undefined ? undefined : layer.mesh.influences?.headAttachment?.[vertexIndex];
       const topologyKey = vertexIndex === undefined ? undefined : layer.mesh.points[vertexIndex];
       const posed = applyCoherentPoseField(project.runtime.poseField, layer, poseInput, yaw, pitch, project.runtime.semanticCage, {
+        canvasAspect: project.canvas.width / project.canvas.height,
         face: vertexInfluence(layer, "face", vertexIndex, 1),
         skull: vertexInfluence(layer, "skull", vertexIndex, 1),
         ...(attachment === undefined ? {} : { attachment: clamp(attachment, 0, 1) }),
@@ -421,7 +424,7 @@ export function deformResolvedPoint(project: PuppetLoomProject, layer: LayerBind
       point.x += (posed.x - poseInput.x) * headWeight;
       point.y += (posed.y - poseInput.y) * headWeight;
     }
-    else {
+    else if (layer.headPoseMode !== "keyforms") {
       if (layer.side !== "center" && hasSidePerspective(layer)) {
         // Layer side is anatomical, so character-left is screen-right.
         const screenSide = layer.side === "left" ? 1 : -1;

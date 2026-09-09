@@ -61,7 +61,7 @@ PuppetLoom 的目标是用自动化流程较快得到效果不错、可以使用
 | 批量管理角色 | 制作中心统一处理单图分层任务、多项目体检、能力缺口、环境检查和更新；跨项目分析只从重复问题与已接受证据提出候选。 |
 | 做直播与演出 | 左右眼、眉毛、笑容、脸颊、A/I/U/E/O、上半身和双手输入；服装/道具/预设、碰撞约束、非破坏 Take 以及 OSC/VMC、MIDI、手柄和控制面板适配。 |
 | 发布到网页或 OBS | 导出透明 Web/OBS 目录和单文件 Web SDK；状态与动作可以继续由网页 API 控制。 |
-| 交给 Cubism | exp3、motion3、physics3、cdi3 侧车，官方 API 可写结构的检查与同步，以及以 Editor 导出 moc3/model3 为真源的新运行时目录。 |
+| 交给 Cubism | 一次导出可编辑 cmo3、moc3、纹理及 exp3/motion3/physics3/cdi3，分别选择工程与运行时版本；也保留 Editor API 交接路线。 |
 
 项目保留 PSD 的可见图层、顺序、坐标、透明度和混合模式记录，支持标准/自定义参数、一维与二维关键形态、变形器、表情、参数物理和具名行为。头部转向会收窄并移动远侧眼睛，但眼睛和眉毛始终保持完全不透明；只有耳朵、侧发等外围部件会在接近脸缘时降低可见度，近远侧发的绘制深度也可以随方向交换。
 
@@ -144,7 +144,7 @@ my-character/
 
 ## Cubism 的真实边界
 
-PuppetLoom 可以准备并同步 Cubism Editor 官方 API 已公开的结构，也能生成表情、动作、物理和显示信息侧车；真正的 `.moc3` 只能由 Cubism Editor 导出。当官方 API 无法写入 ArtMesh 顶点或 Warp 控制点时，桥接会明确报告限制，不会把结构校验写成完整视觉兼容。正式顺序、Editor 版本和验收边界见 [Cubism 官方格式桥接](docs/CUBISM_BRIDGE.md)。
+PuppetLoom 的 `cubism export` 使用 PSD2Live 所用的 Umamo 编码器直接生成 `.cmo3` 和 `.moc3`，并输出纹理、动作、表情和物理。首次运行 `node scripts/setup-cubism-exporter.mjs` 配置依赖；桌面导出中心与 CLI 使用同一实现。默认工程目标为 Editor 5.3.01 起、运行时目标为 SDK 5.0，可分别选择版本。导出会保留当前修订的实际网格运动，但程序化变形器被转换为网格关键形，不能声称原建模层级完全相同。文件生成后仍需视觉复核，见 [Cubism 导出与 Editor 桥接](docs/CUBISM_BRIDGE.md)。
 
 ## 文档
 
@@ -185,4 +185,4 @@ npm run artifacts:report
 
 ## 许可证与第三方资源
 
-PuppetLoom 使用 [Apache License 2.0](LICENSE)。借鉴项目、依赖用途、运行时模型下载边界和完整致谢见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。仓库不提交用户角色图或下载的第三方角色样例。
+PuppetLoom 使用 [GNU Affero General Public License v3.0 or later（AGPL-3.0-or-later）](LICENSE)，版本声明见 [LICENSE-NOTICE.md](LICENSE-NOTICE.md)。借鉴项目、依赖用途、运行时模型下载边界和完整致谢见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。仓库不提交用户角色图或下载的第三方角色样例。

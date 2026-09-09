@@ -1,6 +1,38 @@
-# Cubism 官方格式桥接
+# Cubism 导出与 Editor 桥接
 
-PuppetLoom 现在可以生成和合并公开的 Cubism 3 JSON 文件，连接 Cubism Editor External API，同步官方 API 确实允许写入的结构，并把 Editor 官方导出的 `.moc3` 整理成可验证的 `.model3.json` 运行时目录。`.moc3` 仍必须由 Live2D Cubism Editor 生成：Cubism Core 是官方二进制读取运行库，不是公开的 moc3 编译器；PuppetLoom 不伪造该文件，也不会把“参数已创建”报告成“网格已经转换”。
+PuppetLoom 提供两条独立路线。`cubism export` 通过与 PSD2Live 相同的 Umamo 编码器，直接输出可编辑 `.cmo3`、`.moc3` 和运行时配套文件；`cubism prepare/editor/finalize` 保留原有 Editor External API 交接流程。直接导出不要求 Editor API 提供顶点写入接口。
+
+## 直接导出
+
+首次配置 Java 21+ 和固定版本的转换依赖，然后构建 CLI：
+
+```powershell
+node scripts/setup-cubism-exporter.mjs
+npm run build -w @puppetloom/core
+npm run build -w @puppetloom/cli
+node apps/cli/dist/index.js cubism export --project E:\Puppets\Character --output E:\Puppets\Character-cubism --editor-version 5.3 --runtime-version 5.0 --json
+```
+
+可用 `--java`、`--libs`、`--compiler` 和 `--cache` 指定配置位置；默认下载缓存位于 D 盘。依赖及编译器都有 SHA-256 校验，转换器源码变化后必须重新配置。仓库不包含上游 JAR、官方 Core 或角色导出文件。
+
+桌面“导出中心”的 CMO3/MOC3 按钮调用同一核心实现。工程格式与运行时格式独立选择：工程 `5.3` 使用 Editor 5.3.01 保存结构核对过的格式，`5.4` 保留上游原生格式；运行时支持 `4.2`、`5.0`、`5.3`。默认 `5.3 / 5.0`。工程 5.3 处理会核对并移除 5.4 的空状态集和默认图集锁，调整对应类版本；遇到非空新功能就报错，不能通过改文件头伪装降级。它只适用于本导出器新建的工程，不是任意 CMO3 的降级工具。
+
+输出包含 `model.cmo3`、`model.moc3`、`model.model3.json`、`textures`、表情/动作/物理/显示信息侧车、`puppetloom-source` 和 `export-status.json`。源项目 revision 和内容指纹会记录并复查。目录必须不存在，有草稿时拒绝导出。纹理按 PSD2Live 的方式组成保留原像素的二次幂图集；程序化变形和绑定组合被采样为可编辑网格关键形，检查中间插值并在超限时报错。
+
+参数与图层 ID 通过报告中的稳定映射保留关联，去除 Editor 不接受的字符；数值单位放大 100 倍，配套动作、表情和物理同步映射。这样避免官方 Core 的绝对 0.001 关键点吸附吞掉密集的局部变化。原程序化变形器层级不会原样保留；源 PSD 的完整分组和未使用图层也不等于合成后的 CMO3 原画结构。双素材嘴型在原参数 `.498..5` 的极短区间过渡。源项目本身的造型问题不会因为导出而自动改善。
+
+成功写文件的状态是 `awaiting-visual-review`，不能据此声称画面通过。可选的本地官方 Core 检查：
+
+```powershell
+$env:CUBISM_EDITOR_HOME = 'D:\Software\Work\Live2D Cubism 5.3'
+node scripts/check-native-export.mjs E:\Puppets\Character-cubism E:\Puppets\Character
+```
+
+它比较九向、眨眼阶段、参数端点及组合姿态的顶点/透明度/UV/拓扑，并使用实际导出图集生成与源项目的对照图。CMO3 还需在目标 Editor 打开、检查及另存，再从 Editor 导出 MOC3。在上述命令末尾追加该 `model3.json` 路径，会在 `qa-editor` 中检查编辑器重新导出的结果。此检查使用本工程原图集布局；若手工重排图集，不能继续用原 UV 做逐值对照。几何与文件引用校验不能替代画面检查。
+
+CMO3 的原画网格按纹理 UV 与图层原始范围建立，默认姿态的造型也保存在关键形中，避免编辑器从非线性变形后的网格反推贴图位置。首次打开上游编码器生成的工程可能显示“免费版本中创建”信息；这与“高版本创建”兼容性提示不同。
+
+## 原有 Editor API 交接路线
 
 这条边界来自 Live2D 的[模型文件说明](https://docs.live2d.com/en/cubism-sdk-manual/model-web/)、[Cubism Core 说明](https://docs.live2d.com/en/cubism-sdk-manual/cubism-core/)和 [External API 1.1.0 手册](https://cubism.live2d.com/editor-alpha/doc/manual/alpha1/ja/external-api-intergration/index.html)。
 
@@ -9,7 +41,7 @@ PuppetLoom 现在可以生成和合并公开的 Cubism 3 JSON 文件，连接 Cu
 | 内容 | PuppetLoom 的处理 | 验收含义 |
 | --- | --- | --- |
 | `.model3.json` | 读取 Editor 导出文件，保留原引用并合并 PuppetLoom 侧车 | 验证 Version、路径边界和全部引用 |
-| `.moc3` | 只接受并复制 Editor 官方导出文件 | 检查 `MOC3` 文件头；不自行编译 |
+| `.moc3` | `finalize` 接受并复制 Editor 官方导出文件 | 检查 `MOC3` 文件头；直接编码见上文 `export` |
 | `.exp3.json` | 从命名表情生成 | 以默认值为基准生成 Add 差值 |
 | `.motion3.json` | 从行为轨道生成 | 支持 linear、hold 和 smoothstep 对应曲线 |
 | `.physics3.json` | 把参数弹簧转换为两粒子近似并与现有物理合并 | 必须在 Viewer 中复核幅度和响应 |

@@ -45,7 +45,9 @@ class ProjectLifecycleAndRuntimeContractTests(unittest.TestCase):
         combined = self.skill + self.workflow + self.source_art + self.visual + self.review
         self.assertNotIn("缺少左右闭眼、微张嘴或张口", combined)
         self.assertNotIn("缺闭眼、微张嘴或张口", combined)
-        self.assertIn("默认只补真正缺少的一个张口和闭眼状态", self.visual)
+        self.assertIn("默认只补真正缺少的一个张口", self.visual)
+        self.assertIn("无须补闭眼贴图", self.visual)
+        self.assertNotIn("闭眼素材缺失就不压扁睁眼层", self.visual)
         self.assertIn("烘焙眼必须使用带正确肤色", self.visual)
         self.assertIn("确认原眼完全消失", self.workflow)
         self.assertIn("微张嘴或音素嘴形只有用户明确需要", self.review)
@@ -58,7 +60,7 @@ class ProjectLifecycleAndRuntimeContractTests(unittest.TestCase):
         self.assertIn("不能用延长保持时间掩盖竞争状态", self.visual)
 
     def test_fixed_attachment_and_free_end_have_separate_influence(self) -> None:
-        self.assertIn("连接主体固定随父级、真正自由端才叠加次级运动", self.skill)
+        self.assertIn("固定连接与自由端的判断", self.skill)
         self.assertIn("固定端的相对运动应接近零", self.visual)
         self.assertIn("释放量从连接处向自由端连续增加", self.visual)
         self.assertIn("不能让整件头饰或整条项链同幅摆动", self.visual)

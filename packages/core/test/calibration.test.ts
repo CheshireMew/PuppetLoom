@@ -273,7 +273,7 @@ describe("project calibration", () => {
 
   it("serializes concurrent writers and rejects the stale base revision without duplicate history", async () => {
     const attempts = await Promise.allSettled([
-      saveCalibrationPatch(concurrentOutput, { baseRevision: 0, label: "并发 A", overrides: { runtime: { motionTuning: { response: 0.72 } } } }),
+      saveCalibrationPatch(concurrentOutput, { baseRevision: 0, label: "并发 A", overrides: { runtime: { motionTuning: { response: 0.62 } } } }),
       saveCalibrationPatch(concurrentOutput, { baseRevision: 0, label: "并发 B", overrides: { runtime: { motionTuning: { response: 0.73 } } } })
     ]);
     expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);

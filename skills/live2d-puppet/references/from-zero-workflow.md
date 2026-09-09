@@ -105,7 +105,7 @@
 & <skill>\scripts\invoke_puppetloom.ps1 agent apply --project E:\Puppets\Character --spec E:\Puppets\front-hair-spec-r0.json --json
 ```
 
-模板不能原样执行。外部 Agent 必须根据用户目标和实际基线填写 `goal`、角色专属 `anatomy`、选择 `parts`、调整每个部位的数值 `intent` 并写出基于画面的 `rationale`。先逐层检查模板列出的当前 `layerIds`；结构敏感部位必须按本项目写实：头脸和嘴保留实际斜轴，前后发写实际发束与根部，左右耳、头饰和上衣写实际轴心及覆盖全部网格顶点的固定/释放权重，头饰显式选择 `crown` 或 `null`。不能复制旧角色的发束数量、耳根、镜像方向、头饰长宽比规则或对称脸点。`plan` 只读，先核对 `inputMode: structured-specification`、`baseRevision`、`requestedParts`、草稿、目标 layer、anatomy 覆盖、各部位 `checks/repairs/assetRequests`、`canApply` 和 `blockers`。存在不兼容草稿、结构覆盖不全、自检失败或 revision 冲突时停止，不清空用户的其它工作。`apply` 只接受 `--spec`，按确定顺序处理存在的部位，每个成功部位形成独立可回滚 revision、session、前后证据和 Agent 报告；最后返回整模 `verification` 和汇总报告。`not-present` 表示项目没有相应图层，`needs-assets` 表示闭眼或嘴形等素材还需补充，`blocked` 才是本轮无法继续的问题。不得伪造缺失图层，也不得把这三种状态冒充 `completed`。
+模板不能原样执行。外部 Agent 必须根据用户目标和实际基线填写 `goal`、角色专属 `anatomy`、选择 `parts`、调整每个部位的数值 `intent` 并写出基于画面的 `rationale`。先逐层检查模板列出的当前 `layerIds`；结构敏感部位必须按本项目写实：头脸和嘴保留实际斜轴，前后发写实际发束与根部，左右耳、头饰和上衣写实际轴心及覆盖全部网格顶点的固定/释放权重，头饰显式选择 `crown` 或 `null`。不能复制旧角色的发束数量、耳根、镜像方向、头饰长宽比规则或对称脸点。`plan` 只读，先核对 `inputMode: structured-specification`、`baseRevision`、`requestedParts`、草稿、目标 layer、anatomy 覆盖、各部位 `checks/repairs/assetRequests`、`canApply` 和 `blockers`。存在不兼容草稿、结构覆盖不全、自检失败或 revision 冲突时停止，不清空用户的其它工作。`apply` 只接受 `--spec`，按确定顺序处理存在的部位，每个成功部位形成独立可回滚 revision、session、前后证据和 Agent 报告；最后返回整模 `verification` 和汇总报告。`not-present` 表示项目没有相应图层，`needs-assets` 表示现有结构无法实现目标、确实需要补充素材，`blocked` 才是本轮无法继续的问题。不得伪造缺失图层，也成功执行的部位是 `awaiting-visual-review`，不得把命令成功或上述三种状态说成视觉制作完成。
 
 整模 `apply` 不是整体事务。它逐部位提交，前面已完成的 revision 不会因为后续部位 `blocked` 自动回滚；返回后逐项核对 `status`、实际 from/to revision、session、报告路径和 `history`。当前只有前发 Agent 能在提案等价时明确返回无变化，其它主运动和次级部位可能仍提交 revision，所以成熟项目不能用整模 `apply` 代替只读审查。`coherenceChecks` 只覆盖软件当前声明的跨部位规则，不能替代对全部历史 accepted 结果的视觉保护清单。若整模最终阻断且已落盘的候选没有被接受，标记所有受影响 session 为 `rejected`，恢复最后接受的 revision 并复核。
 
@@ -143,7 +143,7 @@
 
 视觉异常先用摘要 `describe` 找稳定 ID，再运行 `describe --layer <id> --revision <n>`。顶点补丁使用输出中的完整 `delta`，不是在当前画面上重复累加；权重使用该顶点的当前绝对值。`alphaTopology.componentCount/components` 用于识别一个纹理中合并的头饰、双耳或其它分离部件，再决定是否需要多个锚点、局部权重或重新分层。坐标原点在画面左上，X 向右、Y 向下；`side` 是角色自身的解剖学左右，角色 left 通常位于画面右侧。不要直接改 `puppetloom.json`。
 
-缺少闭眼或张口时，先检查 PSD、项目现有图层和 `requests/asset-requests.json`，盘点中立状态已经具备什么。已有闭嘴图层直接作为 `mouthOpen=0`，不能再生成一张闭嘴图替换它；默认只处理真正缺少的一个张口和左右闭眼素材。微张嘴或音素嘴形只有用户明确需要对应表情或独立触发时才补，不参与默认麦克风口型选择。生成闭眼前先检查睁眼、虹膜和睫毛是否是独立图层，还是已经烘焙进脸部；烘焙眼不能靠线状覆盖物真正闭合，必须生成带正确肤色和睫毛的完整眼睑遮挡补片，或先修复 PSD，并在准确 revision 的合成中确认原眼完全消失。完整角色制作中，真正缺少的默认表情由 Agent 生成和检查，不再向用户逐项索取授权。生成时同时参考原画、PSD 重组图和请求裁图，严格继承线稿、睫毛体量、眼角、口腔配色、阴影和抗锯齿；闭眼不能是一条弧线。PNG 的尺寸、Alpha、位置、左右和覆盖率符合请求后才运行 `enhance --assets <directory>`；命令返回的 `accepted` 才算接入，`rejected` 不能当成成功。用户明确限定现有素材或禁止生图时保留请求但不执行增强，并报告 `needs-assets`。
+缺少闭眼或张口时，先检查 PSD、项目现有图层和 `requests/asset-requests.json`，盘点中立状态已经具备什么。已有闭嘴图层直接作为 `mouthOpen=0`，不能再生成一张闭嘴图替换它；默认只处理真正缺少的一个张口；左右闭眼先检查独立眼白与睫毛是否支持几何闭合，不能仅因没有 eyeClosed 图层就发起补图。微张嘴或音素嘴形只有用户明确需要对应表情或独立触发时才补，不参与默认麦克风口型选择。生成闭眼前先检查睁眼、虹膜和睫毛是否是独立图层，还是已经烘焙进脸部；烘焙眼不能靠线状覆盖物真正闭合，必须生成带正确肤色和睫毛的完整眼睑遮挡补片，或先修复 PSD，并在准确 revision 的合成中确认原眼完全消失。完整角色制作中，真正缺少的默认表情由 Agent 生成和检查，不再向用户逐项索取授权。生成时同时参考原画、PSD 重组图和请求裁图，严格继承线稿、睫毛体量、眼角、口腔配色、阴影和抗锯齿；闭眼不能是一条弧线。PNG 的尺寸、Alpha、位置、左右和覆盖率符合请求后才运行 `enhance --assets <directory>`；命令返回的 `accepted` 才算接入，`rejected` 不能当成成功。用户明确限定现有素材或禁止生图时保留请求但不执行增强，并报告 `needs-assets`。
 
 ## 现有项目接入新增能力
 
@@ -176,6 +176,6 @@
 & <skill>\scripts\invoke_puppetloom.ps1 edit --project E:\Puppets\Character
 ```
 
-候选结果先运行定向安全检查并展示准确 revision 的高清画面或角色窗口，不在用户看候选前先耗时跑完整回归或执行推送。用户接受后运行 `evidence --project <directory> --session <id> --status accepted`，再完成获准范围内的完整回归和发布操作。用户拒绝自动制作或人工校正时，运行 `history` 找出本次所有 session，分别用 `evidence --project <directory> --session <id> --status rejected` 标为 `rejected`，再 `restore --revision <最后接受的 revision> --base-revision <当前 revision>`，检查准确 revision 的恢复证据并停止继续调整，除非用户提出新的具体方向。恢复会保留新审计记录。
+候选结果先运行定向安全检查并展示准确 revision 的高清画面或角色窗口，不在用户看候选前先耗时跑完整回归或执行推送。用户接受后运行 `evidence --project <directory> --session <id> --status accepted`，再完成获准范围内的完整回归和发布操作。用户拒绝自动制作或人工校正时，运行 `history` 找出本次所有 session，分别用 `evidence --project <directory> --session <id> --status rejected` 标为 `rejected`，再 `restore --revision <最后接受的 revision> --base-revision <当前 revision>`，撤回应只涉及被拒绝的变化，并检查准确 revision 的恢复证据；用户已授权继续修复或提出新方向时按具体缺陷继续返修。恢复会保留新审计记录。
 
 运行角色用 `play --project <directory> --revision <n>`，明确检查的 revision，避免当前校准变化后仍观察旧窗口。不要为了演示而自动接入可选闭眼/嘴形；缺少它们时，眨眼和嘴部保持安全状态即可。完整项目交付前用新的项目内证据目录运行 `performance --project <directory> --output <new-directory> --revision <n> --json`。它会锁定准确 revision，在真实角色窗口分别测量活动态和暂停态，返回每轮 FPS、p95、p99、最差帧、40ms 以上长帧、直接渲染耗时和 `diagnosis.frameDropSource`；只有 `valid: true` 才通过，`ok: true` 只表示命令成功完成。固定 23 层 fixture、只看平均 FPS 或未注明 revision 的旧报告都不能替代本项目证据。完整项目交付前还要通过桌面端 `edit` 或 `play` 实际读取晋升后的规范绝对路径，并检查“最近项目”出现的是同一路径而不是迁移候选、旧副本或仓库外目录；CLI 创建成功但桌面端没有读取规范项目，不算完成项目交付。
