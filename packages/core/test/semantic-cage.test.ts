@@ -61,6 +61,20 @@ function signedArea(a: { x: number; y: number }, b: { x: number; y: number }, c:
 }
 
 describe("automatic semantic control cage", () => {
+  it("keeps adjacent face points continuous across former triangle/fallback boundaries", () => {
+    const project = rigFixture(), field = project.runtime.poseField!, cage = project.runtime.semanticCage!;
+    const face = project.layers.find(l => l.role === 'face')!;
+    for (const yaw of [-1, 1]) for (const pitch of [-1, 0, 1]) {
+      for (const triangle of cage.faceTriangles) for (let edge = 0; edge < 3; edge++) {
+        const a = cage.points[triangle[edge]!].position, b = cage.points[triangle[(edge + 1) % 3]!].position, c = cage.points[triangle[(edge + 2) % 3]!].position;
+        // The old branch switched when a barycentric coordinate reached -0.015.
+        const point = (t: number) => ({ x: (a.x + b.x) * (1 - t) / 2 + c.x * t, y: (a.y + b.y) * (1 - t) / 2 + c.y * t });
+        const left = applyCoherentPoseField(field, face, point(-.015 - 1e-8), yaw, pitch, cage);
+        const right = applyCoherentPoseField(field, face, point(-.015 + 1e-8), yaw, pitch, cage);
+        expect(Math.hypot(left.x - right.x, left.y - right.y) * project.canvas.width).toBeLessThan(.001);
+      }
+    }
+  });
   it("locates, validates, and repairs a complete face graph without manual points", () => {
     const cage = buildSemanticControlCage(fixture());
     expect(cage).toBeDefined();
@@ -126,7 +140,7 @@ describe("automatic semantic control cage", () => {
     const project=rigFixture(),field=project.runtime.poseField!,cage=project.runtime.semanticCage!;
     const face=project.layers.find(l=>l.role==='face')!,identity={x:0,y:0};
     const evaluate=(point:{x:number;y:number},key=identity)=>applyCoherentPoseField(field,face,point,.8,.6,cage,{topologyKey:key});
-    // Warm the weighted fallback outside the cage, then move the same vertex inside.
+    // Warm the cached weights outside the cage, then move the same vertex inside.
     evaluate({x:-.5,y:-.5});
     const points=cage.faceTriangles.map(([a,b,c])=>({x:(cage.points[a].position.x+cage.points[b].position.x+cage.points[c].position.x)/3,y:(cage.points[a].position.y+cage.points[b].position.y+cage.points[c].position.y)/3}));
     for(const point of [...points,...points.toReversed()])expect(evaluate(point)).toEqual(evaluate(point,{...identity}));
