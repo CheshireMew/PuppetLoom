@@ -1,4 +1,5 @@
 import { clamp } from "./math.js";
+import { smoothCageWeights } from "./smooth-cage.js";
 import type { CoherentPoseField, LayerBinding, Point, SemanticCagePointId, SemanticControlCage, SemanticRole } from "./types.js";
 import { ahogeHingeWeight, ahogeMembership, frontHairSideGeometry } from "./front-hair-geometry.js";
 
@@ -92,15 +93,7 @@ interface Surface {
   radiusY: number;
 }
 
-interface Barycentric {
-  a: number;
-  b: number;
-  c: number;
-}
-
-type SemanticCageMapping =
-  | { kind: "triangle"; ids: [SemanticCagePointId, SemanticCagePointId, SemanticCagePointId]; weights: Barycentric }
-  | { kind: "weighted"; entries: Array<{ id: SemanticCagePointId; weight: number }>; total: number };
+type SemanticCageMapping = { entries: Array<{ id: SemanticCagePointId; weight: number }> };
 
 type SemanticCageTopology = { x: number; y: number; mapping: SemanticCageMapping };
 
@@ -110,6 +103,7 @@ interface SemanticCageMappingCache {
 }
 
 interface SemanticCageRegionMappingCache {
+  smooth?: { ids: SemanticCagePointId[]; weights: (point: Point) => number[] };
   byIdentity: WeakMap<Point, SemanticCageMapping>;
   byCoordinates: Map<number, Map<number, SemanticCageMapping>>;
   byTopologyIdentity: WeakMap<Point, SemanticCageTopology>;
@@ -455,14 +449,6 @@ function projectedCagePoint(
   return region === "face" ? semanticLandmarkAdjustment(field, id, base, projected, yaw, pitch) : projected;
 }
 
-function barycentric(point: Point, a: Point, b: Point, c: Point): Barycentric | undefined {
-  const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-  if (Math.abs(denominator) < 1e-10) return undefined;
-  const wa = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
-  const wb = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
-  return { a: wa, b: wb, c: 1 - wa - wb };
-}
-
 function semanticCageMapping(
   field: CoherentPoseField,
   cage: SemanticControlCage,
@@ -473,38 +459,23 @@ function semanticCageMapping(
 ): SemanticCageMapping {
   const cache = mappings[region];
   const triangles = region === "face" ? cage.faceTriangles : cage.skullTriangles;
-  const weightedMapping = (ids: SemanticCagePointId[]): SemanticCageMapping => {
-    const softening = Math.max(1e-6, field.radiusX * field.radiusX * 0.0036);
-    const entries = ids.map((id) => {
-      const source = cage.points[id];
-      const distanceSquared = (base.x - source.position.x) ** 2 + (base.y - source.position.y) ** 2;
-      return { id, weight: source.confidence / (distanceSquared + softening) };
-    });
-    return { kind: "weighted", entries, total: entries.reduce((sum, entry) => sum + entry.weight, 0) };
-  };
 
   if (topologyKey) {
     const topology = cache.byTopologyIdentity.get(topologyKey);
-    // The same rest vertex can enter another cage triangle after local keyforms.
-    // Cache the sampled coordinates too; retaining a prior triangle/weighted fallback
-    // made the result depend on the order in which poses were evaluated.
+    // Local keyforms can move the same vertex. Reuse weights only at the same
+    // coordinates, so evaluation never depends on previously visited poses.
     if (topology && topology.x === base.x && topology.y === base.y) return topology.mapping;
   } else {
     const cached = cachedSemanticCageMapping(cache, base);
     if (cached) return cached;
   }
 
-  for (const [aId, bId, cId] of triangles) {
-    const weights = barycentric(base, cage.points[aId].position, cage.points[bId].position, cage.points[cId].position);
-    if (!weights || Math.min(weights.a, weights.b, weights.c) < -0.015) continue;
-    const mapping: SemanticCageMapping = { kind: "triangle", ids: [aId, bId, cId], weights };
-    if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { x: base.x, y: base.y, mapping });
-    else rememberSemanticCageMapping(cache, base, mapping);
-    return mapping;
+  if (!cache.smooth) {
+    const ids = [...new Set(triangles.flat())];
+    cache.smooth = { ids, weights: smoothCageWeights(ids.map(id => cage.points[id].position)) };
   }
-
-  const ids = [...new Set(triangles.flat())];
-  const mapping = weightedMapping(ids);
+  const weights = cache.smooth.weights(base);
+  const mapping: SemanticCageMapping = { entries: cache.smooth.ids.map((id, i) => ({ id, weight: weights[i]! })) };
   if (topologyKey) cache.byTopologyIdentity.set(topologyKey, { x: base.x, y: base.y, mapping });
   else rememberSemanticCageMapping(cache, base, mapping);
   return mapping;
@@ -531,18 +502,6 @@ function mappedBySemanticCage(
     return target;
   };
   const mapping = semanticCageMapping(field, cage, base, region, cache.semanticMappings, topologyKey);
-  if (mapping.kind === "triangle") {
-    const [aId, bId, cId] = mapping.ids;
-    const { weights } = mapping;
-    const targetA = targetFor(aId);
-    const targetB = targetFor(bId);
-    const targetC = targetFor(cId);
-    return {
-      x: targetA.x * weights.a + targetB.x * weights.b + targetC.x * weights.c,
-      y: targetA.y * weights.a + targetB.y * weights.b + targetC.y * weights.c
-    };
-  }
-
   let dx = 0;
   let dy = 0;
   for (const { id, weight } of mapping.entries) {
@@ -551,7 +510,7 @@ function mappedBySemanticCage(
     dx += (target.x - source.position.x) * weight;
     dy += (target.y - source.position.y) * weight;
   }
-  return mapping.total > 0 ? { x: base.x + dx / mapping.total, y: base.y + dy / mapping.total } : { ...base };
+  return { x: base.x + dx, y: base.y + dy };
 }
 
 function cageBlendFor(role: SemanticRole): number {
