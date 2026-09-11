@@ -26,12 +26,12 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
 async function ensureWritableOutput(output: string): Promise<boolean> {
   try {
     const entries = await readdir(output);
-    if (entries.length > 0) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `输出目录不是空目录：${output}`);
+    if (entries.length > 0) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `출력 폴더가 비어 있지 않습니다: ${output}`);
     return true;
   } catch (error) {
     if (error instanceof PuppetLoomError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw new PuppetLoomError("IO_ERROR", `无法检查输出目录：${output}`, { cause: error });
+    if (code !== "ENOENT") throw new PuppetLoomError("IO_ERROR", `출력 폴더를 확인할 수 없습니다: ${output}`, { cause: error });
     return false;
   }
 }
@@ -113,7 +113,7 @@ async function writeSemanticCageArtifacts(output: string, neutral: Buffer, proje
   const legend = Buffer.from(`<svg width="${legendWidth}" height="${reportHeight}" xmlns="http://www.w3.org/2000/svg">
     <rect width="100%" height="100%" fill="#101722"/>
     <text x="24" y="34" fill="#ffffff" font-family="Arial" font-size="22" font-weight="700">Semantic control cage</text>
-    <text x="24" y="57" fill="#9fb0c7" font-family="Arial" font-size="13">编号 · 名称 · 定位来源 · 置信度</text>
+    <text x="24" y="57" fill="#9fb0c7" font-family="Arial" font-size="13">번호 · 이름 · 위치 출처 · 신뢰도</text>
     <g font-family="Arial">${legendItems}</g>
   </svg>`);
   await sharp({ create: { width: head.info.width + legendWidth, height: reportHeight, channels: 4, background: { r: 11, g: 15, b: 23, alpha: 1 } } })
@@ -254,7 +254,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
   if (options.reference && imported.composite) {
     const similarity = await luminanceSimilarity(resolve(options.reference), imported.composite);
     if (similarity !== undefined) project = { ...project, quality: { ...project.quality, neutralSimilarity: similarity } };
-    else imported.warnings.push("参考图尺寸与 PSD 画布不同，未计算中立相似度。" );
+    else imported.warnings.push("참고 이미지 크기가 PSD 캔버스와 달라 중립 유사도를 계산하지 않았습니다.");
   }
   project = applySafetyLimits(project);
   const requests = makeAssetRequests(project);
@@ -303,7 +303,7 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
     await writeFile(join(output, "requests", "asset-requests.json"), `${JSON.stringify(requests, null, 2)}\n`, "utf8");
     checkpoint("validating");
     const verification = await (await import("./verify.js")).verifyProject(output);
-    if (!verification.valid) throw new PuppetLoomError("INVALID_PROJECT", `生成项目未通过发布前验证：${verification.warnings.join("；")}`);
+    if (!verification.valid) throw new PuppetLoomError("INVALID_PROJECT", `생성된 프로젝트가 게시 전 검증을 통과하지 못했습니다: ${verification.warnings.join("; ")}`);
 
     checkpoint("publishing");
     if (outputExisted) await rename(finalOutput, reservation);
@@ -340,6 +340,6 @@ export async function createProject(options: CreateOptions): Promise<BuildResult
         });
       } catch { /* Preserve the original error and the staging directory. */ }
     }
-    throw new PuppetLoomError("IO_ERROR", `项目生成失败；未发布的操作记录保留在 ${stagingOutput}`, { cause: error });
+    throw new PuppetLoomError("IO_ERROR", `프로젝트 생성에 실패했습니다. 게시되지 않은 작업 기록은 ${stagingOutput}에 남아 있습니다`, { cause: error });
   }
 }

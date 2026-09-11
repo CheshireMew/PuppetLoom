@@ -122,7 +122,7 @@ export async function startPerformanceRecording(
     frameRequest = window.requestAnimationFrame(capture);
     return {
       async stop(inputSession) {
-        if (stopped) throw new Error("表演录制已经停止。" );
+        if (stopped) throw new Error("퍼포먼스 녹화가 이미 중지됨.");
         stopped = true;
         if (frameRequest) window.cancelAnimationFrame(frameRequest);
         try {

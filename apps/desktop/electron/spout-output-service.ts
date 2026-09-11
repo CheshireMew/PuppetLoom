@@ -48,7 +48,7 @@ export interface SpoutOutputServiceOptions {
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number, label: string): number {
   const candidate = value ?? fallback;
-  if (!Number.isInteger(candidate) || candidate < minimum || candidate > maximum) throw new Error(`${label} 必须是 ${minimum} 到 ${maximum} 之间的整数。`);
+  if (!Number.isInteger(candidate) || candidate < minimum || candidate > maximum) throw new Error(`${label}은(는) ${minimum}에서 ${maximum} 사이의 정수여야 합니다.`);
   return candidate;
 }
 
@@ -75,7 +75,7 @@ export class SpoutOutputService {
 
   status(sourceViewerId: number): SpoutOutputStatus {
     const session = this.sessions.get(sourceViewerId);
-    if (!session) return { supported: this.supported(), active: false, message: this.supported() ? "Spout2 已就绪。" : "当前环境没有可用的 Windows Spout2 原生发送器。" };
+    if (!session) return { supported: this.supported(), active: false, message: this.supported() ? "Spout2가 준비되었습니다." : "현재 환경에서 사용할 수 있는 Windows Spout2 네이티브 센더가 없습니다." };
     return {
       supported: true,
       active: true,
@@ -88,17 +88,17 @@ export class SpoutOutputService {
       droppedFrames: session.droppedFrames,
       ...(session.lastDefect ? { lastDefect: session.lastDefect } : {}),
       ...(session.lastError ? { lastError: session.lastError } : {}),
-      message: session.lastError ? `Spout2 原生发送失败：${session.lastError}` : session.lastDefect ? `Spout2 正在输出，但最近一帧被丢弃：${session.lastDefect}` : "Spout2 正在输出共享纹理。"
+      message: session.lastError ? `Spout2 네이티브 전송에 실패했습니다: ${session.lastError}` : session.lastDefect ? `Spout2가 출력 중이지만 최근 프레임이 버려졌습니다: ${session.lastDefect}` : "Spout2가 공유 텍스처를 출력하고 있습니다."
     };
   }
 
   async start(input: { sourceViewerId: number; projectDirectory: string; projectName: string; revision?: number; options?: SpoutOutputOptions }): Promise<SpoutOutputStatus> {
-    if (!this.supported()) throw new Error("当前环境没有可用的 Windows Spout2 原生发送器。");
+    if (!this.supported()) throw new Error("현재 환경에서 사용할 수 있는 Windows Spout2 네이티브 센더가 없습니다.");
     await this.stop(input.sourceViewerId);
-    const width = boundedInteger(input.options?.width, 1080, 64, 4096, "Spout2 宽度");
-    const height = boundedInteger(input.options?.height, 1080, 64, 4096, "Spout2 高度");
+    const width = boundedInteger(input.options?.width, 1080, 64, 4096, "Spout2 너비");
+    const height = boundedInteger(input.options?.height, 1080, 64, 4096, "Spout2 높이");
     const fpsValue = input.options?.fps ?? 60;
-    if (fpsValue !== 24 && fpsValue !== 30 && fpsValue !== 60) throw new Error("Spout2 帧率必须是 24、30 或 60。" );
+    if (fpsValue !== 24 && fpsValue !== 30 && fpsValue !== 60) throw new Error("Spout2 프레임 속도는 24, 30 또는 60이어야 합니다.");
     const fps = fpsValue;
     const name = senderName(input.options?.name ?? `${input.projectName} · PuppetLoom`);
     const sender = new TextureSender(name, width, height);

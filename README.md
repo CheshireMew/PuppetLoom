@@ -1,3 +1,5 @@
+> **Korean UI fork** of [CheshireMew/PuppetLoom](https://github.com/CheshireMew/PuppetLoom). Desktop and in-app messages are Korean. Same license: AGPL-3.0-or-later. Clone this repo: `https://github.com/sleeeppy/PuppetLoom.git` · [한국어 안내](./README.ko.md)
+
 <!-- readme-header:start -->
 
 <p align="center">

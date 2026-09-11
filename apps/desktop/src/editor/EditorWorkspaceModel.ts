@@ -33,10 +33,10 @@ function pose(overrides: Partial<MotionState>): MotionState {
 }
 
 export const editorPoses: Record<string, { label: string; state: MotionState; icon: LucideIcon }> = {
-  neutral: { label: "中立", state: pose({}), icon: CircleDot }, left: { label: "左转", state: pose({ headYaw: -1 }), icon: ArrowLeft }, right: { label: "右转", state: pose({ headYaw: 1 }), icon: ArrowRight },
-  up: { label: "向上看", state: pose({ headPitch: -1 }), icon: ArrowUp }, down: { label: "向下看", state: pose({ headPitch: 1 }), icon: ArrowDown },
-  "left-up": { label: "左上", state: pose({ headYaw: -1, headPitch: -1 }), icon: ArrowUpLeft }, "right-up": { label: "右上", state: pose({ headYaw: 1, headPitch: -1 }), icon: ArrowUpRight },
-  "left-down": { label: "左下", state: pose({ headYaw: -1, headPitch: 1 }), icon: ArrowDownLeft }, "right-down": { label: "右下", state: pose({ headYaw: 1, headPitch: 1 }), icon: ArrowDownRight }
+  neutral: { label: "중립", state: pose({}), icon: CircleDot }, left: { label: "왼쪽", state: pose({ headYaw: -1 }), icon: ArrowLeft }, right: { label: "오른쪽", state: pose({ headYaw: 1 }), icon: ArrowRight },
+  up: { label: "위 보기", state: pose({ headPitch: -1 }), icon: ArrowUp }, down: { label: "아래 보기", state: pose({ headPitch: 1 }), icon: ArrowDown },
+  "left-up": { label: "왼쪽 위", state: pose({ headYaw: -1, headPitch: -1 }), icon: ArrowUpLeft }, "right-up": { label: "오른쪽 위", state: pose({ headYaw: 1, headPitch: -1 }), icon: ArrowUpRight },
+  "left-down": { label: "왼쪽 아래", state: pose({ headYaw: -1, headPitch: 1 }), icon: ArrowDownLeft }, "right-down": { label: "오른쪽 아래", state: pose({ headYaw: 1, headPitch: 1 }), icon: ArrowDownRight }
 };
 
 export function layerOverride(overrides: CalibrationOverrides, layerId: string, patch: NonNullable<CalibrationOverrides["layers"]>[string]): CalibrationOverrides {

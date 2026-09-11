@@ -290,7 +290,7 @@ export function useEditorEditingTools({
     drag.current = undefined;
     pendingRef.current = clone(active.before);
     setPending(clone(active.before));
-    setNotice("已取消本次拖动。" );
+    setNotice("이번 드래그를 취소했습니다.");
   }
 
   function nudgeWithKeyboard(event: React.KeyboardEvent<SVGCircleElement>, target: DragTarget): void {
@@ -477,10 +477,10 @@ export function useEditorEditingTools({
     const yaw = bySemantic.get("head-yaw");
     const breath = bySemantic.get("breath");
     const expressionIds = new Set(model.expressions.map((expression) => expression.id));
-    if (blink && !expressionIds.has("expression-closed-eyes")) model.expressions.push({ id: "expression-closed-eyes", name: "闭眼", parameters: { [blink]: 1 } });
-    if (mouth && !expressionIds.has("expression-speaking")) model.expressions.push({ id: "expression-speaking", name: "开口", parameters: { [mouth]: 1 } });
+    if (blink && !expressionIds.has("expression-closed-eyes")) model.expressions.push({ id: "expression-closed-eyes", name: "눈 감기", parameters: { [blink]: 1 } });
+    if (mouth && !expressionIds.has("expression-speaking")) model.expressions.push({ id: "expression-speaking", name: "입 열기", parameters: { [mouth]: 1 } });
     const surprised = Object.fromEntries([[pitch, -0.2], [mouth, 0.82]].filter((entry): entry is [string, number] => Boolean(entry[0])));
-    if (!expressionIds.has("expression-surprised") && Object.keys(surprised).length > 0) model.expressions.push({ id: "expression-surprised", name: "惊讶", parameters: surprised });
+    if (!expressionIds.has("expression-surprised") && Object.keys(surprised).length > 0) model.expressions.push({ id: "expression-surprised", name: "놀람", parameters: surprised });
 
     const idleTracks = [
       yaw ? { target: { kind: "parameter" as const, id: yaw }, keyframes: [{ time: 0, value: 0 }, { time: 1.5, value: 0.14 }, { time: 3, value: 0 }, { time: 4.5, value: -0.12 }, { time: 6, value: 0 }] } : undefined,
@@ -489,20 +489,20 @@ export function useEditorEditingTools({
       blink ? { target: { kind: "parameter" as const, id: blink }, keyframes: [{ time: 0, value: 0 }, { time: 1.8, value: 0 }, { time: 1.92, value: 1, easing: "smoothstep" as const }, { time: 2.04, value: 0, easing: "smoothstep" as const }, { time: 6, value: 0 }] } : undefined
     ].filter((track): track is NonNullable<typeof track> => Boolean(track));
     const behaviorIds = new Set(model.behaviors.map((behavior) => behavior.id));
-    if (!behaviorIds.has("behavior-idle") && idleTracks.length > 0) model.behaviors.push({ id: "behavior-idle", name: "自然待机", duration: 6, loop: true, autoplay: true, tracks: idleTracks });
+    if (!behaviorIds.has("behavior-idle") && idleTracks.length > 0) model.behaviors.push({ id: "behavior-idle", name: "자연 대기", duration: 6, loop: true, autoplay: true, tracks: idleTracks });
     if (!behaviorIds.has("behavior-nod") && pitch) model.behaviors.push({
-      id: "behavior-nod", name: "点头", duration: 1.6, loop: false,
+      id: "behavior-nod", name: "끄덕임", duration: 1.6, loop: false,
       tracks: [{ target: { kind: "parameter", id: pitch }, keyframes: [{ time: 0, value: 0 }, { time: 0.48, value: 0.62 }, { time: 0.92, value: -0.16 }, { time: 1.6, value: 0 }] }]
     });
     const next = mergeCalibrationOverridesForPreview(pendingRef.current, { model });
     if (JSON.stringify(next) === JSON.stringify(pendingRef.current)) {
-      setNotice("当前素材支持的基础表情和行为已经齐全。" );
+      setNotice("현재 소재가 지원하는 기본 표정과 동작이 이미 모두 있습니다.");
       return;
     }
     commit(next);
     setSelectedBehaviorId(model.behaviors.find((behavior) => isModelBehaviorAvailable(project, behavior))?.id ?? "");
     setBehaviorTime(0);
-    setNotice("已生成当前素材支持的基础表情和行为；确认效果后保存更改。" );
+    setNotice("현재 소재가 지원하는 기본 표정과 동작을 생성했습니다. 효과를 확인한 뒤 변경 사항을 저장하세요.");
   }
 
   async function upgradeSelectedMesh(): Promise<void> {
@@ -517,7 +517,7 @@ export function useEditorEditingTools({
       const replacements = await window.puppetloom.generateArtMeshes(projectDirectory, [selectedLayer.id]);
       const mesh = replacements[selectedLayer.id];
       if (!mesh) {
-        setNotice("当前图层没有生成新的轮廓网格；完全不透明的矩形素材会继续使用规则网格。" );
+        setNotice("현재 레이어에 새 윤곽 메시가 생성되지 않았습니다. 완전 불투명 사각형 소재는 규칙 메시를 계속 사용합니다.");
         return;
       }
       const neutralDeltas = reprojectSparsePointDeltas(selectedLayer.mesh, mesh, effectiveOverrides.layers?.[selectedLayer.id]?.meshPointDeltas);
@@ -529,7 +529,7 @@ export function useEditorEditingTools({
       const candidate = applyCalibrationOverridesForPreview(workspace!.baseProject, mergeCalibrationOverridesForPreview(workspace!.calibration.overrides, next));
       const failed = (await validateEditorProject(candidate)).draftSafetyChecks.filter((check) => !check.passed);
       if (failed.length > 0) {
-        throw new Error(`网格重建结果未通过全姿态质量门：${failed[0]!.issues[0]?.message ?? failed[0]!.id}。原网格和当前草稿均未改动。`);
+        throw new Error(`메시 재생성 결과가 전체 자세 품질 게이트를 통과하지 못했습니다: ${failed[0]!.issues[0]?.message ?? failed[0]!.id}. 원본 메시와 현재 초안은 바뀌지 않았습니다.`);
       }
       commit(next, undefined, true);
       setSelectedVertex(undefined);
@@ -537,10 +537,10 @@ export function useEditorEditingTools({
       setMode("mesh");
       setEditorOverlayVisible(true);
       setSection("rig");
-      const action = previousTopology === "art" ? "重新生成" : "升级";
-      setNotice(`已${action}“${selectedLayer.sourceName}”的 Alpha ArtMesh：顶点 ${previousPoints} → ${mesh.points.length}，三角形 ${previousTriangles} → ${Math.floor(mesh.triangles.length / 3)}。请检查中立与九向姿态后再保存。`);
+      const action = previousTopology === "art" ? "다시 생성" : "업그레이드";
+      setNotice(`“${selectedLayer.sourceName}”의 Alpha ArtMesh를 ${action}했습니다. 정점 ${previousPoints} → ${mesh.points.length}, 삼각형 ${previousTriangles} → ${Math.floor(mesh.triangles.length / 3)}. 중립과 9방향 자세를 확인한 뒤 저장하세요.`);
     } catch (cause) {
-      setError(`当前图层网格升级失败：${messageOf(cause)}`);
+      setError(`현재 레이어 메시 업그레이드 실패: ${messageOf(cause)}`);
     } finally {
       setMeshUpgrading(false);
       operationLock.current = false;

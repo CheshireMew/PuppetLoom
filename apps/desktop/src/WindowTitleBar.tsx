@@ -46,14 +46,14 @@ export function WindowTitleBar({ title }: { title: string }): React.JSX.Element 
       data-window-shell={state.strategy}
       data-window-frame={String(state.frame)}
     >
-      <div className="window-titlebar-drag" title="拖动窗口">
+      <div className="window-titlebar-drag" title="창 드래그">
         <span className="window-titlebar-mark" aria-hidden="true"><Layers3 /></span>
         <span className="window-titlebar-title">{title}</span>
       </div>
-      <div className="window-titlebar-controls" aria-label="窗口控制">
-        <button type="button" aria-label="最小化窗口" title="最小化" disabled={!state.minimizable} onClick={() => void act("minimize")}><Minus aria-hidden="true" /></button>
-        <button type="button" aria-label={state.maximized ? "还原窗口" : "最大化窗口"} title={state.maximized ? "还原" : "最大化"} disabled={!state.maximizable} onClick={() => void act("toggle-maximize")}>{state.maximized ? <Copy aria-hidden="true" /> : <Square aria-hidden="true" />}</button>
-        <button type="button" className="window-titlebar-close" aria-label="关闭窗口" title="关闭" disabled={!state.closable} onClick={() => void act("close")}><X aria-hidden="true" /></button>
+      <div className="window-titlebar-controls" aria-label="창 제어">
+        <button type="button" aria-label="창 최소화" title="최소화" disabled={!state.minimizable} onClick={() => void act("minimize")}><Minus aria-hidden="true" /></button>
+        <button type="button" aria-label={state.maximized ? "창 복원" : "창 최대화"} title={state.maximized ? "복원" : "최대화"} disabled={!state.maximizable} onClick={() => void act("toggle-maximize")}>{state.maximized ? <Copy aria-hidden="true" /> : <Square aria-hidden="true" />}</button>
+        <button type="button" className="window-titlebar-close" aria-label="창 닫기" title="닫기" disabled={!state.closable} onClick={() => void act("close")}><X aria-hidden="true" /></button>
       </div>
     </div>
   );

@@ -405,7 +405,7 @@ export async function startFaceInput(
   onMotion: (motion: RuntimeMotionInput) => void,
   onStatus: (status: InputAdapterStatus) => void
 ): Promise<RuntimeInputAdapter> {
-  onStatus({ state: "starting", message: "正在启动摄像头并加载面捕模型…" });
+  onStatus({ state: "starting", message: "웹캠을 시작하고 얼굴 추적 모델을 불러오는 중…" });
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
   const video = document.createElement("video");
   video.muted = true;
@@ -472,10 +472,10 @@ export async function startFaceInput(
         });
         const upperBody = upperBodyMapper.sample(pose ? { poseLandmarks: pose, hands } : undefined);
         onMotion({ ...motion, ...(upperBody ?? {}) });
-        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然睁眼、闭口看向摄像头，正在校准…" });
+        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "웹캠 얼굴 추적이 캘리브레이션됨" : "눈을 자연스럽게 뜨고 입을 다문 채 웹캠을 보세요. 캘리브레이션 중…" });
         hadFace = true;
       } else if (hadFace) {
-        onStatus({ state: "lost", message: "暂时没有检测到面部，角色已回到自主动作" });
+        onStatus({ state: "lost", message: "얼굴을 잠시 감지하지 못해 캐릭터가 자율 동작으로 돌아감" });
         hadFace = false;
       }
     }
@@ -492,7 +492,7 @@ export async function startFaceInput(
       handLandmarker?.close();
       stream.getTracks().forEach((track) => track.stop());
       video.srcObject = null;
-      onStatus({ state: "stopped", message: "摄像头面捕已关闭" });
+      onStatus({ state: "stopped", message: "웹캠 얼굴 추적이 꺼짐" });
     }
   };
 }
@@ -501,7 +501,7 @@ export async function startMicrophoneInput(
   onMotion: (motion: RuntimeMotionInput) => void,
   onStatus: (status: InputAdapterStatus) => void
 ): Promise<RuntimeInputAdapter> {
-  onStatus({ state: "starting", message: "正在启动麦克风…" });
+  onStatus({ state: "starting", message: "마이크를 시작하는 중…" });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }, video: false });
   let context: AudioContext | undefined;
   let source: MediaStreamAudioSourceNode | undefined;
@@ -532,7 +532,7 @@ export async function startMicrophoneInput(
     previous = now;
     frame = requestAnimationFrame(tick);
   };
-  onStatus({ state: "active", message: "麦克风口型已启用" });
+  onStatus({ state: "active", message: "마이크 립싱크가 켜짐" });
   frame = requestAnimationFrame(tick);
   return {
     mediaStream: stream,
@@ -543,7 +543,7 @@ export async function startMicrophoneInput(
       analyser?.disconnect();
       stream.getTracks().forEach((track) => track.stop());
       await context?.close();
-      onStatus({ state: "stopped", message: "麦克风口型已关闭" });
+      onStatus({ state: "stopped", message: "마이크 립싱크가 꺼짐" });
     }
   };
 }

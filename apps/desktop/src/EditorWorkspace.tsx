@@ -111,7 +111,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       pendingRef.current = loaded.draft.overrides;
       setPending(loaded.draft.overrides);
       setLabel(loaded.draft.label ?? "");
-      setNotice(`已恢复 ${new Date(loaded.draft.updatedAt).toLocaleString()} 自动保存的草稿。`);
+      setNotice(`${new Date(loaded.draft.updatedAt).toLocaleString()}에 자동 저장된 초안을 복원했습니다.`);
       setDraftStatus("saved");
     }
   }
@@ -173,7 +173,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   }, [renderProject, renderSelectedLayer]);
 
   useEffect(() => {
-    if (validationError) setError(`后台安全检查失败：${validationError}`);
+    if (validationError) setError(`백그라운드 안전 검사 실패: ${validationError}`);
   }, [validationError]);
 
   useEffect(() => {
@@ -398,30 +398,30 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     try {
       const failed = (await validateNow(project!)).draftSafetyChecks.filter((check) => !check.passed);
       if (failed.length > 0) {
-        const firstIssue = failed[0]?.issues[0]?.message ?? "存在不安全姿态";
-        setError(`当前草稿未保存：${failed.length} 个安全姿态未通过。${firstIssue} 请先微调或撤销这次改动。`);
+        const firstIssue = failed[0]?.issues[0]?.message ?? "안전하지 않은 자세가 있습니다";
+        setError(`현재 초안을 저장하지 못했습니다. 안전 자세 ${failed.length}개가 통과하지 못했습니다. ${firstIssue} 먼저 미세 조정하거나 이번 변경을 실행 취소하세요.`);
         setSection("rig"); setMode("mesh"); setEditorOverlayVisible(true);
         if (failed[0]?.id && editorPoses[failed[0].id]) selectPose(failed[0].id);
         return;
       }
       cancelScheduled();
-      const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: label.trim() || "用户界面校准", overrides: pending });
+      const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: label.trim() || "UI 캘리브레이션", overrides: pending });
       pendingRef.current = {}; setPending({}); setUndoStack([]); setRedoStack([]); setLabel(""); setDraftStatus("idle");
       await reload();
       try {
         await showEvidence(result);
-        setNotice(`已保存版本 ${result.calibration.revision}，安全系数 ${result.project.quality.safetyScale.toFixed(2)}。`);
+        setNotice(`버전 ${result.calibration.revision}을 저장했습니다. 안전 계수 ${result.project.quality.safetyScale.toFixed(2)}.`);
       } catch (cause) {
-        setNotice(`版本 ${result.calibration.revision} 已保存，但对比图暂时无法显示：${messageOf(cause)}`);
+        setNotice(`버전 ${result.calibration.revision}은 저장됐지만 비교 이미지를 잠시 표시할 수 없습니다: ${messageOf(cause)}`);
       }
     } catch (cause) { setError(messageOf(cause)); }
     finally { setBusy(false); operationLock.current = false; }
   }
 
   async function restoreRevision(revision: number, restoreLabel: string): Promise<void> {
-    if (revision === workspace?.calibration.revision) { setError("当前已经是这个版本，不需要再次恢复。" ); return; }
-    if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复历史版本。草稿仍然保留。" ); return; }
-    if (!window.confirm(`把版本 ${revision} 恢复为一个新的当前版本？现有历史不会删除。`)) return;
+    if (revision === workspace?.calibration.revision) { setError("이미 이 버전입니다. 다시 복원할 필요가 없습니다."); return; }
+    if (hasPending) { setError("먼저 현재 초안을 저장하거나 명시적으로 버린 뒤 이전 버전을 복원하세요. 초안은 그대로 유지됩니다."); return; }
+    if (!window.confirm(`버전 ${revision}을 새 현재 버전으로 복원할까요? 기존 기록은 삭제되지 않습니다.`)) return;
     operationLock.current = true; setBusy(true); setError("");
     try {
       const result = await window.puppetloom.restoreCalibration(projectDirectory, revision, workspace!.calibration.revision, restoreLabel);
@@ -429,9 +429,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       await reload();
       try {
         await showEvidence(result);
-        setNotice(`已把版本 ${revision} 恢复为新的版本 ${result.calibration.revision}。`);
+        setNotice(`버전 ${revision}을 새 버전 ${result.calibration.revision}으로 복원했습니다.`);
       } catch (cause) {
-        setNotice(`版本 ${result.calibration.revision} 已恢复，但对比图暂时无法显示：${messageOf(cause)}`);
+        setNotice(`버전 ${result.calibration.revision}은 복원됐지만 비교 이미지를 잠시 표시할 수 없습니다: ${messageOf(cause)}`);
       }
     } catch (cause) { setError(messageOf(cause)); }
     finally { setBusy(false); operationLock.current = false; }
@@ -439,19 +439,19 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   async function resetSelectedLayer(): Promise<void> {
     if (!selectedLayer) return;
-    if (!workspace?.calibration.overrides.layers?.[selectedLayer.id]) { setError("这个图层当前使用的就是自动绑定，没有需要恢复的人工校准。" ); return; }
-    if (hasPending) { setError("请先保存或明确放弃当前草稿，再恢复自动绑定。草稿仍然保留。" ); return; }
-    if (!window.confirm(`恢复“${selectedLayer.sourceName}”的自动绑定？其它图层不会改变。`)) return;
+    if (!workspace?.calibration.overrides.layers?.[selectedLayer.id]) { setError("이 레이어는 자동 바인딩을 사용 중이며 복원할 수동 캘리브레이션이 없습니다."); return; }
+    if (hasPending) { setError("먼저 현재 초안을 저장하거나 명시적으로 버린 뒤 자동 바인딩을 복원하세요. 초안은 그대로 유지됩니다."); return; }
+    if (!window.confirm(`“${selectedLayer.sourceName}”의 자동 바인딩을 복원할까요? 다른 레이어는 바뀌지 않습니다.`)) return;
     operationLock.current = true; setBusy(true); setError("");
     try {
-      const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: `恢复 ${selectedLayer.sourceName} 的自动绑定`, overrides: {}, clear: { layers: [selectedLayer.id] } });
+      const result = await window.puppetloom.saveCalibration(projectDirectory, { baseRevision: workspace!.calibration.revision, label: `${selectedLayer.sourceName} 자동 바인딩 복원`, overrides: {}, clear: { layers: [selectedLayer.id] } });
       pendingRef.current = {}; setPending({}); setUndoStack([]); setRedoStack([]);
       await reload();
       try {
         await showEvidence(result);
-        setNotice(`已恢复 ${selectedLayer.sourceName}，其它校准保持不变。`);
+        setNotice(`${selectedLayer.sourceName}을(를) 복원했습니다. 다른 캘리브레이션은 그대로입니다.`);
       } catch (cause) {
-        setNotice(`已恢复 ${selectedLayer.sourceName}，但对比图暂时无法显示：${messageOf(cause)}`);
+        setNotice(`${selectedLayer.sourceName}을(를) 복원했지만 비교 이미지를 잠시 표시할 수 없습니다: ${messageOf(cause)}`);
       }
     } catch (cause) { setError(messageOf(cause)); }
     finally { setBusy(false); operationLock.current = false; }
@@ -464,19 +464,19 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
 
   async function leaveEditor(): Promise<void> {
     try { await flushDraft(); }
-    catch (cause) { setError(`离开前保存草稿失败：${messageOf(cause)}`); return; }
+    catch (cause) { setError(`나가기 전 초안 저장 실패: ${messageOf(cause)}`); return; }
     onBack();
   }
 
   async function discardDraft(): Promise<void> {
-    if (!hasPending || !window.confirm("放弃当前未提交草稿？已保存的校准历史不会改变。")) return;
+    if (!hasPending || !window.confirm("제출하지 않은 현재 초안을 버릴까요? 저장된 캘리브레이션 기록은 바뀌지 않습니다.")) return;
     cancelScheduled();
     try {
       await window.puppetloom.discardCalibrationDraft(projectDirectory);
       pendingRef.current = {};
       setPending({}); setUndoStack([]); setRedoStack([]); setLabel(""); setDraftStatus("idle"); setError("");
-      setNotice("当前草稿已明确放弃；历史校准未改变。" );
-    } catch (cause) { setError(`无法放弃草稿：${messageOf(cause)}`); }
+      setNotice("현재 초안을 버렸습니다. 저장된 캘리브레이션은 그대로입니다.");
+    } catch (cause) { setError(`초안을 버릴 수 없습니다: ${messageOf(cause)}`); }
   }
 
   async function launchViewer(): Promise<void> {
@@ -484,15 +484,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     try {
       await window.puppetloom.launchViewer(projectDirectory, {
         ...(project ? { project } : {}),
-        sourceLabel: hasPending ? "未保存草稿预览" : `已保存 revision ${workspace?.calibration.revision ?? 0}`
+        sourceLabel: hasPending ? "저장되지 않은 초안 미리보기" : `저장된 revision ${workspace?.calibration.revision ?? 0}`
       });
-      setNotice(hasPending ? "角色窗口已更新为当前未保存草稿；保存前仅用于预览。" : "角色窗口已打开并同步到当前版本。重复运行会更新同一个窗口。");
+      setNotice(hasPending ? "캐릭터 창을 저장되지 않은 현재 초안으로 업데이트했습니다. 저장 전에는 미리보기만 가능합니다." : "캐릭터 창을 열고 현재 버전에 동기화했습니다. 다시 실행하면 같은 창이 업데이트됩니다.");
     } catch (cause) {
-      setError(`无法打开角色窗口：${messageOf(cause)}`);
+      setError(`캐릭터 창을 열 수 없습니다: ${messageOf(cause)}`);
     }
   }
 
-  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />返回</button><p>{error || "正在加载编辑器…"}</p></main>;
+  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />뒤로</button><p>{error || "편집기를 불러오는 중…"}</p></main>;
 
   const sessions = [...workspace.sessions].reverse();
   const selectedTuning = { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[secondaryPart] ?? {}) };
@@ -501,25 +501,25 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
   const neutralCorrectionCount = Object.keys(effectiveOverrides.layers?.[selectedLayerId]?.meshPointDeltas ?? {}).length;
   const currentPoseCheck = poseChecks[poseId];
   const draftSafetyPassed = draftSafetyChecks.length > 0 && draftSafetyChecks.every((check) => check.passed);
-  const currentPoseLabel = editorPoses[poseId]?.label ?? "自定义姿态";
+  const currentPoseLabel = editorPoses[poseId]?.label ?? "사용자 지정 자세";
   const canRestoreAll = workspace.calibration.revision > 0 && Object.keys(workspace.calibration.overrides).length > 0;
   const canResetSelectedLayer = Boolean(selectedLayer && workspace.calibration.overrides.layers?.[selectedLayer.id]);
 
   return (
     <main className={`editor-shell section-${section} ${focusedPreview ? "focus-preview" : ""}`} data-testid="editor">
-      {focusedPreview && <button className="exit-focus-preview icon-only" aria-label="退出沉浸预览" title="退出沉浸预览" onClick={() => setFocusedPreview(false)}><Minimize2 aria-hidden="true" /></button>}
-      {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button className="icon-only" aria-label="关闭提示" title="关闭提示" onClick={() => { setError(""); setNotice(""); }}><X aria-hidden="true" /></button></div>}
-      {interactionLocked && <div className="editor-operation-shield" role="status" aria-live="polite"><div className="spinner"/><strong>{meshUpgrading ? "正在生成并验证轮廓网格…" : "正在完成校准事务…"}</strong><span>完成前编辑已暂时锁定，当前草稿不会被覆盖。</span></div>}
+      {focusedPreview && <button className="exit-focus-preview icon-only" aria-label="몰입 미리보기 종료" title="몰입 미리보기 종료" onClick={() => setFocusedPreview(false)}><Minimize2 aria-hidden="true" /></button>}
+      {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button className="icon-only" aria-label="알림 닫기" title="알림 닫기" onClick={() => { setError(""); setNotice(""); }}><X aria-hidden="true" /></button></div>}
+      {interactionLocked && <div className="editor-operation-shield" role="status" aria-live="polite"><div className="spinner"/><strong>{meshUpgrading ? "윤곽 메시를 생성하고 검증하는 중…" : "캘리브레이션 작업을 완료하는 중…"}</strong><span>완료될 때까지 편집이 잠시 잠깁니다. 현재 초안은 덮어쓰이지 않습니다.</span></div>}
       <header className="editor-header">
-        <button className="icon-only editor-back" aria-label="返回主页" title="返回主页" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
-        <div><h1>{project.name}</h1><p>版本 {workspace.calibration.revision} · {project.rigLevel === "semantic" ? "完整语义绑定" : project.rigLevel === "grouped" ? "分组绑定" : "基础绑定"} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
+        <button className="icon-only editor-back" aria-label="홈으로" title="홈으로" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
+        <div><h1>{project.name}</h1><p>버전 {workspace.calibration.revision} · {project.rigLevel === "semantic" ? "전체 시맨틱 바인딩" : project.rigLevel === "grouped" ? "그룹 바인딩" : "기본 바인딩"} · 레이어 {project.layers.length}개 · 저장된 안전 계수 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 초안${draftSafetyPassed ? " 전체 자세 검사 통과" : "에 안전하지 않은 자세 있음"}` : ""}</p></div>
         <div className="editor-history-actions">
-          <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
-          <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="恢复全部自动绑定" title={canRestoreAll ? "恢复全部自动绑定" : "当前没有已保存的人工校准可恢复"} onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
-          <button className="header-save with-icon" aria-label="保存更改" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存"}</button>
-          <button className="with-icon" aria-label="运行角色窗口" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行</button>
+          <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "자동 저장 중" : draftStatus === "saved" ? "초안 저장됨" : draftStatus === "error" ? "초안 저장 실패" : draftStatus === "waiting" ? "자동 저장 대기" : ""}</span>
+          <button className="icon-only" aria-label="실행 취소" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="실행 취소 (Ctrl+Z)"><Undo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label="다시 실행" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="다시 실행 (Ctrl+Y / Ctrl+Shift+Z)"><Redo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label="전체 자동 바인딩 복원" title={canRestoreAll ? "전체 자동 바인딩 복원" : "복원할 저장된 수동 캘리브레이션이 없습니다"} onClick={() => void restoreRevision(0, "전체 자동 바인딩 복원")} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
+          <button className="header-save with-icon" aria-label="변경 사항 저장" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "검증 중…" : "저장"}</button>
+          <button className="with-icon" aria-label="캐릭터 창 실행" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />실행</button>
         </div>
       </header>
 
@@ -528,9 +528,9 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       <section className="editor-toolbar">
         {section === "rig" ? <><div className="mode-tabs">{(["semantic", "anchors", "layer", "mesh"] as EditMode[]).map((item) => {
           const active = editorOverlayVisible && mode === item;
-          const label = item === "semantic" ? "脸部控制点" : item === "anchors" ? "身体锚点" : item === "layer" ? "图层轴心" : "网格与权重";
+          const label = item === "semantic" ? "얼굴 컨트롤 포인트" : item === "anchors" ? "몸 앵커" : item === "layer" ? "레이어 피벗" : "메시·가중치";
           const Icon = item === "semantic" ? ScanFace : item === "anchors" ? Bone : item === "layer" ? Anchor : Grid3x3;
-          return <button aria-pressed={active} className={`${active ? "active" : ""} with-icon`} key={item} title={active ? `再次点击隐藏${label}` : `显示${label}`} onClick={() => {
+          return <button aria-pressed={active} className={`${active ? "active" : ""} with-icon`} key={item} title={active ? `다시 클릭하면 ${label} 숨김` : `${label} 표시`} onClick={() => {
             if (active) setEditorOverlayVisible(false);
             else {
               setMode(item); setEditorOverlayVisible(true);
@@ -538,18 +538,18 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
             }
           }}><Icon aria-hidden="true" />{label}</button>;
         })}{editorOverlayVisible && mode === "mesh" && <>
-          <button aria-pressed={showNeutralMeshReference} className={`${showNeutralMeshReference ? "active" : ""} with-icon`} title="在实时变形网格下叠加中立网格" onClick={() => setShowNeutralMeshReference((value) => !value)}><View aria-hidden="true" />中立参考</button>
-          <button disabled={!hasPending} className={`${showDraftBefore ? "active" : ""} with-icon`} onPointerDown={() => setShowDraftBefore(true)} onPointerUp={() => setShowDraftBefore(false)} onPointerCancel={() => setShowDraftBefore(false)} onPointerLeave={() => setShowDraftBefore(false)}><GitCompare aria-hidden="true" />按住看修改前</button>
-          <span className={`pose-edit-status ${currentPoseCheck?.passed === false ? "warning" : ""}`}>正在校正：{currentPoseLabel}{poseId === "neutral" ? "（基础网格）" : "（姿态关键形）"}</span>
+          <button aria-pressed={showNeutralMeshReference} className={`${showNeutralMeshReference ? "active" : ""} with-icon`} title="실시간 변형 메시 아래에 중립 메시를 겹쳐 표시" onClick={() => setShowNeutralMeshReference((value) => !value)}><View aria-hidden="true" />중립 참조</button>
+          <button disabled={!hasPending} className={`${showDraftBefore ? "active" : ""} with-icon`} onPointerDown={() => setShowDraftBefore(true)} onPointerUp={() => setShowDraftBefore(false)} onPointerCancel={() => setShowDraftBefore(false)} onPointerLeave={() => setShowDraftBefore(false)}><GitCompare aria-hidden="true" />누르고 있으면 수정 전</button>
+          <span className={`pose-edit-status ${currentPoseCheck?.passed === false ? "warning" : ""}`}>보정 중: {currentPoseLabel}{poseId === "neutral" ? " (기본 메시)" : " (자세 키셰이프)"}</span>
         </>}</div><div className="pose-tabs">{Object.entries(editorPoses).map(([id, item]) => {
           const key = `${item.state.headYaw},${item.state.headPitch}`;
           const corrected = id === "neutral" ? neutralCorrectionCount > 0 : (correctedSamples.get(key) ?? 0) > 0;
           const check = poseChecks[id];
           const Icon = item.icon;
-          const status = `${corrected ? "，已有人工微调" : "，尚未微调"}${check?.passed === false ? `，${check.issues[0]?.message ?? "安全检查未通过"}` : ""}`;
+          const status = `${corrected ? ", 수동 미세 조정됨" : ", 아직 미세 조정 안 함"}${check?.passed === false ? `, ${check.issues[0]?.message ?? "안전 검사 실패"}` : ""}`;
           return <button className={`pose-shortcut icon-only ${!autonomous && poseId === id ? "active" : ""} ${corrected ? "is-corrected" : ""} ${check?.passed === false ? "pose-warning" : ""}`} aria-label={`${item.label}${status}`} title={`${item.label}${status}`} key={id} onClick={() => selectPose(id)}><Icon aria-hidden="true" /></button>;
-        })}<button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => setAutonomous((value) => !value)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停动作" : "自主预览"}</button></div></>
-          : <><div className="workspace-context"><strong>{section === "overview" ? "先判断完整度，再进入具体工作区" : section === "parameters" ? "拖动参数或点击九向控制器，画面会实时更新" : section === "dynamics" ? "表情、行为和次级运动在同一画面中联动检查" : "编辑标记已经隐藏，只看最终呈现"}</strong><small>{section === "overview" ? "所有数据都来自当前项目，不用猜测系统是否生效。" : section === "parameters" ? "当前值不会写入项目，只有校准参数修改才会进入草稿。" : section === "dynamics" ? "次级运动和参数物理的调整会进入校准草稿。" : "建议依次检查九向头部姿态，以及素材实际支持的闭眼和张嘴。"}</small></div><div className="pose-tabs"><button className="with-icon" onClick={() => selectPose("neutral")}><RotateCcw aria-hidden="true" />恢复中立</button><button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "暂停自主动作" : "播放自主动作"}</button></div></>}
+        })}<button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => setAutonomous((value) => !value)}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "동작 일시 정지" : "자율 미리보기"}</button></div></>
+          : <><div className="workspace-context"><strong>{section === "overview" ? "완성도를 먼저 확인한 뒤 작업 영역으로 이동하세요" : section === "parameters" ? "파라미터를 드래그하거나 9방향 컨트롤러를 클릭하면 화면이 바로 갱신됩니다" : section === "dynamics" ? "표정, 동작, 2차 모션을 한 화면에서 함께 확인하세요" : "편집 표시가 숨겨져 최종 화면만 보입니다"}</strong><small>{section === "overview" ? "모든 데이터는 현재 프로젝트에서 오므로 시스템이 적용됐는지 추측할 필요가 없습니다." : section === "parameters" ? "현재 값은 프로젝트에 기록되지 않으며, 캘리브레이션 파라미터를 바꿀 때만 초안에 들어갑니다." : section === "dynamics" ? "2차 모션과 파라미터 물리 조정은 캘리브레이션 초안에 들어갑니다." : "9방향 머리 자세와 소재가 실제로 지원하는 눈 감기·입 열기를 차례로 확인하세요."}</small></div><div className="pose-tabs"><button className="with-icon" onClick={() => selectPose("neutral")}><RotateCcw aria-hidden="true" />중립으로</button><button className={`${autonomous ? "active" : ""} with-icon`} onClick={() => { setBehaviorPlaying(false); setAutonomous((value) => !value); }}>{autonomous ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}{autonomous ? "자율 동작 일시 정지" : "자율 동작 재생"}</button></div></>}
       </section>
 
       <section className={`editor-workspace preview-background-${previewBackground}`}>
