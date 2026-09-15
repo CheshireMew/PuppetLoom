@@ -232,7 +232,7 @@ try {
   if (!populatedRecentCard || populatedRecentCard.y < 0 || populatedRecentCard.y + populatedRecentCard.height > populatedViewportHeight) throw new Error("小窗口滚动后仍无法完整看到有内容的最近项目卡片。");
   await recentProject.click();
   await control.getByTestId("editor").waitFor();
-  await control.getByText("PuppetLoom · 绑定与校准编辑器", { exact: true }).waitFor();
+  await control.getByTestId("window-titlebar").waitFor();
   const controlWindow = await electronApp.browserWindow(control);
   await control.waitForFunction(async () => {
     const state = await window.puppetloom.windowShellState();

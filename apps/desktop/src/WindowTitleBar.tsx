@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Copy, Layers3, Minus, Square, X } from "lucide-react";
 import type { WindowShellAction, WindowShellState } from "../electron/global.js";
+import { LanguageSwitcher } from "./i18n/index.js";
+import { useLocale } from "./i18n/index.js";
 
 const initialState: WindowShellState = {
   strategy: "integrated",
@@ -18,6 +20,7 @@ const initialState: WindowShellState = {
 };
 
 export function WindowTitleBar({ title }: { title: string }): React.JSX.Element {
+  const { t } = useLocale();
   const [state, setState] = useState(initialState);
 
   useEffect(() => {
@@ -46,14 +49,15 @@ export function WindowTitleBar({ title }: { title: string }): React.JSX.Element 
       data-window-shell={state.strategy}
       data-window-frame={String(state.frame)}
     >
-      <div className="window-titlebar-drag" title="창 드래그">
+      <div className="window-titlebar-drag" title={t("windowDrag")}>
         <span className="window-titlebar-mark" aria-hidden="true"><Layers3 /></span>
         <span className="window-titlebar-title">{title}</span>
       </div>
-      <div className="window-titlebar-controls" aria-label="창 제어">
-        <button type="button" aria-label="창 최소화" title="최소화" disabled={!state.minimizable} onClick={() => void act("minimize")}><Minus aria-hidden="true" /></button>
-        <button type="button" aria-label={state.maximized ? "창 복원" : "창 최대화"} title={state.maximized ? "복원" : "최대화"} disabled={!state.maximizable} onClick={() => void act("toggle-maximize")}>{state.maximized ? <Copy aria-hidden="true" /> : <Square aria-hidden="true" />}</button>
-        <button type="button" className="window-titlebar-close" aria-label="창 닫기" title="닫기" disabled={!state.closable} onClick={() => void act("close")}><X aria-hidden="true" /></button>
+      <LanguageSwitcher compact />
+      <div className="window-titlebar-controls" aria-label={t("windowControls")}>
+        <button type="button" aria-label={t("windowMinimize")} title={t("minimize")} disabled={!state.minimizable} onClick={() => void act("minimize")}><Minus aria-hidden="true" /></button>
+        <button type="button" aria-label={state.maximized ? t("windowRestore") : t("windowMaximize")} title={state.maximized ? t("restore") : t("maximize")} disabled={!state.maximizable} onClick={() => void act("toggle-maximize")}>{state.maximized ? <Copy aria-hidden="true" /> : <Square aria-hidden="true" />}</button>
+        <button type="button" className="window-titlebar-close" aria-label={t("windowClose")} title={t("close")} disabled={!state.closable} onClick={() => void act("close")}><X aria-hidden="true" /></button>
       </div>
     </div>
   );

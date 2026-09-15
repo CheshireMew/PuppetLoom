@@ -400,12 +400,35 @@ function blendshapes(result: { faceBlendshapes?: Array<{ categories: Array<{ cat
   return Object.fromEntries((result.faceBlendshapes?.[0]?.categories ?? []).flatMap((category) => category.categoryName ? [[category.categoryName, category.score] as const] : []));
 }
 
+export interface InputStatusCopy {
+  cameraStarting: string;
+  cameraCalibrating: string;
+  cameraCalibrated: string;
+  cameraLost: string;
+  cameraStopped: string;
+  microphoneStarting: string;
+  microphoneActive: string;
+  microphoneStopped: string;
+}
+
+const defaultInputCopy: InputStatusCopy = {
+  cameraStarting: "웹캠을 시작하고 얼굴 추적 모델을 불러오는 중…",
+  cameraCalibrating: "눈을 자연스럽게 뜨고 입을 다문 채 웹캠을 보세요. 캘리브레이션 중…",
+  cameraCalibrated: "웹캠 얼굴 추적이 캘리브레이션됨",
+  cameraLost: "얼굴을 잠시 감지하지 못해 캐릭터가 자율 동작으로 돌아감",
+  cameraStopped: "웹캠 얼굴 추적이 꺼짐",
+  microphoneStarting: "마이크를 시작하는 중…",
+  microphoneActive: "마이크 립싱크가 켜짐",
+  microphoneStopped: "마이크 립싱크가 꺼짐"
+};
+
 export async function startFaceInput(
   assets: { wasmBaseUrl: string; faceLandmarkerModelUrl: string; poseLandmarkerModelUrl?: string; handLandmarkerModelUrl?: string },
   onMotion: (motion: RuntimeMotionInput) => void,
-  onStatus: (status: InputAdapterStatus) => void
+  onStatus: (status: InputAdapterStatus) => void,
+  copy: InputStatusCopy = defaultInputCopy
 ): Promise<RuntimeInputAdapter> {
-  onStatus({ state: "starting", message: "웹캠을 시작하고 얼굴 추적 모델을 불러오는 중…" });
+  onStatus({ state: "starting", message: copy.cameraStarting });
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
   const video = document.createElement("video");
   video.muted = true;
@@ -472,10 +495,10 @@ export async function startFaceInput(
         });
         const upperBody = upperBodyMapper.sample(pose ? { poseLandmarks: pose, hands } : undefined);
         onMotion({ ...motion, ...(upperBody ?? {}) });
-        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "웹캠 얼굴 추적이 캘리브레이션됨" : "눈을 자연스럽게 뜨고 입을 다문 채 웹캠을 보세요. 캘리브레이션 중…" });
+        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? copy.cameraCalibrated : copy.cameraCalibrating });
         hadFace = true;
       } else if (hadFace) {
-        onStatus({ state: "lost", message: "얼굴을 잠시 감지하지 못해 캐릭터가 자율 동작으로 돌아감" });
+        onStatus({ state: "lost", message: copy.cameraLost });
         hadFace = false;
       }
     }
@@ -492,16 +515,17 @@ export async function startFaceInput(
       handLandmarker?.close();
       stream.getTracks().forEach((track) => track.stop());
       video.srcObject = null;
-      onStatus({ state: "stopped", message: "웹캠 얼굴 추적이 꺼짐" });
+      onStatus({ state: "stopped", message: copy.cameraStopped });
     }
   };
 }
 
 export async function startMicrophoneInput(
   onMotion: (motion: RuntimeMotionInput) => void,
-  onStatus: (status: InputAdapterStatus) => void
+  onStatus: (status: InputAdapterStatus) => void,
+  copy: InputStatusCopy = defaultInputCopy
 ): Promise<RuntimeInputAdapter> {
-  onStatus({ state: "starting", message: "마이크를 시작하는 중…" });
+  onStatus({ state: "starting", message: copy.microphoneStarting });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }, video: false });
   let context: AudioContext | undefined;
   let source: MediaStreamAudioSourceNode | undefined;
@@ -532,7 +556,7 @@ export async function startMicrophoneInput(
     previous = now;
     frame = requestAnimationFrame(tick);
   };
-  onStatus({ state: "active", message: "마이크 립싱크가 켜짐" });
+  onStatus({ state: "active", message: copy.microphoneActive });
   frame = requestAnimationFrame(tick);
   return {
     mediaStream: stream,
@@ -543,7 +567,7 @@ export async function startMicrophoneInput(
       analyser?.disconnect();
       stream.getTracks().forEach((track) => track.stop());
       await context?.close();
-      onStatus({ state: "stopped", message: "마이크 립싱크가 꺼짐" });
+      onStatus({ state: "stopped", message: copy.microphoneStopped });
     }
   };
 }

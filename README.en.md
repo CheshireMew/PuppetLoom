@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.zh.md">中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./README.md">한국어</a> | <a href="./docs/AGENT_USAGE.md">文档</a> | <a href="./CONTRIBUTING.md">贡献</a> | <a href="https://github.com/CheshireMew/PuppetLoom/issues">反馈</a>
+  <a href="./README.md">中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./README.ko.md">한국어</a> | <a href="./docs/AGENT_USAGE.md">文档</a> | <a href="./CONTRIBUTING.md">贡献</a> | <a href="https://github.com/CheshireMew/PuppetLoom/issues">反馈</a>
 </p>
 
 <p align="center">

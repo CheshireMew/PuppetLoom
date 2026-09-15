@@ -44,6 +44,14 @@ button { font: 12px/1.2 Inter, "Segoe UI", "Microsoft YaHei", sans-serif; }
 .window-titlebar-mark { display: grid; place-items: center; width: 22px; height: 22px; margin-right: 8px; color: #a9a3ff; }
 .window-titlebar-mark svg { width: 16px; height: 16px; stroke-width: 1.7; }
 .window-titlebar-title { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.language-switcher { display: inline-flex; align-items: center; gap: 4px; }
+.language-switcher.is-compact { -webkit-app-region: no-drag; margin-right: 8px; }
+.language-switcher button { min-width: 0; padding: 4px 8px; border: 1px solid transparent; border-radius: 5px; color: #9aa6b8; background: transparent; font-size: 11px; line-height: 1.2; }
+.language-switcher button:hover { color: #fff; background: #2b3441; }
+.language-switcher button.is-active { color: #fff; border-color: #6f65c9; background: #302c55; }
+.language-settings { display: grid; gap: 8px; padding: 12px; border: 1px solid #303948; border-radius: 9px; background: #111721; }
+.language-settings strong { font-size: 13px; }
+.language-settings small { color: #7f8b9d; font-size: 10px; }
 .window-titlebar-controls { -webkit-app-region: no-drag; display: flex; margin-left: auto; }
 .window-titlebar-controls button { display: grid; place-items: center; width: 46px; height: calc(var(--window-titlebar-height) - 1px); min-width: 46px; padding: 0; border: 0; border-radius: 0; color: inherit; background: transparent; line-height: 1; }
 .window-titlebar-controls button:hover { color: #fff; background: #2b3441; }

@@ -45,8 +45,10 @@ import {
 } from "./editor/EditorStudioPanels.js";
 import { useEditorDraftPersistence } from "./editor/useEditorDraftPersistence.js";
 import { useEditorValidation } from "./editor/useEditorValidation.js";
+import { useLocale } from "./i18n/index.js";
 
 export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory: string; onBack: () => void }): React.JSX.Element {
+  const { t } = useLocale();
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const operationLock = useRef(false);
@@ -492,7 +494,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     }
   }
 
-  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />뒤로</button><p>{error || "편집기를 불러오는 중…"}</p></main>;
+  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />{t("editorBack")}</button><p>{error || t("editorLoading")}</p></main>;
 
   const sessions = [...workspace.sessions].reverse();
   const selectedTuning = { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[secondaryPart] ?? {}) };
@@ -511,15 +513,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button className="icon-only" aria-label="알림 닫기" title="알림 닫기" onClick={() => { setError(""); setNotice(""); }}><X aria-hidden="true" /></button></div>}
       {interactionLocked && <div className="editor-operation-shield" role="status" aria-live="polite"><div className="spinner"/><strong>{meshUpgrading ? "윤곽 메시를 생성하고 검증하는 중…" : "캘리브레이션 작업을 완료하는 중…"}</strong><span>완료될 때까지 편집이 잠시 잠깁니다. 현재 초안은 덮어쓰이지 않습니다.</span></div>}
       <header className="editor-header">
-        <button className="icon-only editor-back" aria-label="홈으로" title="홈으로" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
-        <div><h1>{project.name}</h1><p>버전 {workspace.calibration.revision} · {project.rigLevel === "semantic" ? "전체 시맨틱 바인딩" : project.rigLevel === "grouped" ? "그룹 바인딩" : "기본 바인딩"} · 레이어 {project.layers.length}개 · 저장된 안전 계수 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 초안${draftSafetyPassed ? " 전체 자세 검사 통과" : "에 안전하지 않은 자세 있음"}` : ""}</p></div>
+        <button className="icon-only editor-back" aria-label={t("goHome")} title={t("goHome")} disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
+        <div><h1>{project.name}</h1><p>{t("revisionMeta", { revision: workspace.calibration.revision, rig: project.rigLevel === "semantic" ? t("rigSemantic") : project.rigLevel === "grouped" ? t("rigGrouped") : t("rigBasic"), layers: project.layers.length, safety: workspace.project.quality.safetyScale.toFixed(2) })}{draftSafetyChecks.length ? (draftSafetyPassed ? t("draftAllPassed") : t("draftUnsafe")) : ""}</p></div>
         <div className="editor-history-actions">
-          <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "자동 저장 중" : draftStatus === "saved" ? "초안 저장됨" : draftStatus === "error" ? "초안 저장 실패" : draftStatus === "waiting" ? "자동 저장 대기" : ""}</span>
-          <button className="icon-only" aria-label="실행 취소" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="실행 취소 (Ctrl+Z)"><Undo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="다시 실행" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="다시 실행 (Ctrl+Y / Ctrl+Shift+Z)"><Redo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="전체 자동 바인딩 복원" title={canRestoreAll ? "전체 자동 바인딩 복원" : "복원할 저장된 수동 캘리브레이션이 없습니다"} onClick={() => void restoreRevision(0, "전체 자동 바인딩 복원")} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
-          <button className="header-save with-icon" aria-label="변경 사항 저장" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "검증 중…" : "저장"}</button>
-          <button className="with-icon" aria-label="캐릭터 창 실행" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />실행</button>
+          <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? t("autoSaving") : draftStatus === "saved" ? t("draftSaved") : draftStatus === "error" ? t("draftSaveFailed") : draftStatus === "waiting" ? t("autoSaveWaiting") : ""}</span>
+          <button className="icon-only" aria-label={t("undo")} aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title={t("undoShortcut")}><Undo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label={t("redo")} aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title={t("redoShortcut")}><Redo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label={t("restoreAllBinding")} title={canRestoreAll ? t("restoreAllBinding") : t("noManualCalibration")} onClick={() => void restoreRevision(0, t("restoreAllBinding"))} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
+          <button className="header-save with-icon" aria-label={t("saveChanges")} disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? t("validating") : t("save")}</button>
+          <button className="with-icon" aria-label={t("launchCharacter")} disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />{t("launch")}</button>
         </div>
       </header>
 
