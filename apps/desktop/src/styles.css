@@ -46,7 +46,7 @@ button { font: 12px/1.2 Inter, "Segoe UI", "Microsoft YaHei", sans-serif; }
 .window-titlebar-title { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .language-switcher { display: inline-flex; align-items: center; gap: 4px; }
 .language-switcher.is-compact { -webkit-app-region: no-drag; margin-right: 8px; }
-.language-switcher button { min-width: 0; padding: 4px 8px; border: 1px solid transparent; border-radius: 5px; color: #9aa6b8; background: transparent; font-size: 11px; line-height: 1.2; }
+.language-switcher button { min-width: 0; padding: 4px 7px; border: 1px solid transparent; border-radius: 5px; color: #9aa6b8; background: transparent; font-size: 11px; line-height: 1.2; }
 .language-switcher button:hover { color: #fff; background: #2b3441; }
 .language-switcher button.is-active { color: #fff; border-color: #6f65c9; background: #302c55; }
 .language-settings { display: grid; gap: 8px; padding: 12px; border: 1px solid #303948; border-radius: 9px; background: #111721; }

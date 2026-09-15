@@ -1,4 +1,4 @@
-export const APP_LOCALES = ["ko", "zh", "en"] as const;
+export const APP_LOCALES = ["ko", "zh", "en", "ja"] as const;
 
 export type AppLocale = (typeof APP_LOCALES)[number];
 
@@ -8,23 +8,26 @@ export const LOCALE_CHANGE_EVENT = "puppetloom:locale-change";
 export const LOCALE_LABELS: Record<AppLocale, string> = {
   ko: "한국어",
   zh: "中文",
-  en: "English"
+  en: "English",
+  ja: "日本語"
 };
 
 export const LOCALE_HTML_LANG: Record<AppLocale, string> = {
   ko: "ko",
   zh: "zh-CN",
-  en: "en"
+  en: "en",
+  ja: "ja"
 };
 
 export const LOCALE_DATE: Record<AppLocale, string> = {
   ko: "ko-KR",
   zh: "zh-CN",
-  en: "en-US"
+  en: "en-US",
+  ja: "ja-JP"
 };
 
 export function isAppLocale(value: string | null | undefined): value is AppLocale {
-  return value === "ko" || value === "zh" || value === "en";
+  return value === "ko" || value === "zh" || value === "en" || value === "ja";
 }
 
 export function readStoredLocale(): AppLocale {
