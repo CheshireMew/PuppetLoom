@@ -72,21 +72,21 @@ function safeName(input: string): string {
 }
 
 function taskMarkdown(task: SourcePreparationTask): string {
-  return `# ${task.name} 素材准备任务\n\n状态：${task.status}\n\n## 当前步骤\n\n1. 使用任务目录中的参考图在 See-Through 官方页面完成分层。\n2. 下载保留原始画布坐标、透明通道和图层结构的 PSD。\n3. 运行 PuppetLoom 的 source review，生成重组、背景和逐图层证据。\n4. 对照原画完成目视复核；有问题时按报告修复 PSD，再提交下一版候选。\n\n官方入口：${task.decomposition.officialUrl}\n\n## 素材要求\n\n${task.decomposition.requirements.map((item) => `- ${item}`).join("\n")}\n`;
+  return `# ${task.name} 소재 준비 작업\n\n상태: ${task.status}\n\n## 현재 단계\n\n1. 작업 폴더의 참고 이미지로 See-Through 공식 페이지에서 레이어를 분리하세요.\n2. 원본 캔버스 좌표, 투명 채널, 레이어 구조를 유지한 PSD를 다운로드하세요.\n3. PuppetLoom source review를 실행해 재합성·배경·레이어별 증거를 만드세요.\n4. 원화와 대조해 눈으로 검수하고, 문제가 있으면 보고서로 PSD를 고친 뒤 다음 후보를 제출하세요.\n\n공식 입구: ${task.decomposition.officialUrl}\n\n## 소재 요구사항\n\n${task.decomposition.requirements.map((item) => `- ${item}`).join("\n")}\n`;
 }
 
 /** Creates a self-contained source-art task without bundling or invoking a decomposition model. */
 export async function prepareSourceTask(options: PrepareSourceTaskOptions): Promise<{ directory: string; task: SourcePreparationTask }> {
   const reference = resolve(options.reference);
   const output = resolve(options.output);
-  if (!(await exists(reference))) throw new PuppetLoomError("INVALID_INPUT", `原画不存在：${reference}`);
-  if (extname(reference).toLowerCase() === ".psd") throw new PuppetLoomError("INVALID_INPUT", "素材准备入口需要单张原画；已有 PSD 请直接使用 source review。" );
+  if (!(await exists(reference))) throw new PuppetLoomError("INVALID_INPUT", `원화가 없습니다: ${reference}`);
+  if (extname(reference).toLowerCase() === ".psd") throw new PuppetLoomError("INVALID_INPUT", "소재 준비 입구는 단일 원화가 필요합니다. 이미 PSD가 있으면 source review를 바로 쓰세요.");
   if (await exists(output)) {
     const entries = await readdir(output).catch(() => []);
-    if (entries.length > 0) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `素材任务目录不是空目录：${output}`);
+    if (entries.length > 0) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `소재 작업 폴더가 비어 있지 않습니다: ${output}`);
   }
   const metadata = await sharp(reference).metadata();
-  if (!metadata.width || !metadata.height) throw new PuppetLoomError("INVALID_INPUT", "原画尺寸无效。" );
+  if (!metadata.width || !metadata.height) throw new PuppetLoomError("INVALID_INPUT", "원화 크기가 유효하지 않습니다.");
   await mkdir(output, { recursive: true });
   const extension = extname(reference).toLowerCase() || ".png";
   const referenceRelative = `reference/original${extension}`;
@@ -108,11 +108,11 @@ export async function prepareSourceTask(options: PrepareSourceTaskOptions): Prom
       officialUrl: seeThroughOfficialUrl,
       expectedFormat: "layered-psd",
       requirements: [
-        "PSD 画布尺寸必须与原画一致。",
-        "每个可动部位保留独立、可见、带透明通道的图层。",
-        "被头发、脸部或服装遮挡的位置需要有足够托底，不能只保留当前可见像素。",
-        "不要把左右眼、眉毛、手臂或腿在能够分开的情况下合并。",
-        "导出后不得缩放、裁切或改变角色在画布中的位置。"
+        "PSD 캔버스 크기는 원화와 같아야 합니다.",
+        "움직이는 부위마다 독립적이고 보이며 투명 채널이 있는 레이어를 유지하세요.",
+        "머리카락·얼굴·옷에 가려진 부분에도 충분한 속살이 있어야 하며, 지금 보이는 픽셀만 남기면 안 됩니다.",
+        "나눌 수 있는 좌우 눈, 눈썹, 팔, 다리는 합치지 마세요.",
+        "내보낸 뒤 크기 조절, 자르기, 캔버스 속 캐릭터 위치 변경을 하지 마세요."
       ]
     },
     reviews: []
@@ -126,46 +126,46 @@ export async function readSourceTask(directory: string): Promise<SourcePreparati
   const root = resolve(directory);
   let value: unknown;
   try { value = JSON.parse(await readFile(join(root, "source-task.json"), "utf8")) as unknown; }
-  catch (cause) { throw new PuppetLoomError("INVALID_INPUT", `无法读取素材准备任务：${root}`, { cause }); }
+  catch (cause) { throw new PuppetLoomError("INVALID_INPUT", `소재 준비 작업을 읽을 수 없습니다: ${root}`, { cause }); }
   const task = value as Partial<SourcePreparationTask>;
   if (task.version !== 1 || task.kind !== "puppetloom-source-preparation" || typeof task.id !== "string" || !task.reference || !Array.isArray(task.reviews)) {
-    throw new PuppetLoomError("INVALID_INPUT", "素材准备任务格式无效。" );
+    throw new PuppetLoomError("INVALID_INPUT", "소재 준비 작업 형식이 유효하지 않습니다.");
   }
   const reference = join(root, ...task.reference.path.split("/"));
-  if (!(await exists(reference)) || await sha256(reference) !== task.reference.sha256) throw new PuppetLoomError("INVALID_INPUT", "素材准备任务中的原画缺失或内容已改变。" );
+  if (!(await exists(reference)) || await sha256(reference) !== task.reference.sha256) throw new PuppetLoomError("INVALID_INPUT", "소재 준비 작업의 원화가 없거나 내용이 바뀌었습니다.");
   return task as SourcePreparationTask;
 }
 
 function reviewBlockers(review: LayeredPsdReview): string[] {
   const blockers: string[] = [];
-  if (!review.valid) blockers.push("PSD 结构检查未通过。" );
-  if (review.structuralInspection.suggestedRigLevel === "minimal") blockers.push("当前图层结构只能建立 minimal 绑定。" );
-  if (!review.roles.includes("face")) blockers.push("没有识别到脸部图层。" );
+  if (!review.valid) blockers.push("PSD 구조 검사를 통과하지 못했습니다.");
+  if (review.structuralInspection.suggestedRigLevel === "minimal") blockers.push("현재 레이어 구조로는 minimal 바인딩만 만들 수 있습니다.");
+  if (!review.roles.includes("face")) blockers.push("얼굴 레이어를 인식하지 못했습니다.");
   const pairedRoles = ["eyeWhite", "iris"] as const;
   for (const role of pairedRoles) {
     const sides = new Set(review.layers.filter((layer) => layer.role === role).map((layer) => layer.side));
-    if (!sides.has("left") || !sides.has("right")) blockers.push(`${role} 没有形成可靠的左右独立图层。`);
+    if (!sides.has("left") || !sides.has("right")) blockers.push(`${role}에 믿을 수 있는 좌우 독립 레이어가 없습니다.`);
   }
-  if (review.structuralInspection.unknownLayerCount > Math.max(2, Math.floor(review.layerCount * 0.2))) blockers.push("未识别图层比例过高，需要修正图层命名或结构。" );
+  if (review.structuralInspection.unknownLayerCount > Math.max(2, Math.floor(review.layerCount * 0.2))) blockers.push("인식되지 않은 레이어 비율이 높아 레이어 이름이나 구조를 고쳐야 합니다.");
   for (const issue of review.structuralInspection.layerOrderIssues) blockers.push(issue.message);
   return [...new Set(blockers)];
 }
 
 function reviewActions(blockers: string[]): string[] {
-  if (blockers.length > 0) return ["查看 reference-comparison.png、背景证据和 layer-contact-sheet.png。", "根据 blockers 创建 PSD 修复配方并输出新的候选 PSD。", "修复后再次运行 source review；不要覆盖这一版候选和证据。"];
-  return ["逐图查看重组、白底、深色、棋盘和图层联系表。", "确认遮挡托底、边缘和原画一致后，把本次 review 标记为 ready。", "使用候选 PSD 创建 PuppetLoom 项目。"];
+  if (blockers.length > 0) return ["reference-comparison.png, 배경 증거, layer-contact-sheet.png를 확인하세요.", "blockers를 바탕으로 PSD 수정 처방을 만들고 새 후보 PSD를 내보내세요.", "고친 뒤 source review를 다시 실행하세요. 이 버전 후보와 증거는 덮어쓰지 마세요."];
+  return ["재합성, 흰 배경, 어두운 배경, 체커보드, 레이어 연락표를 하나씩 보세요.", "가림 속살, 가장자리, 원화가 일치하면 이 review를 ready로 표시하세요.", "후보 PSD로 PuppetLoom 프로젝트를 만드세요."];
 }
 
 /** Imports one candidate PSD into the task and writes deterministic visual/structural review artifacts. */
 export async function reviewSourceCandidate(options: { task: string; psd: string }): Promise<SourceReviewResult> {
   const root = resolve(options.task);
   const input = resolve(options.psd);
-  if (extname(input).toLowerCase() !== ".psd" || !(await exists(input))) throw new PuppetLoomError("INVALID_INPUT", `候选 PSD 不存在或扩展名无效：${input}`);
+  if (extname(input).toLowerCase() !== ".psd" || !(await exists(input))) throw new PuppetLoomError("INVALID_INPUT", `후보 PSD가 없거나 확장자가 잘못되었습니다: ${input}`);
   const task = await readSourceTask(root);
   const index = task.reviews.reduce((maximum, review) => Math.max(maximum, review.index), 0) + 1;
   const label = String(index).padStart(4, "0");
   const reviewDirectory = join(root, "reviews", label);
-  if (await exists(reviewDirectory)) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `复核目录已经存在：${reviewDirectory}`);
+  if (await exists(reviewDirectory)) throw new PuppetLoomError("OUTPUT_NOT_EMPTY", `검수 폴더가 이미 있습니다: ${reviewDirectory}`);
   await mkdir(reviewDirectory, { recursive: true });
   const candidateRelative = `candidates/${label}.psd`;
   const candidate = join(root, ...candidateRelative.split("/"));
@@ -198,9 +198,9 @@ export async function finalizeSourceReview(options: { task: string; review: numb
   const root = resolve(options.task);
   const task = await readSourceTask(root);
   const target = task.reviews.find((review) => review.index === options.review);
-  if (!target) throw new PuppetLoomError("INVALID_INPUT", `找不到素材复核 ${options.review}。`);
-  if (!options.note.trim()) throw new PuppetLoomError("INVALID_INPUT", "素材目视结论必须说明看到的结果。" );
-  if (options.decision === "ready" && target.blockers.length > 0) throw new PuppetLoomError("INVALID_INPUT", "结构检查仍有阻断项，不能标记为 ready。" );
+  if (!target) throw new PuppetLoomError("INVALID_INPUT", `소재 검수 ${options.review}을(를) 찾을 수 없습니다.`);
+  if (!options.note.trim()) throw new PuppetLoomError("INVALID_INPUT", "소재 육안 결론에는 본 결과를 적어야 합니다.");
+  if (options.decision === "ready" && target.blockers.length > 0) throw new PuppetLoomError("INVALID_INPUT", "구조 검사에 차단 항목이 남아 ready로 표시할 수 없습니다.");
   const updatedAt = new Date().toISOString();
   const reviews = task.reviews.map((review) => review.index === options.review ? { ...review, status: options.decision } : review);
   const updated: SourcePreparationTask = { ...task, updatedAt, status: options.decision, reviews };

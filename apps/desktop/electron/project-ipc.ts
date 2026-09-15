@@ -93,8 +93,8 @@ export class ProjectIpcService {
       return result.canceled ? null : (result.filePaths[0] ?? null);
     };
 
-    ipcMain.handle("dialog:psd", (event) => chooseFile(event, [{ name: "Photoshop document", extensions: ["psd"] }]));
-    ipcMain.handle("dialog:reference", (event) => chooseFile(event, [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }]));
+    ipcMain.handle("dialog:psd", (event) => chooseFile(event, [{ name: "Photoshop 문서", extensions: ["psd"] }]));
+    ipcMain.handle("dialog:reference", (event) => chooseFile(event, [{ name: "이미지", extensions: ["png", "jpg", "jpeg", "webp"] }]));
     ipcMain.handle("dialog:output", async (event) => {
       const owner = ownerWindow(event);
       const options = { properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory"> };
@@ -112,7 +112,7 @@ export class ProjectIpcService {
     });
     ipcMain.handle("project:create", async (event, request: DesktopCreateRequest) => {
       const operationId = request.operationId ?? randomUUID();
-      if (this.createOperations.has(operationId)) throw new Error("同一个创建操作已经在运行。");
+      if (this.createOperations.has(operationId)) throw new Error("같은 생성 작업이 이미 실행 중입니다.");
       const normalizedRequest: DesktopCreateRequest = {
         ...request,
         input: resolve(request.input),
@@ -155,7 +155,7 @@ export class ProjectIpcService {
     ipcMain.handle("project:asset", async (_event, directory: string, assetPath: string) => {
       const root = resolve(directory);
       const target = resolve(root, assetPath);
-      if (!isWithin(root, target)) throw new Error("纹理路径超出项目目录。");
+      if (!isWithin(root, target)) throw new Error("텍스처 경로가 프로젝트 디렉터리를 벗어났습니다.");
       const mime = extname(target).toLowerCase() === ".webp" ? "image/webp" : "image/png";
       return { mime, bytes: new Uint8Array(await readFile(target)) };
     });
@@ -164,10 +164,10 @@ export class ProjectIpcService {
       const performanceRoot = resolve(root, "reports", "performances");
       const target = resolve(root, mediaPath);
       if (!isWithin(root, target) || !isWithin(performanceRoot, target) || extname(target).toLowerCase() !== ".webm") {
-        throw new Error("视频路径不属于当前项目的表演录制目录。");
+        throw new Error("비디오 경로가 현재 프로젝트의 퍼포먼스 녹화 디렉터리에 속하지 않습니다.");
       }
       const details = await stat(target);
-      if (!details.isFile()) throw new Error("录制视频不存在。");
+      if (!details.isFile()) throw new Error("녹화 비디오가 없습니다.");
       const token = randomUUID();
       this.mediaFiles.set(token, target);
       return `puppetloom-media://local/${encodeURIComponent(token)}`;

@@ -57,7 +57,7 @@ export function useEditorDraftPersistence({
       }).catch((cause) => {
         if (generation.current === selectedGeneration) {
           setDraftStatus("error");
-          setError(`自动保存失败：${cause instanceof Error ? cause.message : String(cause)}`);
+          setError(`자동 저장 실패: ${cause instanceof Error ? cause.message : String(cause)}`);
         }
       });
     }, 350);
@@ -69,7 +69,7 @@ export function useEditorDraftPersistence({
       await flushDraft();
       await window.puppetloom.confirmEditorClose();
     } catch (cause) {
-      setError(`关闭前保存草稿失败，窗口已保持打开：${cause instanceof Error ? cause.message : String(cause)}`);
+      setError(`닫기 전 초안 저장에 실패했습니다. 창은 열린 상태로 유지됩니다: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }), [flushDraft, setError]);
 

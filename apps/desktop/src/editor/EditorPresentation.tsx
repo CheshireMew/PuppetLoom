@@ -118,8 +118,8 @@ function artMeshQuality(layer: LayerBinding): { balanced: boolean; label: string
   const result = {
     balanced,
     label: balanced
-      ? `均衡 · 最差边比 ${worstAspect.toFixed(1)}:1`
-      : `需要重建 · ${shortEdges} 条过短边 · 最差边比 ${worstAspect.toFixed(1)}:1`
+      ? `균형 · 최악 변 비율 ${worstAspect.toFixed(1)}:1`
+      : `재생성 필요 · 너무 짧은 변 ${shortEdges}개 · 최악 변 비율 ${worstAspect.toFixed(1)}:1`
   };
   artMeshQualityCache.set(mesh.uvs, result);
   return result;
@@ -129,17 +129,17 @@ const semanticRoles: SemanticRole[] = [
   "backHair", "frontHair", "sideHair", "face", "eyeWhite", "iris", "eyelash", "eyeClosed", "eyebrow", "nose", "mouth", "ear", "neck", "topWear", "bottomWear", "arm", "hand", "leg", "foot", "headwear", "tail", "accessory", "unknown"
 ];
 const semanticRoleLabels: Record<SemanticRole, string> = {
-  backHair: "后发", frontHair: "前发", sideHair: "侧发", face: "脸部", eyeWhite: "眼白", iris: "虹膜", eyelash: "睫毛", eyeClosed: "闭眼", eyebrow: "眉毛", nose: "鼻子", mouth: "嘴部", ear: "耳朵", neck: "颈部", topWear: "上装", bottomWear: "下装", arm: "手臂", hand: "手", leg: "腿", foot: "脚", headwear: "头饰", tail: "尾巴", accessory: "配饰", unknown: "未识别"
+  backHair: "뒷머리", frontHair: "앞머리", sideHair: "옆머리", face: "얼굴", eyeWhite: "흰자", iris: "홍채", eyelash: "속눈썹", eyeClosed: "눈 감기", eyebrow: "눈썹", nose: "코", mouth: "입", ear: "귀", neck: "목", topWear: "상의", bottomWear: "하의", arm: "팔", hand: "손", leg: "다리", foot: "발", headwear: "머리장식", tail: "꼬리", accessory: "액세서리", unknown: "미식별"
 };
-const tuningLabels = { amplitude: "动作幅度", response: "响应速度", stability: "稳定程度" } as const;
-const weightLabels = { head: "头部跟随", body: "身体跟随", gaze: "视线跟随", physics: "次级运动" } as const;
-const faceDepthLabels: Record<FaceDepthLandmark, string> = { forehead: "额头", noseRoot: "鼻根", noseTip: "鼻尖", upperLip: "上唇", lowerLip: "下唇", chin: "下巴" };
-const torsoLabels: Record<TorsoVolumeLandmark, string> = { upperChest: "上胸", chest: "胸部", waist: "腰部", hip: "髋部" };
+const tuningLabels = { amplitude: "동작 진폭", response: "반응 속도", stability: "안정 정도" } as const;
+const weightLabels = { head: "머리 추종", body: "몸 추종", gaze: "시선 추종", physics: "2차 모션" } as const;
+const faceDepthLabels: Record<FaceDepthLandmark, string> = { forehead: "이마", noseRoot: "콧등", noseTip: "코끝", upperLip: "윗입술", lowerLip: "아랫입술", chin: "턱" };
+const torsoLabels: Record<TorsoVolumeLandmark, string> = { upperChest: "윗가슴", chest: "가슴", waist: "허리", hip: "골반" };
 
 const secondaryParts: Array<{ id: SecondaryMotionPart; label: string }> = [
-  { id: "frontHair", label: "前发" }, { id: "backHair", label: "后发" }, { id: "ahoge", label: "呆毛" },
-  { id: "headwear", label: "头饰" }, { id: "ears", label: "耳部" }, { id: "topCloth", label: "上衣" },
-  { id: "skirt", label: "裙摆" }, { id: "tail", label: "尾巴" }, { id: "accessory", label: "配饰" }
+  { id: "frontHair", label: "앞머리" }, { id: "backHair", label: "뒷머리" }, { id: "ahoge", label: "아호게" },
+  { id: "headwear", label: "머리장식" }, { id: "ears", label: "귀" }, { id: "topCloth", label: "상의" },
+  { id: "skirt", label: "치마" }, { id: "tail", label: "꼬리" }, { id: "accessory", label: "액세서리" }
 ];
 
 function layerDepth(layer: LayerBinding, byId: Map<string, LayerBinding>): number {
@@ -224,18 +224,18 @@ export const EditorLayerPanel = memo(function EditorLayerPanel({
   const ordered = (orderMode === "hierarchy" ? hierarchyOrdered : drawOrdered).filter((layer) => !normalizedQuery || [layer.sourceName, layer.role, layer.side, layer.deformerId, layer.parentGroup].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery)));
   return (
     <aside className="layer-panel">
-      <div className="layer-panel-heading"><div><div className="panel-eyebrow">绑定结构</div><h2>图层结构</h2></div><output>{ordered.length}/{project.layers.length}</output></div>
-      <label className="layer-search-field"><Search aria-hidden="true" /><input className="layer-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、语义或变形器" /></label>
-      <div className="layer-order-tabs"><button className={`${orderMode === "hierarchy" ? "active" : ""} with-icon`} onClick={() => setOrderMode("hierarchy")}><Network aria-hidden="true" />结构层级</button><button className={`${orderMode === "draw" ? "active" : ""} with-icon`} onClick={() => setOrderMode("draw")}><Layers3 aria-hidden="true" />绘制顺序</button></div>
+      <div className="layer-panel-heading"><div><div className="panel-eyebrow">바인딩 구조</div><h2>레이어 구조</h2></div><output>{ordered.length}/{project.layers.length}</output></div>
+      <label className="layer-search-field"><Search aria-hidden="true" /><input className="layer-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이름, 시맨틱, 디포머 검색" /></label>
+      <div className="layer-order-tabs"><button className={`${orderMode === "hierarchy" ? "active" : ""} with-icon`} onClick={() => setOrderMode("hierarchy")}><Network aria-hidden="true" />구조 계층</button><button className={`${orderMode === "draw" ? "active" : ""} with-icon`} onClick={() => setOrderMode("draw")}><Layers3 aria-hidden="true" />그리기 순서</button></div>
       <div className="layer-list">
         {ordered.map((layer) => (
           <div key={layer.id} className={`layer-row ${selectedLayerId === layer.id ? "selected" : ""} ${layer.visible === false ? "hidden" : ""} ${soloSelectedLayer && selectedLayerId === layer.id ? "solo" : ""}`} style={{ paddingLeft: `${8 + layerDepth(layer, byId) * 16}px` }}>
             <button className="layer-select" onClick={() => onSelect(layer.id)}>
-              <span>{layer.sourceName}</span><small>{semanticRoleLabels[layer.role]} · {layer.side === "left" ? "角色左侧" : layer.side === "right" ? "角色右侧" : "中间"} · #{layer.order}{layer.deformerId ? ` · ${layer.deformerId}` : ""}</small>
+              <span>{layer.sourceName}</span><small>{semanticRoleLabels[layer.role]} · {layer.side === "left" ? "캐릭터 왼쪽" : layer.side === "right" ? "캐릭터 오른쪽" : "가운데"} · #{layer.order}{layer.deformerId ? ` · ${layer.deformerId}` : ""}</small>
             </button>
-            <button className={`layer-icon ${layer.visible === false ? "is-off" : ""}`} title={layer.visible === false ? "显示图层" : "隐藏图层"} aria-label={`${layer.sourceName} ${layer.visible === false ? "显示" : "隐藏"}`} onClick={() => onPatchLayer(layer.id, { visible: layer.visible === false })}>{layer.visible === false ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</button>
-            <button className={`layer-icon ${layer.locked ? "is-off" : ""}`} title={layer.locked ? "解锁图层" : "锁定图层"} aria-label={`${layer.sourceName} ${layer.locked ? "解锁" : "锁定"}`} onClick={() => onPatchLayer(layer.id, { locked: !layer.locked })}>{layer.locked ? <Lock aria-hidden="true" /> : <LockOpen aria-hidden="true" />}</button>
-            <button className={`layer-icon layer-solo ${soloSelectedLayer && selectedLayerId === layer.id ? "is-active" : ""}`} aria-pressed={soloSelectedLayer && selectedLayerId === layer.id} title={soloSelectedLayer && selectedLayerId === layer.id ? "恢复显示全部图层" : "仅显示此图层"} aria-label={`${layer.sourceName} ${soloSelectedLayer && selectedLayerId === layer.id ? "恢复显示全部图层" : "仅显示此图层"}`} onClick={() => onSolo(layer.id)}><ScanEye aria-hidden="true" /></button>
+            <button className={`layer-icon ${layer.visible === false ? "is-off" : ""}`} title={layer.visible === false ? "레이어 표시" : "레이어 숨김"} aria-label={`${layer.sourceName} ${layer.visible === false ? "표시" : "숨김"}`} onClick={() => onPatchLayer(layer.id, { visible: layer.visible === false })}>{layer.visible === false ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</button>
+            <button className={`layer-icon ${layer.locked ? "is-off" : ""}`} title={layer.locked ? "레이어 잠금 해제" : "레이어 잠금"} aria-label={`${layer.sourceName} ${layer.locked ? "잠금 해제" : "잠금"}`} onClick={() => onPatchLayer(layer.id, { locked: !layer.locked })}>{layer.locked ? <Lock aria-hidden="true" /> : <LockOpen aria-hidden="true" />}</button>
+            <button className={`layer-icon layer-solo ${soloSelectedLayer && selectedLayerId === layer.id ? "is-active" : ""}`} aria-pressed={soloSelectedLayer && selectedLayerId === layer.id} title={soloSelectedLayer && selectedLayerId === layer.id ? "모든 레이어 다시 표시" : "이 레이어만 표시"} aria-label={`${layer.sourceName} ${soloSelectedLayer && selectedLayerId === layer.id ? "모든 레이어 다시 표시" : "이 레이어만 표시"}`} onClick={() => onSolo(layer.id)}><ScanEye aria-hidden="true" /></button>
           </div>
         ))}
       </div>
@@ -560,7 +560,7 @@ export function EditorViewportPanel({
         className={`editor-viewport ${cleanPreview ? "clean-preview" : ""} ${navigation.panning ? "is-panning" : ""} ${navigation.spacePressed ? "is-space-ready" : ""} ${meshSelectionBox ? "is-box-selecting" : ""}`}
         data-testid="editor-viewport"
         tabIndex={0}
-        aria-label="角色编辑视图"
+        aria-label="캐릭터 편집 뷰"
         {...navigation.viewportHandlers}
         onPointerDownCapture={beginViewportPointer}
         onPointerMoveCapture={moveViewportPointer}
@@ -588,16 +588,16 @@ export function EditorViewportPanel({
               return <line key={`${triangleIndex}-${id}-${nextId}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} className="cage-line" />;
             }))}
             {Object.entries(cage.points).map(([id, entry]) => <g key={id}>
-              <circle cx={entry.position.x} cy={entry.position.y} r="0.011" className="handle-hit" tabIndex={0} role="slider" aria-label={`脸部控制点 ${id}`} aria-valuetext={`${entry.position.x.toFixed(3)}, ${entry.position.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "semantic", key: id as SemanticCagePointId })} onPointerDown={(event) => onBeginDrag(event, { kind: "semantic", key: id as SemanticCagePointId })}><title>{id}</title></circle>
+              <circle cx={entry.position.x} cy={entry.position.y} r="0.011" className="handle-hit" tabIndex={0} role="slider" aria-label={`얼굴 컨트롤 포인트 ${id}`} aria-valuetext={`${entry.position.x.toFixed(3)}, ${entry.position.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "semantic", key: id as SemanticCagePointId })} onPointerDown={(event) => onBeginDrag(event, { kind: "semantic", key: id as SemanticCagePointId })}><title>{id}</title></circle>
               <circle cx={entry.position.x} cy={entry.position.y} r="0.0025" className="handle semantic-handle handle-visible" aria-hidden="true" />
             </g>)}
           </>}
           {mode === "anchors" && Object.entries(project.anchors).map(([id, point]) => point && <g key={id}>
-            <circle cx={point.x} cy={point.y} r="0.009" className="handle anchor-handle" tabIndex={0} role="slider" aria-label={`身体锚点 ${id}`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "anchor", key: id as keyof AnchorGraph })} onPointerDown={(event) => onBeginDrag(event, { kind: "anchor", key: id as keyof AnchorGraph })} />
+            <circle cx={point.x} cy={point.y} r="0.009" className="handle anchor-handle" tabIndex={0} role="slider" aria-label={`몸 앵커 ${id}`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "anchor", key: id as keyof AnchorGraph })} onPointerDown={(event) => onBeginDrag(event, { kind: "anchor", key: id as keyof AnchorGraph })} />
             <text x={point.x + 0.01} y={point.y - 0.009}>{id}</text>
           </g>)}
           {mode === "layer" && selectedLayer && <>
-            <circle cx={selectedLayer.pivot.x} cy={selectedLayer.pivot.y} r="0.011" className={`handle pivot-handle ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 轴心`} aria-valuetext={`${selectedLayer.pivot.x.toFixed(3)}, ${selectedLayer.pivot.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "pivot" })} onPointerDown={(event) => onBeginDrag(event, { kind: "pivot" })} />
+            <circle cx={selectedLayer.pivot.x} cy={selectedLayer.pivot.y} r="0.011" className={`handle pivot-handle ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 피벗`} aria-valuetext={`${selectedLayer.pivot.x.toFixed(3)}, ${selectedLayer.pivot.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "pivot" })} onPointerDown={(event) => onBeginDrag(event, { kind: "pivot" })} />
             <text x={selectedLayer.pivot.x + 0.012} y={selectedLayer.pivot.y - 0.01}>pivot</text>
             {selectedLayer.hairStrands?.map((strand, index) => <g key={strand.id} className="hair-strand-guide">
               <line x1={strand.root.x} y1={strand.root.y} x2={strand.tip.x} y2={strand.tip.y} className="hair-strand-line" />
@@ -606,7 +606,7 @@ export function EditorViewportPanel({
               <text x={strand.tip.x + 0.006} y={strand.tip.y}>{index + 1}</text>
             </g>)}
             {Object.entries(selectedLayer.secondaryAnchors ?? {}).map(([id, point]) => point && <g key={id}>
-              <circle cx={point.x} cy={point.y} r="0.009" className={`handle secondary-handle ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 次级锚点 ${id}`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "secondary", key: id as keyof NonNullable<LayerBinding["secondaryAnchors"]> })} onPointerDown={(event) => onBeginDrag(event, { kind: "secondary", key: id as keyof NonNullable<LayerBinding["secondaryAnchors"]> })} />
+              <circle cx={point.x} cy={point.y} r="0.009" className={`handle secondary-handle ${locked ? "locked" : ""}`} tabIndex={locked ? -1 : 0} role="slider" aria-label={`${selectedLayer.sourceName} 2차 앵커 ${id}`} aria-valuetext={`${point.x.toFixed(3)}, ${point.y.toFixed(3)}`} onKeyDown={(event) => onNudge(event, { kind: "secondary", key: id as keyof NonNullable<LayerBinding["secondaryAnchors"]> })} onPointerDown={(event) => onBeginDrag(event, { kind: "secondary", key: id as keyof NonNullable<LayerBinding["secondaryAnchors"]> })} />
               <text x={point.x + 0.01} y={point.y - 0.009}>{id}</text>
             </g>)}
           </>}
@@ -626,7 +626,7 @@ export function EditorViewportPanel({
               tabIndex={locked || animateMesh ? -1 : 0}
               role="slider"
               aria-disabled={locked || animateMesh}
-              aria-label={`${selectedLayer.sourceName} 网格顶点 ${primarySelectedVertex}；按住 Shift 可多选`}
+              aria-label={`${selectedLayer.sourceName} 메시 정점 ${primarySelectedVertex}; Shift를 누르면 다중 선택`}
               aria-valuetext={`${primarySelectedPoint.x.toFixed(3)}, ${primarySelectedPoint.y.toFixed(3)}`}
               onKeyDown={locked || animateMesh ? undefined : (event) => onNudge(event, { kind: "mesh", index: primarySelectedVertex })}
               onPointerDown={locked || animateMesh ? undefined : (event) => onBeginDrag(event, { kind: "mesh", index: primarySelectedVertex })}
@@ -634,7 +634,7 @@ export function EditorViewportPanel({
             {selectedMeshBounds && !locked && !animateMesh && <rect
               {...selectedMeshBounds}
               className="handle-hit mesh-selection-move-area"
-              aria-label={`移动已选择的 ${selectedVertices.length} 个网格顶点`}
+              aria-label={`선택한 메시 정점 ${selectedVertices.length}개 이동`}
               onPointerDown={(event) => onBeginDrag(event, { kind: "mesh-move" })}
             />}
             {meshSelectionBox?.moved && <rect
@@ -648,24 +648,24 @@ export function EditorViewportPanel({
           </>}
           </svg>}
         </div>
-        <div className="viewport-navigation" aria-label="视图缩放控制">
-          <button className="icon-only" aria-label="缩小视图" title="缩小（-）" onClick={navigation.zoomOut}><ZoomOut aria-hidden="true" /></button>
-          <output aria-label="当前缩放比例">{navigation.zoomPercent}%</output>
-          <button className="icon-only" aria-label="放大视图" title="放大（+）" onClick={navigation.zoomIn}><ZoomIn aria-hidden="true" /></button>
-          <button className="fit-view icon-only" aria-label="适配" onClick={navigation.fit} title="适配窗口（0）"><Scan aria-hidden="true" /></button>
+        <div className="viewport-navigation" aria-label="뷰 확대/축소">
+          <button className="icon-only" aria-label="축소" title="축소 (-)" onClick={navigation.zoomOut}><ZoomOut aria-hidden="true" /></button>
+          <output aria-label="현재 배율">{navigation.zoomPercent}%</output>
+          <button className="icon-only" aria-label="확대" title="확대 (+)" onClick={navigation.zoomIn}><ZoomIn aria-hidden="true" /></button>
+          <button className="fit-view icon-only" aria-label="맞춤" onClick={navigation.fit} title="창에 맞춤 (0)"><Scan aria-hidden="true" /></button>
         </div>
       </div>
-      <p className="viewport-help">{cleanPreview ? "当前隐藏所有编辑标记。滚轮缩放，拖动空白处移动视图，双击恢复适配。" : mode === "mesh" ? selectedVertices.length > 1 ? `已选择 ${selectedVertices.length} 个点；拖动任意一个黄色节点即可整体移动。单击空白取消选择，Shift+拖动框选更多节点，Shift+单击可增减单点。` : "鼠标靠近节点会自动高亮，按下即可直接拖动。单击空白取消选择；按住 Shift 拖动可框选，Shift+单击可增减单点。" : "滚轮会以鼠标位置为中心缩放；拖动空白处、按住空格拖动或使用鼠标中键可移动视图；双击空白处恢复适配。拖动控制点仍会直接校准。"}</p>
+      <p className="viewport-help">{cleanPreview ? "편집 표시가 모두 숨겨져 있습니다. 휠로 확대/축소하고, 빈 곳을 드래그해 뷰를 이동하고, 더블 클릭하면 맞춤으로 돌아갑니다." : mode === "mesh" ? selectedVertices.length > 1 ? `점 ${selectedVertices.length}개를 선택했습니다. 노란 노드를 드래그하면 함께 이동합니다. 빈 곳을 클릭하면 선택이 해제되고, Shift+드래그로 더 고르고, Shift+클릭으로 점을 추가/제거합니다.` : "노드에 마우스를 가까이 대면 강조되고, 누르면 바로 드래그할 수 있습니다. 빈 곳을 클릭하면 선택이 해제됩니다. Shift+드래그로 박스 선택, Shift+클릭으로 점을 추가/제거합니다." : "휠은 마우스 위치를 중심으로 확대/축소합니다. 빈 곳 드래그, 스페이스+드래그, 또는 가운데 버튼으로 뷰를 이동하고, 빈 곳을 더블 클릭하면 맞춤으로 돌아갑니다. 컨트롤 포인트를 드래그하면 바로 캘리브레이션됩니다."}</p>
 
       {comparison && <section className="evidence-preview" data-testid="comparison-view">
-        <div className="comparison-header"><h3>版本 {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => { const Icon = comparisonModeIcons[item]; return <button key={item} className={`${comparisonMode === item ? "active" : ""} with-icon`} onClick={() => onComparisonMode(item)}><Icon aria-hidden="true" />{item === "before" ? "修改前" : item === "after" ? "修改后" : item === "split" ? "分割" : item === "overlay" ? "叠加" : "差异"}</button>; })}</div><button className="icon-only comparison-close" aria-label="关闭版本对比" title="关闭版本对比" onClick={onCloseComparison}><X aria-hidden="true" /></button></div>
-        {comparisonMode === "split" && <label className="split-control">分割位置 <input type="range" min="0" max="100" value={splitPercent} onChange={(event) => onSplitPercent(Number(event.target.value))} /></label>}
+        <div className="comparison-header"><h3>버전 {comparison.result.fromRevision} → {comparison.result.toRevision}</h3><div className="comparison-tabs">{(["before", "after", "split", "overlay", "difference"] as ComparisonMode[]).map((item) => { const Icon = comparisonModeIcons[item]; return <button key={item} className={`${comparisonMode === item ? "active" : ""} with-icon`} onClick={() => onComparisonMode(item)}><Icon aria-hidden="true" />{item === "before" ? "수정 전" : item === "after" ? "수정 후" : item === "split" ? "분할" : item === "overlay" ? "겹침" : "차이"}</button>; })}</div><button className="icon-only comparison-close" aria-label="버전 비교 닫기" title="버전 비교 닫기" onClick={onCloseComparison}><X aria-hidden="true" /></button></div>
+        {comparisonMode === "split" && <label className="split-control">분할 위치 <input type="range" min="0" max="100" value={splitPercent} onChange={(event) => onSplitPercent(Number(event.target.value))} /></label>}
         <div className={`comparison-canvas ${comparisonMode}`}>
-          {comparisonMode === "before" && <img src={comparison.before} alt="校准修改前" />}
-          {comparisonMode === "after" && <img src={comparison.after} alt="校准修改后" />}
-          {comparisonMode === "difference" && <img src={comparison.difference} alt="校准差异" />}
-          {comparisonMode === "overlay" && <><img src={comparison.before} alt="校准修改前" /><img className="comparison-overlay-image" src={comparison.after} alt="校准修改后叠加" /></>}
-          {comparisonMode === "split" && <><img src={comparison.before} alt="校准修改前" /><img className="comparison-split-image" style={{ clipPath: `inset(0 ${100 - splitPercent}% 0 0)` }} src={comparison.after} alt="校准修改后分割" /><span className="split-line" style={{ left: `${splitPercent}%` }} /></>}
+          {comparisonMode === "before" && <img src={comparison.before} alt="캘리브레이션 수정 전" />}
+          {comparisonMode === "after" && <img src={comparison.after} alt="캘리브레이션 수정 후" />}
+          {comparisonMode === "difference" && <img src={comparison.difference} alt="캘리브레이션 차이" />}
+          {comparisonMode === "overlay" && <><img src={comparison.before} alt="캘리브레이션 수정 전" /><img className="comparison-overlay-image" src={comparison.after} alt="캘리브레이션 수정 후 겹침" /></>}
+          {comparisonMode === "split" && <><img src={comparison.before} alt="캘리브레이션 수정 전" /><img className="comparison-split-image" style={{ clipPath: `inset(0 ${100 - splitPercent}% 0 0)` }} src={comparison.after} alt="캘리브레이션 수정 후 분할" /><span className="split-line" style={{ left: `${splitPercent}%` }} /></>}
         </div>
       </section>}
     </section>
@@ -748,116 +748,116 @@ export function EditorInspectorPanel({
   const layerMap = new Map(project.layers.map((layer) => [layer.id, layer]));
   return (
     <aside className="inspector-panel">
-      <div className="layer-panel-heading"><div><div className="panel-eyebrow">属性检查</div><h2>属性</h2></div></div>
-      <div className="inspector-tabs"><button className={`${inspectorTab === "layer" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("layer")}><Layers3 aria-hidden="true" />图层</button><button className={`${inspectorTab === "motion" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("motion")}><Activity aria-hidden="true" />动作</button><button className={`${inspectorTab === "history" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("history")}><History aria-hidden="true" />版本</button></div>
+      <div className="layer-panel-heading"><div><div className="panel-eyebrow">속성 검사</div><h2>속성</h2></div></div>
+      <div className="inspector-tabs"><button className={`${inspectorTab === "layer" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("layer")}><Layers3 aria-hidden="true" />레이어</button><button className={`${inspectorTab === "motion" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("motion")}><Activity aria-hidden="true" />동작</button><button className={`${inspectorTab === "history" ? "active" : ""} with-icon`} onClick={() => setInspectorTab("history")}><History aria-hidden="true" />버전</button></div>
       <div hidden={inspectorTab !== "layer"}>
       {selectedLayer ? <>
         <dl>
-          <dt>图层</dt><dd>{selectedLayer.sourceName}</dd>
-          <dt>网格</dt><dd>{selectedLayer.mesh.topology === "art" ? "Alpha ArtMesh" : `${selectedLayer.mesh.rows} × ${selectedLayer.mesh.cols} 规则网格`}</dd>
-          <dt>顶点 / 三角形</dt><dd>{selectedLayer.mesh.points.length} / {Math.floor(selectedLayer.mesh.triangles.length / 3)}</dd>
-          {selectedLayer.hairStrands && <><dt>头发束</dt><dd>{selectedLayer.hairStrands.length} 条 · 平均置信度 {(selectedLayer.hairStrands.reduce((sum, strand) => sum + strand.confidence, 0) / selectedLayer.hairStrands.length).toFixed(2)}</dd></>}
-          {meshQuality && <><dt>网格质量</dt><dd className={meshQuality.balanced ? "mesh-quality-good" : "mesh-quality-warning"}>{meshQuality.label}</dd></>}
+          <dt>레이어</dt><dd>{selectedLayer.sourceName}</dd>
+          <dt>메시</dt><dd>{selectedLayer.mesh.topology === "art" ? "Alpha ArtMesh" : `${selectedLayer.mesh.rows} × ${selectedLayer.mesh.cols} 규칙 메시`}</dd>
+          <dt>정점 / 삼각형</dt><dd>{selectedLayer.mesh.points.length} / {Math.floor(selectedLayer.mesh.triangles.length / 3)}</dd>
+          {selectedLayer.hairStrands && <><dt>머리카락 가닥</dt><dd>{selectedLayer.hairStrands.length}개 · 평균 신뢰도 {(selectedLayer.hairStrands.reduce((sum, strand) => sum + strand.confidence, 0) / selectedLayer.hairStrands.length).toFixed(2)}</dd></>}
+          {meshQuality && <><dt>메시 품질</dt><dd className={meshQuality.balanced ? "mesh-quality-good" : "mesh-quality-warning"}>{meshQuality.label}</dd></>}
         </dl>
-        <label className="check-row"><input type="checkbox" checked={selectedLayer.visible !== false} onChange={(event) => onLayerProperty({ visible: event.target.checked })} />参与渲染</label>
-        <label className="check-row"><input type="checkbox" checked={locked} onChange={(event) => onLayerProperty({ locked: event.target.checked })} />锁定编辑</label>
-        <label>语义<select disabled={locked} value={selectedLayer.role} onChange={(event) => onLayerProperty({ role: event.target.value as SemanticRole })}>{semanticRoles.map((role) => <option key={role} value={role}>{semanticRoleLabels[role]}</option>)}</select></label>
-        <label>侧别<select disabled={locked} value={selectedLayer.side} onChange={(event) => onLayerProperty({ side: event.target.value as Side })}><option value="left">角色左侧</option><option value="right">角色右侧</option><option value="center">中间 / 整体</option></select></label>
-        <label>运动归属<select disabled={locked} value={selectedLayer.parentGroup} onChange={(event) => onLayerProperty({ parentGroup: event.target.value as LayerBinding["parentGroup"] })}><option value="head">头部</option><option value="body">身体</option><option value="root">根节点</option></select></label>
-        <label>父图层<select disabled={locked} value={selectedLayer.parentLayerId ?? ""} onChange={(event) => onLayerProperty({ parentLayerId: event.target.value || null })}><option value="">无父图层</option>{project.layers.filter((layer) => canUseAsParent(selectedLayer.id, layer, layerMap)).map((layer) => <option key={layer.id} value={layer.id}>{layer.sourceName}</option>)}</select></label>
-        <div className="order-row"><span>绘制顺序 #{selectedLayer.order}</span><button className="icon-only" aria-label="向后移动一层" title="向后移动一层" disabled={locked} onClick={() => onMoveLayer(-1)}><ArrowDown aria-hidden="true" /></button><button className="icon-only" aria-label="向前移动一层" title="向前移动一层" disabled={locked} onClick={() => onMoveLayer(1)}><ArrowUp aria-hidden="true" /></button></div>
+        <label className="check-row"><input type="checkbox" checked={selectedLayer.visible !== false} onChange={(event) => onLayerProperty({ visible: event.target.checked })} />렌더링에 포함</label>
+        <label className="check-row"><input type="checkbox" checked={locked} onChange={(event) => onLayerProperty({ locked: event.target.checked })} />편집 잠금</label>
+        <label>시맨틱<select disabled={locked} value={selectedLayer.role} onChange={(event) => onLayerProperty({ role: event.target.value as SemanticRole })}>{semanticRoles.map((role) => <option key={role} value={role}>{semanticRoleLabels[role]}</option>)}</select></label>
+        <label>좌우<select disabled={locked} value={selectedLayer.side} onChange={(event) => onLayerProperty({ side: event.target.value as Side })}><option value="left">캐릭터 왼쪽</option><option value="right">캐릭터 오른쪽</option><option value="center">가운데 / 전체</option></select></label>
+        <label>모션 소속<select disabled={locked} value={selectedLayer.parentGroup} onChange={(event) => onLayerProperty({ parentGroup: event.target.value as LayerBinding["parentGroup"] })}><option value="head">머리</option><option value="body">몸</option><option value="root">루트</option></select></label>
+        <label>부모 레이어<select disabled={locked} value={selectedLayer.parentLayerId ?? ""} onChange={(event) => onLayerProperty({ parentLayerId: event.target.value || null })}><option value="">부모 레이어 없음</option>{project.layers.filter((layer) => canUseAsParent(selectedLayer.id, layer, layerMap)).map((layer) => <option key={layer.id} value={layer.id}>{layer.sourceName}</option>)}</select></label>
+        <div className="order-row"><span>그리기 순서 #{selectedLayer.order}</span><button className="icon-only" aria-label="한 층 뒤로" title="한 층 뒤로" disabled={locked} onClick={() => onMoveLayer(-1)}><ArrowDown aria-hidden="true" /></button><button className="icon-only" aria-label="한 층 앞으로" title="한 층 앞으로" disabled={locked} onClick={() => onMoveLayer(1)}><ArrowUp aria-hidden="true" /></button></div>
         {(["head", "body", "gaze", "physics"] as const).map((key) => <label className="range-row" key={key}><span>{weightLabels[key]} {selectedLayer.weights[key].toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.01" value={selectedLayer.weights[key]} onChange={(event) => onLayerProperty({ weights: { [key]: Number(event.target.value) } })} /></label>)}
 
         <section className="mesh-density">
-          <h3>网格密度</h3>
+          <h3>메시 밀도</h3>
           {selectedLayer.mesh.topology === "art" && selectedLayer.mesh.art ? <>
-            <label>细节尺度（纹理像素）<input disabled={locked} type="number" min="4" max="256" value={selectedLayer.mesh.art.detail} onChange={(event) => onLayerProperty({ meshDetail: Math.max(4, Math.min(256, Math.round(Number(event.target.value) || 4))) })} /></label>
-            <small>{selectedLayer.mesh.art.regions.length} 个独立区域，{selectedLayer.mesh.art.regions.reduce((count, region) => count + region.holes.length, 0)} 个孔洞。数值越小，轮廓和内部网格越密。</small>
-            <button className="with-icon" disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}><RefreshCw aria-hidden="true" />{meshUpgrading ? "正在重新计算轮廓与三角形…" : "按当前细节重新生成网格"}</button>
+            <label>디테일 스케일 (텍스처 픽셀)<input disabled={locked} type="number" min="4" max="256" value={selectedLayer.mesh.art.detail} onChange={(event) => onLayerProperty({ meshDetail: Math.max(4, Math.min(256, Math.round(Number(event.target.value) || 4))) })} /></label>
+            <small>독립 영역 {selectedLayer.mesh.art.regions.length}개, 구멍 {selectedLayer.mesh.art.regions.reduce((count, region) => count + region.holes.length, 0)}개. 값이 작을수록 윤곽과 내부 메시가 촘촘해집니다.</small>
+            <button className="with-icon" disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}><RefreshCw aria-hidden="true" />{meshUpgrading ? "윤곽과 삼각형을 다시 계산하는 중…" : "현재 디테일로 메시 다시 생성"}</button>
           </> : selectedLayer.mesh.rows !== undefined && selectedLayer.mesh.cols !== undefined ? <>
-            <div><label>行<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.rows} onChange={(event) => onLayerProperty({ meshDensity: { rows: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))), cols: selectedLayer.mesh.cols! } })} /></label><label>列<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.cols} onChange={(event) => onLayerProperty({ meshDensity: { rows: selectedLayer.mesh.rows!, cols: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))) } })} /></label></div>
-            <small>规则网格仅用于完全不透明的矩形图层和旧项目兼容。</small>
-            <button className="with-icon" disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}><Sparkles aria-hidden="true" />{meshUpgrading ? "正在读取当前纹理轮廓…" : "将当前图层升级为轮廓 ArtMesh"}</button>
-          </> : <small>当前网格缺少可重建信息。</small>}
-          <small>每次只重建当前图层并重新投影权重；保存前请检查中立、左右、上下和对角姿态。</small>
+            <div><label>행<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.rows} onChange={(event) => onLayerProperty({ meshDensity: { rows: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))), cols: selectedLayer.mesh.cols! } })} /></label><label>열<input disabled={locked} type="number" min="2" max="64" value={selectedLayer.mesh.cols} onChange={(event) => onLayerProperty({ meshDensity: { rows: selectedLayer.mesh.rows!, cols: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 2))) } })} /></label></div>
+            <small>규칙 메시는 완전 불투명 사각형 레이어와 이전 프로젝트 호환에만 사용합니다.</small>
+            <button className="with-icon" disabled={locked || busy || meshUpgrading} onClick={onUpgradeMesh}><Sparkles aria-hidden="true" />{meshUpgrading ? "현재 텍스처 윤곽을 읽는 중…" : "현재 레이어를 윤곽 ArtMesh로 업그레이드"}</button>
+          </> : <small>현재 메시에 재생성 정보가 없습니다.</small>}
+          <small>매번 현재 레이어만 다시 만들고 가중치를 재투영합니다. 저장 전에 중립, 좌우, 상하, 대각 자세를 확인하세요.</small>
         </section>
 
         {selectedVertex !== undefined && <section className="vertex-inspector">
-          <h3>顶点 {selectedVertex}</h3><p>x {meshPoints[selectedVertex]?.x.toFixed(5)} · y {meshPoints[selectedVertex]?.y.toFixed(5)}</p>
-          <label className="check-row"><input type="checkbox" checked={softSelectionEnabled} onChange={(event) => onSoftSelectionEnabled(event.target.checked)} />带动相邻顶点（软选择）</label>
-          <label className="range-row"><span>影响半径 {softRadius.toFixed(3)}</span><input disabled={!softSelectionEnabled} type="range" min="0.005" max="0.2" step="0.005" value={softRadius} onChange={(event) => onSoftRadius(Number(event.target.value))} /></label>
+          <h3>정점 {selectedVertex}</h3><p>x {meshPoints[selectedVertex]?.x.toFixed(5)} · y {meshPoints[selectedVertex]?.y.toFixed(5)}</p>
+          <label className="check-row"><input type="checkbox" checked={softSelectionEnabled} onChange={(event) => onSoftSelectionEnabled(event.target.checked)} />인접 정점도 함께 이동 (소프트 선택)</label>
+          <label className="range-row"><span>영향 반경 {softRadius.toFixed(3)}</span><input disabled={!softSelectionEnabled} type="range" min="0.005" max="0.2" step="0.005" value={softRadius} onChange={(event) => onSoftRadius(Number(event.target.value))} /></label>
           {(["face", "skull", "head", "body", "gaze", "physics", "pin", "headAttachment", "physicsRelease"] as const).map((channel) => {
             const fallback = channel === "pin" || channel === "physicsRelease" ? 0 : 1;
             const influenceChannels = selectedLayer.mesh.influences as Record<string, number[] | undefined> | undefined;
             const value = influenceChannels?.[channel]?.[selectedVertex] ?? fallback;
-            const channelLabel = channel === "pin" ? "固定强度"
-              : channel === "headAttachment" ? "头皮吸附"
-                : channel === "physicsRelease" ? "物理释放"
-                  : channel === "face" ? "脸部控制笼"
-                    : channel === "skull" ? "头骨控制笼"
-                      : channel === "physics" ? "次级运动"
-                        : channel === "head" ? "头部跟随"
-                          : channel === "body" ? "身体跟随"
-                            : "视线跟随";
+            const channelLabel = channel === "pin" ? "고정 강도"
+              : channel === "headAttachment" ? "두피 흡착"
+                : channel === "physicsRelease" ? "물리 해제"
+                  : channel === "face" ? "얼굴 컨트롤 케이지"
+                    : channel === "skull" ? "두개골 컨트롤 케이지"
+                      : channel === "physics" ? "2차 모션"
+                        : channel === "head" ? "머리 추종"
+                          : channel === "body" ? "몸 추종"
+                            : "시선 추종";
             return <label className="range-row" key={channel}><span>{channelLabel} {value.toFixed(2)}</span><input disabled={locked} type="range" min="0" max="1" step="0.05" value={value} onChange={(event) => onVertexInfluence(channel, Number(event.target.value))} /></label>;
           })}
         </section>}
-        <button className="with-icon" onClick={onResetLayer} disabled={busy || hasPending || !canResetLayer} title={hasPending ? "请先保存或放弃当前草稿" : canResetLayer ? "只清除这个图层已保存的人工校准" : "这个图层当前使用的就是自动绑定"}><RotateCcw aria-hidden="true" />只恢复这个图层</button>
-      </> : <p>从左侧选择图层。</p>}
+        <button className="with-icon" onClick={onResetLayer} disabled={busy || hasPending || !canResetLayer} title={hasPending ? "먼저 현재 초안을 저장하거나 버리세요" : canResetLayer ? "이 레이어에 저장된 수동 캘리브레이션만 지웁니다" : "이 레이어는 지금 자동 바인딩을 사용합니다"}><RotateCcw aria-hidden="true" />이 레이어만 복원</button>
+      </> : <p>왼쪽에서 레이어를 선택하세요.</p>}
       </div>
 
       <div hidden={inspectorTab !== "motion"}>
       <section className="authoring-summary">
-        <h3>绑定系统</h3>
+        <h3>바인딩 시스템</h3>
         <div className="authoring-counts">
-          <span><strong>{project.model.parameters.length}</strong> 参数</span>
-          <span><strong>{project.model.bindings.length}</strong> 绑定</span>
-          <span><strong>{project.model.deformers.length}</strong> 变形器</span>
-          <span><strong>{project.model.expressions.length}</strong> 表情</span>
-          <span><strong>{project.model.physics.length}</strong> 物理</span>
-          <span><strong>{project.model.behaviors.length}</strong> 行为</span>
+          <span><strong>{project.model.parameters.length}</strong> 파라미터</span>
+          <span><strong>{project.model.bindings.length}</strong> 바인딩</span>
+          <span><strong>{project.model.deformers.length}</strong> 디포머</span>
+          <span><strong>{project.model.expressions.length}</strong> 표정</span>
+          <span><strong>{project.model.physics.length}</strong> 물리</span>
+          <span><strong>{project.model.behaviors.length}</strong> 동작</span>
         </div>
-        {selectedLayer?.deformerId && <p>当前图层挂接：<code>{selectedLayer.deformerId}</code></p>}
+        {selectedLayer?.deformerId && <p>현재 레이어 연결: <code>{selectedLayer.deformerId}</code></p>}
         <details>
-          <summary>参数与语义</summary>
+          <summary>파라미터·시맨틱</summary>
           <ul>{project.model.parameters.map((parameter) => <li key={parameter.id}><code>{parameter.id}</code><span>{parameter.min} · {parameter.default} · {parameter.max}{parameter.semantic ? ` · ${parameter.semantic}` : ""}</span></li>)}</ul>
         </details>
-        {project.model.expressions.length > 0 && <details><summary>表情</summary><ul>{project.model.expressions.map((expression) => <li key={expression.id}><code>{expression.id}</code><span>{Object.keys(expression.parameters).length} 个参数</span></li>)}</ul></details>}
-        {project.model.behaviors.length > 0 && <details><summary>行为</summary><ul>{project.model.behaviors.map((behavior) => <li key={behavior.id}><code>{behavior.id}</code><span>{behavior.duration}s · {behavior.loop ? "循环" : "单次"}{behavior.autoplay ? " · 自动" : ""}</span></li>)}</ul></details>}
-        <small>结构修改由 <code>puppetloom author</code> 事务完成；这里用于核对 AI 写入结果和图层挂接。</small>
+        {project.model.expressions.length > 0 && <details><summary>표정</summary><ul>{project.model.expressions.map((expression) => <li key={expression.id}><code>{expression.id}</code><span>파라미터 {Object.keys(expression.parameters).length}개</span></li>)}</ul></details>}
+        {project.model.behaviors.length > 0 && <details><summary>동작</summary><ul>{project.model.behaviors.map((behavior) => <li key={behavior.id}><code>{behavior.id}</code><span>{behavior.duration}s · {behavior.loop ? "반복" : "한 번"}{behavior.autoplay ? " · 자동" : ""}</span></li>)}</ul></details>}
+        <small>구조 변경은 <code>puppetloom author</code> 트랜잭션으로 완료됩니다. 여기서는 AI가 쓴 결과와 레이어 연결을 확인합니다.</small>
       </section>
 
       <section className="save-panel">
-        <h3>整体动作</h3>
+        <h3>전체 동작</h3>
         {(["amplitude", "response", "stability"] as const).map((key) => { const value = project.runtime.motionTuning?.[key] ?? ({ amplitude: 1, response: 0.72, stability: 0.42 }[key]); return <label className="range-row" key={key}><span>{tuningLabels[key]} {value.toFixed(2)}</span><input type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={value} onChange={(event) => onRuntimeTuning("motionTuning", key, Number(event.target.value))} /></label>; })}
-        {(["headYaw", "headPitch", "breath"] as const).map((key) => { const value = project.runtime.envelope[key]; const maximum = key === "breath" ? 0.08 : 1; const keyLabel = key === "headYaw" ? "左右转头" : key === "headPitch" ? "上下抬头" : "呼吸幅度"; return <label className="range-row" key={key}><span>{keyLabel} {value.toFixed(3)}</span><input type="range" min="0" max={maximum} step={key === "breath" ? "0.001" : "0.01"} value={value} onChange={(event) => onRuntimeTuning("envelope", key, Number(event.target.value))} /></label>; })}
+        {(["headYaw", "headPitch", "breath"] as const).map((key) => { const value = project.runtime.envelope[key]; const maximum = key === "breath" ? 0.08 : 1; const keyLabel = key === "headYaw" ? "좌우 고개 돌리기" : key === "headPitch" ? "위아래 고개" : "호흡 진폭"; return <label className="range-row" key={key}><span>{keyLabel} {value.toFixed(3)}</span><input type="range" min="0" max={maximum} step={key === "breath" ? "0.001" : "0.01"} value={value} onChange={(event) => onRuntimeTuning("envelope", key, Number(event.target.value))} /></label>; })}
 
         {project.runtime.poseField?.faceDepthProfile && <>
-          <h3>侧脸深度</h3>
-          <small>按额头、鼻根、鼻尖、上下唇和下巴控制转头时的前后层次；正面中立状态不受影响。</small>
+          <h3>옆얼굴 깊이</h3>
+          <small>이마, 콧등, 코끝, 위·아래 입술, 턱으로 고개 돌릴 때 앞뒤 층을 조절합니다. 정면 중립 상태는 영향받지 않습니다.</small>
           {project.runtime.poseField.faceDepthProfile.points.map((point) => <label className="range-row" key={point.id}><span>{faceDepthLabels[point.id]} {point.depth.toFixed(3)}</span><input type="range" min="-0.2" max="0.35" step="0.005" value={point.depth} onChange={(event) => onFaceDepth(point.id, Number(event.target.value))} /></label>)}
         </>}
 
-        <h3>躯干体积（可选）</h3>
-        <label className="range-row"><span>作用强度 {(project.runtime.torsoVolumeProfile?.strength ?? 0).toFixed(2)}</span><input type="range" min="0" max="2" step="0.05" value={project.runtime.torsoVolumeProfile?.strength ?? 0} onChange={(event) => onTorsoVolume("strength", Number(event.target.value))} /></label>
+        <h3>몸통 볼륨 (선택)</h3>
+        <label className="range-row"><span>적용 강도 {(project.runtime.torsoVolumeProfile?.strength ?? 0).toFixed(2)}</span><input type="range" min="0" max="2" step="0.05" value={project.runtime.torsoVolumeProfile?.strength ?? 0} onChange={(event) => onTorsoVolume("strength", Number(event.target.value))} /></label>
         {project.runtime.torsoVolumeProfile?.points.map((point) => <label className="range-row" key={point.id}><span>{torsoLabels[point.id]} {point.depth.toFixed(3)}</span><input type="range" min="-0.3" max="0.3" step="0.005" value={point.depth} onChange={(event) => onTorsoVolume(point.id, Number(event.target.value))} /></label>)}
 
-        <h3>分部响应</h3>
-        <label>部件<select value={secondaryPart} onChange={(event) => onSecondaryPart(event.target.value as SecondaryMotionPart)}>{secondaryParts.map((part) => <option key={part.id} value={part.id}>{part.label}</option>)}</select></label>
+        <h3>부위별 반응</h3>
+        <label>부위<select value={secondaryPart} onChange={(event) => onSecondaryPart(event.target.value as SecondaryMotionPart)}>{secondaryParts.map((part) => <option key={part.id} value={part.id}>{part.label}</option>)}</select></label>
         {(["amplitude", "response", "stability"] as const).map((key) => <label className="range-row" key={key}><span>{tuningLabels[key]} {selectedTuning[key].toFixed(2)}</span><input data-testid={`secondary-${key}`} type="range" min="0" max={key === "amplitude" ? "1.5" : "1"} step="0.01" value={selectedTuning[key]} onChange={(event) => onSecondaryTuning(secondaryPart, key, Number(event.target.value))} /></label>)}
 
-        <label>校准说明<input value={label} onChange={(event) => onLabel(event.target.value)} placeholder="例如：固定耳根并调整右眼外角" /></label>
-        <button className="primary with-icon" disabled={!hasPending || busy} onClick={onSave}><Save aria-hidden="true" />{busy ? "正在验证并生成证据…" : "保存校准"}</button>
-        <button className="with-icon" disabled={!hasPending || busy} onClick={onDiscard}><Trash2 aria-hidden="true" />放弃当前草稿</button>
+        <label>캘리브레이션 설명<input value={label} onChange={(event) => onLabel(event.target.value)} placeholder="예: 귀뿌리를 고정하고 오른쪽 눈꼬리 조정" /></label>
+        <button className="primary with-icon" disabled={!hasPending || busy} onClick={onSave}><Save aria-hidden="true" />{busy ? "검증하고 증거를 생성하는 중…" : "캘리브레이션 저장"}</button>
+        <button className="with-icon" disabled={!hasPending || busy} onClick={onDiscard}><Trash2 aria-hidden="true" />현재 초안 버리기</button>
       </section>
       </div>
 
       <div hidden={inspectorTab !== "history"}>
       <section className="session-panel">
-        <h3>校准历史</h3>{sessions.length === 0 && <p>还没有保存过校准。</p>}
+        <h3>캘리브레이션 기록</h3>{sessions.length === 0 && <p>저장된 캘리브레이션이 아직 없습니다.</p>}
         {sessions.map((session) => <article key={session.id} className={comparison?.result.toRevision === session.toRevision ? "active" : ""}>
-          <strong>版本 {session.toRevision} · {session.label}</strong><small><time dateTime={session.createdAt}>{new Date(session.createdAt).toLocaleString("zh-CN")}</time> · {session.evidenceStatus === "accepted" ? "已确认" : session.evidenceStatus === "rejected" ? "已标记无效" : "待检查"}</small>
-          <div><button disabled={busy} className="with-icon" onClick={() => onShowEvidence(session.id)}><Eye aria-hidden="true" />查看对比</button><button disabled={busy || session.toRevision === currentRevision} title={session.toRevision === currentRevision ? "当前已经是这个版本" : "把这个历史版本恢复为新的当前版本"} className="with-icon" onClick={() => onRestore(session.toRevision, `恢复到 ${session.label}`)}><RotateCcw aria-hidden="true" />恢复</button><button disabled={busy || session.evidenceStatus === "accepted"} className="with-icon" onClick={() => onMarkEvidence(session.id, "accepted")}><Check aria-hidden="true" />确认</button><button disabled={busy || session.evidenceStatus === "rejected"} className="with-icon" onClick={() => onMarkEvidence(session.id, "rejected")}><Ban aria-hidden="true" />无效</button></div>
+          <strong>버전 {session.toRevision} · {session.label}</strong><small><time dateTime={session.createdAt}>{new Date(session.createdAt).toLocaleString("ko-KR")}</time> · {session.evidenceStatus === "accepted" ? "확인됨" : session.evidenceStatus === "rejected" ? "무효로 표시됨" : "검수 대기"}</small>
+          <div><button disabled={busy} className="with-icon" onClick={() => onShowEvidence(session.id)}><Eye aria-hidden="true" />비교 보기</button><button disabled={busy || session.toRevision === currentRevision} title={session.toRevision === currentRevision ? "이미 이 버전입니다" : "이 이전 버전을 새 현재 버전으로 복원"} className="with-icon" onClick={() => onRestore(session.toRevision, `${session.label}(으)로 복원`)}><RotateCcw aria-hidden="true" />복원</button><button disabled={busy || session.evidenceStatus === "accepted"} className="with-icon" onClick={() => onMarkEvidence(session.id, "accepted")}><Check aria-hidden="true" />확인</button><button disabled={busy || session.evidenceStatus === "rejected"} className="with-icon" onClick={() => onMarkEvidence(session.id, "rejected")}><Ban aria-hidden="true" />무효</button></div>
         </article>)}
       </section>
       </div>

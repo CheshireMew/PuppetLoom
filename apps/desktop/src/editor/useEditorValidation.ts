@@ -27,7 +27,7 @@ function startValidation(project: PuppetLoomProject): ValidationOperation {
     worker.onerror = (event) => {
       settled = true;
       worker.terminate();
-      reject(new Error(event.message || "编辑器后台安全检查失败。"));
+      reject(new Error(event.message || "편집기 백그라운드 안전 검사에 실패했습니다."));
     };
     const request: EditorValidationRequest = {
       project,
@@ -41,7 +41,7 @@ function startValidation(project: PuppetLoomProject): ValidationOperation {
       if (settled) return;
       settled = true;
       worker.terminate();
-      rejectOperation(new Error("编辑器后台安全检查已由更新的草稿替代。"));
+      rejectOperation(new Error("더 새로운 초안이 편집기 백그라운드 안전 검사를 대체했습니다."));
     }
   };
 }

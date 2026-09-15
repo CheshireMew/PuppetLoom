@@ -50,7 +50,7 @@ function openPerformanceRecordingStream(id: string): void {
     if (!pending) return;
     state.pending.delete(data.sequence);
     if (data.result) pending.resolve(data.result);
-    else pending.reject(new Error(data.error || "主进程没有确认录制分块。"));
+    else pending.reject(new Error(data.error || "메인 프로세스가 녹화 청크를 확인하지 않았습니다."));
   };
   port.start();
   ipcRenderer.postMessage("viewer:performance-recording-open-stream", { id }, [channel.port2 as unknown as import("node:worker_threads").MessagePort]);
@@ -61,13 +61,13 @@ function closePerformanceRecordingStream(id: string): void {
   if (!state) return;
   recordingPorts.delete(id);
   state.port.close();
-  for (const pending of state.pending.values()) pending.reject(new Error("录制数据流已经关闭。"));
+  for (const pending of state.pending.values()) pending.reject(new Error("녹화 데이터 스트림이 이미 닫혔습니다."));
   state.pending.clear();
 }
 
 function appendPerformanceRecording(id: string, bytes: Uint8Array, position?: number): Promise<{ id: string; bytes: number }> {
   const state = recordingPorts.get(id);
-  if (!state) return Promise.reject(new Error("录制数据流尚未建立。"));
+  if (!state) return Promise.reject(new Error("녹화 데이터 스트림이 아직 열리지 않았습니다."));
   const sequence = recordingChunkSequence + 1;
   recordingChunkSequence = sequence;
   const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength

@@ -15,7 +15,7 @@ import {
 } from "@puppetloom/core";
 import type { ProjectWorkerCreateResult, ProjectWorkerRequest } from "./project-worker-client.js";
 
-if (!parentPort) throw new Error("项目后台任务缺少父线程。" );
+if (!parentPort) throw new Error("프로젝트 백그라운드 작업에 부모 스레드가 없습니다.");
 
 let controller: AbortController | undefined;
 let running = false;
@@ -26,7 +26,7 @@ function messageOf(cause: unknown): string {
 
 parentPort.on("message", (message: { kind: "run"; request: ProjectWorkerRequest } | { kind: "cancel" }) => {
   if (message.kind === "cancel") {
-    controller?.abort(new Error("用户已停止创建；最终项目目录没有被发布。"));
+    controller?.abort(new Error("사용자가 생성을 중단했습니다. 최종 프로젝트 디렉터리가 게시되지 않았습니다."));
     return;
   }
   if (running) return;
