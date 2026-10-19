@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="650" viewBox="0 0 1000 650" role="img" aria-labelledby="title description">
   <title id="title">Star history for CheshireMew/PuppetLoom</title>
-  <desc id="description">Cumulative GitHub stars through 2026-10-06. Total: 245.</desc>
+  <desc id="description">Cumulative GitHub stars through 2026-10-17. Total: 244.</desc>
   <rect width="100%" height="100%" rx="12" fill="#ffffff"/>
   <g data-style="hand-drawn" font-family="Comic Sans MS,Segoe Print,Bradley Hand,cursive" fill="#111111">
     <text x="500.0" y="58" text-anchor="middle" font-size="34" font-weight="700">Star History</text>
@@ -21,17 +21,17 @@
     <text x="91" y="105.00" text-anchor="end" dominant-baseline="middle" font-size="17">500</text>
     <path d="M 105.00 557 L 106.00 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
     <text x="105.00" y="594" text-anchor="start" font-size="17">08-14</text>
-    <path d="M 282.45 557 L 283.45 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="282.45" y="594" text-anchor="middle" font-size="17">08-25</text>
-    <path d="M 443.77 557 L 444.77 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="443.77" y="594" text-anchor="middle" font-size="17">09-04</text>
-    <path d="M 621.23 557 L 622.23 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="621.23" y="594" text-anchor="middle" font-size="17">09-15</text>
-    <path d="M 782.55 557 L 783.55 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="782.55" y="594" text-anchor="middle" font-size="17">09-25</text>
+    <path d="M 278.67 557 L 279.67 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="278.67" y="594" text-anchor="middle" font-size="17">08-27</text>
+    <path d="M 452.34 557 L 453.34 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="452.34" y="594" text-anchor="middle" font-size="17">09-09</text>
+    <path d="M 612.66 557 L 613.66 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="612.66" y="594" text-anchor="middle" font-size="17">09-21</text>
+    <path d="M 786.33 557 L 787.33 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="786.33" y="594" text-anchor="middle" font-size="17">10-04</text>
     <path d="M 960.00 557 L 961.00 567" fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="960.00" y="594" text-anchor="end" font-size="17">10-06</text>
-    <path data-role="star-line" d="M 105.00 560.00 L 217.92 559.09 L 282.45 558.18 L 314.72 556.36 L 330.85 555.45 L 346.98 554.54 L 508.30 458.08 L 524.43 363.44 L 540.57 353.43 L 556.70 352.52 L 572.83 349.79 L 621.23 348.88 L 653.49 347.97 L 669.62 346.15 L 685.75 345.24 L 701.89 344.33 L 798.68 342.51 L 847.08 341.60 L 863.21 340.69 L 911.60 339.78 L 927.74 338.87 L 943.87 337.96 L 960.00 337.05" fill="none" stroke="#f2380f" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    <text x="960.00" y="594" text-anchor="end" font-size="17">10-17</text>
+    <path data-role="star-line" d="M 105.00 560.00 L 198.52 559.09 L 251.95 558.18 L 278.67 556.36 L 292.03 555.45 L 305.39 554.54 L 438.98 458.08 L 452.34 365.26 L 465.70 355.25 L 479.06 354.34 L 492.42 351.61 L 532.50 350.70 L 559.22 349.79 L 572.58 347.97 L 585.94 347.06 L 599.30 346.15 L 679.45 344.33 L 719.53 343.42 L 732.89 342.51 L 772.97 341.60 L 786.33 340.69 L 799.69 339.78 L 813.05 338.87 L 960.00 337.96" fill="none" stroke="#f2380f" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
     <g data-role="signature" transform="translate(786 608)">
       <path d="M 12 0 L 15 9 L 25 6 L 18 14 L 26 21 L 16 18 L 12 28 L 9 18 L 0 22 L 7 14 L 0 7 L 9 10 Z" fill="none" stroke="#00a83f" stroke-width="2.5" stroke-linejoin="round"/>
       <text x="34" y="18" fill="#59636e" font-size="15">project-steward</text>
