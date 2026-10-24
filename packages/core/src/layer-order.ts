@@ -36,19 +36,19 @@ function pairs(layers: LayerOrderSource[], behindRole: SemanticRole, frontRole: 
 /** Reports only stable semantic contradictions. Visual review remains authoritative. */
 export function detectLayerOrderIssues(layers: LayerOrderSource[]): LayerOrderIssue[] {
   const expected: Array<[LayerOrderSource, LayerOrderSource, string]> = [
-    ...pairs(layers, "backHair", "neck").map(([behind, front]) => [behind, front, "后发应位于脖子后方"] as [LayerOrderSource, LayerOrderSource, string]),
-    ...pairs(layers, "backHair", "face").map(([behind, front]) => [behind, front, "后发应位于脸后方"] as [LayerOrderSource, LayerOrderSource, string]),
-    ...pairs(layers, "face", "eyebrow").map(([behind, front]) => [behind, front, "眉毛应位于脸图层前方"] as [LayerOrderSource, LayerOrderSource, string])
+    ...pairs(layers, "backHair", "neck").map(([behind, front]) => [behind, front, "뒷머리는 목 뒤에 있어야 함"] as [LayerOrderSource, LayerOrderSource, string]),
+    ...pairs(layers, "backHair", "face").map(([behind, front]) => [behind, front, "뒷머리는 얼굴 뒤에 있어야 함"] as [LayerOrderSource, LayerOrderSource, string]),
+    ...pairs(layers, "face", "eyebrow").map(([behind, front]) => [behind, front, "눈썹은 얼굴 레이어 앞에 있어야 함"] as [LayerOrderSource, LayerOrderSource, string])
   ];
   const legs = layers.filter((layer) => layer.role === "leg");
   for (const garment of layers.filter((layer) => layer.role === "bottomWear")) {
-    if (looksBack(garment)) for (const leg of legs) expected.push([garment, leg, "后裙或后侧下装应位于裸露腿后方"]);
-    else if (looksFront(garment)) for (const leg of legs) expected.push([leg, garment, "前裙或前侧下装应位于腿前方"]);
+    if (looksBack(garment)) for (const leg of legs) expected.push([garment, leg, "뒤치마나 뒤쪽 하의는 드러난 다리 뒤에 있어야 함"]);
+    else if (looksFront(garment)) for (const leg of legs) expected.push([leg, garment, "앞치마나 앞쪽 하의는 다리 앞에 있어야 함"]);
   }
   return expected.flatMap(([behind, front, reason]) => behind.order < front.order ? [] : [{
     id: `${behind.id}-behind-${front.id}`,
     behindLayerId: behind.id,
     frontLayerId: front.id,
-    message: `图层顺序可疑：${reason}，但 ${behind.id}(${behind.order}) 当前不在 ${front.id}(${front.order}) 后面。请对照原画确认后使用 move-layer 修复。`
+    message: `레이어 순서가 의심됩니다: ${reason}. 하지만 ${behind.id}(${behind.order})가 현재 ${front.id}(${front.order}) 뒤에 있지 않습니다. 원화와 대조한 뒤 move-layer로 고치세요.`
   }]);
 }

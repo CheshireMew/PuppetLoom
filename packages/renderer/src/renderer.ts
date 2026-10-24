@@ -58,11 +58,11 @@ export { layersInRenderOrder, opacityFor } from "@puppetloom/core/browser";
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
-  if (!shader) throw new Error("无法创建 WebGL 着色器。" );
+  if (!shader) throw new Error("WebGL 셰이더를 만들 수 없습니다.");
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const message = gl.getShaderInfoLog(shader) || "未知着色器错误";
+    const message = gl.getShaderInfoLog(shader) || "알 수 없는 셰이더 오류";
     gl.deleteShader(shader);
     throw new Error(message);
   }
@@ -71,7 +71,7 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
 
 function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
   const program = gl.createProgram();
-  if (!program) throw new Error("无法创建 WebGL 程序。" );
+  if (!program) throw new Error("WebGL 프로그램을 만들 수 없습니다.");
   const vertex = compileShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
   const fragment = compileShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
   gl.attachShader(program, vertex);
@@ -79,7 +79,7 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
   gl.linkProgram(program);
   gl.deleteShader(vertex);
   gl.deleteShader(fragment);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || "WebGL 程序链接失败。" );
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || "WebGL 프로그램 링크에 실패했습니다.");
   return program;
 }
 
@@ -236,13 +236,13 @@ export class PuppetRenderer {
       preserveDrawingBuffer: false,
       powerPreference: "high-performance"
     });
-    if (!gl) throw new Error("当前环境不支持 WebGL2。" );
+    if (!gl) throw new Error("현재 환경에서 WebGL2를 지원하지 않습니다.");
     this.gl = gl;
     this.program = createProgram(gl);
     const opacity = gl.getUniformLocation(this.program, "u_opacity");
     const alphaThreshold = gl.getUniformLocation(this.program, "u_alphaThreshold");
     const aspectScale = gl.getUniformLocation(this.program, "u_aspectScale");
-    if (!opacity || !alphaThreshold || !aspectScale) throw new Error("WebGL 程序缺少必要的 uniform。" );
+    if (!opacity || !alphaThreshold || !aspectScale) throw new Error("WebGL 프로그램에 필요한 uniform이 없습니다.");
     this.locations = {
       position: gl.getAttribLocation(this.program, "a_position"),
       uv: gl.getAttribLocation(this.program, "a_uv"),
@@ -307,7 +307,7 @@ export class PuppetRenderer {
       for (const buffer of positionBuffers) gl.deleteBuffer(buffer);
       if (uvBuffer) gl.deleteBuffer(uvBuffer);
       if (indexBuffer) gl.deleteBuffer(indexBuffer);
-      throw new Error(`无法为 ${layer.sourceName} 创建 GPU 资源。`);
+      throw new Error(`${layer.sourceName}용 GPU 리소스를 만들 수 없습니다.`);
     }
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
@@ -359,9 +359,9 @@ export class PuppetRenderer {
 
   setOutputOverride(output: RendererOutputOverride | undefined): void {
     if (output && (!Number.isInteger(output.width) || output.width < 1 || output.width > MAX_DRAWING_BUFFER_DIMENSION || !Number.isInteger(output.height) || output.height < 1 || output.height > MAX_DRAWING_BUFFER_DIMENSION)) {
-      throw new Error(`输出画布尺寸必须在 1 到 ${MAX_DRAWING_BUFFER_DIMENSION} 之间。`);
+      throw new Error(`출력 캔버스 크기는 1에서 ${MAX_DRAWING_BUFFER_DIMENSION} 사이여야 합니다.`);
     }
-    if (output?.background.mode === "solid" && !/^#[0-9a-f]{6}$/i.test(output.background.color)) throw new Error("输出背景颜色必须是 #RRGGBB。");
+    if (output?.background.mode === "solid" && !/^#[0-9a-f]{6}$/i.test(output.background.color)) throw new Error("출력 배경색은 #RRGGBB여야 합니다.");
     this.outputOverride = output ? { ...output, background: { ...output.background } } : undefined;
     this.render(this.lastState ?? this.controller.sample(0, { lookTarget: this.lookTarget }));
   }
@@ -569,7 +569,7 @@ export class PuppetRenderer {
     const previousProject = this.currentProject;
     const currentIds = new Set(previousProject.layers.map((layer) => layer.id));
     if (project.layers.length !== currentIds.size || project.layers.some((layer) => !currentIds.has(layer.id))) {
-      throw new Error("编辑期间不能增加或移除纹理图层，请重新打开项目。" );
+      throw new Error("편집 중에는 텍스처 레이어를 추가하거나 제거할 수 없습니다. 프로젝트를 다시 여세요.");
     }
     const previousLayers = new Map(previousProject.layers.map((layer) => [layer.id, layer]));
     for (const layer of project.layers) {

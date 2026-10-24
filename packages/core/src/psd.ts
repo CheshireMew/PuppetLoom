@@ -432,7 +432,7 @@ export async function importPsd(input: string, options: ImportPsdOptions = {}): 
   try {
     bytes = await readFile(input);
   } catch (error) {
-    throw new PuppetLoomError("INVALID_INPUT", `无法读取 PSD：${input}`, { cause: error });
+    throw new PuppetLoomError("INVALID_INPUT", `PSD를 읽을 수 없습니다: ${input}`, { cause: error });
   }
 
   let psd: Psd;
@@ -444,11 +444,11 @@ export async function importPsd(input: string, options: ImportPsdOptions = {}): 
       logMissingFeatures: false
     });
   } catch (error) {
-    throw new PuppetLoomError("INVALID_INPUT", `PSD 格式无效或包含无法读取的数据：${input}`, { cause: error });
+    throw new PuppetLoomError("INVALID_INPUT", `PSD 형식이 잘못되었거나 읽을 수 없는 데이터가 있습니다: ${input}`, { cause: error });
   }
 
   if (!Number.isFinite(psd.width) || !Number.isFinite(psd.height) || psd.width < 1 || psd.height < 1) {
-    throw new PuppetLoomError("INVALID_INPUT", "PSD 画布尺寸无效。" );
+    throw new PuppetLoomError("INVALID_INPUT", "PSD 캔버스 크기가 유효하지 않습니다.");
   }
 
   const canvas = { width: psd.width, height: psd.height };
@@ -468,21 +468,21 @@ export async function importPsd(input: string, options: ImportPsdOptions = {}): 
   );
 
   if (layers.length === 0 || layers.every((layer) => layer.opaquePixels === 0)) {
-    throw new PuppetLoomError("INVALID_INPUT", "PSD 没有可见像素，无法创建角色。" );
+    throw new PuppetLoomError("INVALID_INPUT", "PSD에 보이는 픽셀이 없어 캐릭터를 만들 수 없습니다.");
   }
 
   const warnings: string[] = [];
   const unknownCount = layers.filter((layer) => layer.role === "unknown").length;
-  if (unknownCount > 0) warnings.push(`${unknownCount} 个图层无法确定语义，将按普通附属图层保留。`);
-  if (!layers.some((layer) => layer.role === "face")) warnings.push("没有识别到脸部图层，将使用保守绑定。" );
+  if (unknownCount > 0) warnings.push(`시맨틱을 확정할 수 없는 레이어 ${unknownCount}개는 일반 부속 레이어로 유지합니다.`);
+  if (!layers.some((layer) => layer.role === "face")) warnings.push("얼굴 레이어를 인식하지 못해 보수적 바인딩을 사용합니다.");
   if (preflight.confirmedNoiseComponentCount > 0) warnings.push(mode === "preserve-all"
-    ? `检测到 ${preflight.confirmedNoiseComponentCount} 个高置信度 Alpha 噪点区域，共 ${preflight.confirmedNoisePixelCount} 个像素；已按高级选项保留。`
-    : `已自动移除 ${preflight.confirmedNoiseComponentCount} 个高置信度 Alpha 噪点区域，共 ${preflight.confirmedNoisePixelCount} 个像素；源 PSD 保持不变。`);
+    ? `고신뢰 Alpha 노이즈 영역 ${preflight.confirmedNoiseComponentCount}곳, 픽셀 ${preflight.confirmedNoisePixelCount}개를 감지했으며 고급 옵션에 따라 유지했습니다.`
+    : `고신뢰 Alpha 노이즈 영역 ${preflight.confirmedNoiseComponentCount}곳, 픽셀 ${preflight.confirmedNoisePixelCount}개를 자동 제거했습니다. 원본 PSD는 그대로입니다.`);
   if (preflight.suspectedDetailComponentCount > 0) warnings.push(mode === "remove-all-tiny"
-    ? `高级清理同时移除了 ${preflight.suspectedDetailComponentCount} 个疑似有效细节区域，共 ${preflight.suspectedDetailPixelCount} 个像素；源 PSD 保持不变。`
-    : `保留了 ${preflight.suspectedDetailComponentCount} 个可能属于高光、发丝或装饰的微小区域，共 ${preflight.suspectedDetailPixelCount} 个像素。`);
-  if (preflight.fallbackSplitCount > 0) warnings.push(`${preflight.fallbackSplitCount} 个成对图层发生粘连，已退回按脸部中心切分。`);
-  if (preflight.singleSideCount > 0) warnings.push(`${preflight.singleSideCount} 个成对图层只检测到单侧有效内容，已保留为单侧图层。`);
+    ? `고급 정리에서 유효해 보이는 디테일 영역 ${preflight.suspectedDetailComponentCount}곳, 픽셀 ${preflight.suspectedDetailPixelCount}개도 함께 제거했습니다. 원본 PSD는 그대로입니다.`
+    : `하이라이트·잔머리·장식으로 보이는 미세 영역 ${preflight.suspectedDetailComponentCount}곳, 픽셀 ${preflight.suspectedDetailPixelCount}개를 유지했습니다.`);
+  if (preflight.fallbackSplitCount > 0) warnings.push(`붙어 있는 좌우 쌍 레이어 ${preflight.fallbackSplitCount}개는 얼굴 중심 분할로 되돌렸습니다.`);
+  if (preflight.singleSideCount > 0) warnings.push(`좌우 쌍 레이어 ${preflight.singleSideCount}개는 한쪽만 유효해 단일 측 레이어로 유지했습니다.`);
   for (const issue of detectLayerOrderIssues(layers)) warnings.push(issue.message);
   const composite = compositePixels(psd);
 

@@ -35,7 +35,7 @@ export class CalibrationIpcService {
   private async evidence(projectDirectory: string, sessionId: string): Promise<RevisionComparisonResult> {
     const root = resolve(projectDirectory);
     const session = (await listCalibrationSessions(root)).find((candidate) => candidate.id === sessionId);
-    if (!session) throw new Error(`找不到校准会话：${sessionId}`);
+    if (!session) throw new Error(`캘리브레이션 세션을 찾을 수 없습니다: ${sessionId}`);
     const output = session.evidenceDirectory ? join(root, session.evidenceDirectory) : join(root, "reports", "calibration", session.id, "evidence");
     try {
       return JSON.parse(await readFile(join(output, "comparison.json"), "utf8")) as RevisionComparisonResult;
@@ -58,11 +58,11 @@ export class CalibrationIpcService {
     ipcMain.handle("editor:generate-art-meshes", async (_event, directory: string, layerIds: string[]) => {
       const projectDirectory = resolve(directory);
       const project = await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: projectDirectory });
-      if (!Array.isArray(layerIds) || layerIds.length !== 1) throw new Error("每次必须且只能选择一个图层重建网格。");
+      if (!Array.isArray(layerIds) || layerIds.length !== 1) throw new Error("메시를 다시 만들 레이어는 한 번에 하나만 선택해야 합니다.");
       const requested = new Set(layerIds);
       const known = new Set(project.layers.map((layer) => layer.id));
       const unknown = [...requested].filter((layerId) => !known.has(layerId));
-      if (unknown.length > 0) throw new Error(`找不到要重建网格的图层：${unknown.join("、")}`);
+      if (unknown.length > 0) throw new Error(`메시를 다시 만들 레이어를 찾을 수 없습니다: ${unknown.join(", ")}`);
       const {
         artMeshDetailForRole,
         loadProjectTextureSources,

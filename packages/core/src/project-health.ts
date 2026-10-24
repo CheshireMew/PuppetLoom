@@ -94,23 +94,23 @@ async function performanceSummary(root: string): Promise<ProjectHealthReport["pe
 }
 
 function pushVerificationIssues(issues: ProjectHealthIssue[], report: Awaited<ReturnType<typeof verifyProject>>): void {
-  for (const path of report.missingTextures) issues.push({ code: "missing-texture", severity: "error", category: "files", message: `纹理缺失：${path}`, suggestion: "恢复纹理文件，或从仍然匹配的源 PSD 重新创建项目。" });
-  for (const item of report.invalidTextures) issues.push({ code: "invalid-texture", severity: "error", category: "files", message: `${item.path}：${item.reason}`, suggestion: "不要手工替换项目纹理；使用补充素材或迁移流程产生新 revision。" });
-  for (const message of report.sourceIssues) issues.push({ code: "source-integrity", severity: "error", category: "source", message, suggestion: "恢复原始源文件；源 PSD 确实更新时使用 migrate 创建新项目。" });
-  for (const message of report.historyIssues) issues.push({ code: "history-integrity", severity: "error", category: "history", message, suggestion: "停止继续写入并从最后一个可验证 revision 恢复。" });
-  for (const message of report.evidenceIssues) issues.push({ code: "evidence-integrity", severity: "error", category: "evidence", message, suggestion: "重新生成对应 revision 的证据，不能用缺失证据的版本作为交付基线。" });
-  for (const pose of report.quality.poseValidations.filter((item) => !item.passed)) issues.push({ code: `unsafe-pose:${pose.id}`, severity: "error", category: "rig", message: `姿态 ${pose.id} 未通过安全检查。`, suggestion: "检查根部连接、作用权重与安全包络，再保存新的校准 revision。" });
+  for (const path of report.missingTextures) issues.push({ code: "missing-texture", severity: "error", category: "files", message: `텍스처가 없습니다: ${path}`, suggestion: "텍스처 파일을 복원하거나, 여전히 일치하는 원본 PSD에서 프로젝트를 다시 만드세요." });
+  for (const item of report.invalidTextures) issues.push({ code: "invalid-texture", severity: "error", category: "files", message: `${item.path}: ${item.reason}`, suggestion: "프로젝트 텍스처를 수동으로 바꾸지 마세요. 보충 소재나 마이그레이션으로 새 revision을 만드세요." });
+  for (const message of report.sourceIssues) issues.push({ code: "source-integrity", severity: "error", category: "source", message, suggestion: "원본 소스 파일을 복원하세요. 소스 PSD가 실제로 바뀌었다면 migrate로 새 프로젝트를 만드세요." });
+  for (const message of report.historyIssues) issues.push({ code: "history-integrity", severity: "error", category: "history", message, suggestion: "추가 기록을 멈추고 마지막으로 검증 가능한 revision에서 복원하세요." });
+  for (const message of report.evidenceIssues) issues.push({ code: "evidence-integrity", severity: "error", category: "evidence", message, suggestion: "해당 revision의 증거를 다시 생성하세요. 증거가 없는 버전은 납품 기준으로 쓸 수 없습니다." });
+  for (const pose of report.quality.poseValidations.filter((item) => !item.passed)) issues.push({ code: `unsafe-pose:${pose.id}`, severity: "error", category: "rig", message: `포즈 ${pose.id}가 안전 검사를 통과하지 못했습니다.`, suggestion: "루트 연결, 영향 가중치, 안전 엔벨로프를 확인한 뒤 새 캘리브레이션 revision을 저장하세요." });
 }
 
 function productionAssetIssues(project: PuppetLoomProject, issues: ProjectHealthIssue[]): ProjectCapabilitySummary["missingProductionAssets"] {
   const missing: ProjectCapabilitySummary["missingProductionAssets"] = [];
   if (!project.runtime.features.blink) {
     missing.push("closed-eyes");
-    issues.push({ code: "missing-closed-eyes", severity: "warning", category: "assets", message: "项目缺少通过验证的左右闭眼素材，眨眼不可用。", suggestion: "完成 requests/asset-requests.json 中的闭眼素材并通过 enhance 接入。" });
+    issues.push({ code: "missing-closed-eyes", severity: "warning", category: "assets", message: "프로젝트에 검증된 좌우 눈 감기 소재가 없어 깜빡임을 사용할 수 없습니다.", suggestion: "requests/asset-requests.json의 눈 감기 소재를 완료하고 enhance로 연결하세요." });
   }
   if (!project.runtime.features.mouthMotion) {
     missing.push("mouth-shapes");
-    issues.push({ code: "missing-mouth-shapes", severity: "warning", category: "assets", message: "项目缺少完整嘴形素材，实时口型不可用。", suggestion: "补齐闭合、微张和张开素材；口型 2.0 项目还可以继续提供视素素材。" });
+    issues.push({ code: "missing-mouth-shapes", severity: "warning", category: "assets", message: "프로젝트에 완전한 입 모양 소재가 없어 실시간 립싱크를 사용할 수 없습니다.", suggestion: "닫힘, 살짝 열림, 열림 소재를 채우세요. 립싱크 2.0 프로젝트는 viseme 소재를 추가로 제공할 수 있습니다." });
   }
   return missing;
 }
@@ -122,11 +122,11 @@ function healthScore(issues: ProjectHealthIssue[]): number {
 
 function actionsFor(issues: ProjectHealthIssue[], pendingEvidence: number, draftPresent: boolean): string[] {
   const actions: string[] = [];
-  if (issues.some((issue) => issue.severity === "error")) actions.push("先处理文件、历史或姿态错误，再继续制作。" );
-  if (pendingEvidence > 0) actions.push(`目视检查并确认或拒绝 ${pendingEvidence} 条待验收 revision 证据。`);
-  if (draftPresent) actions.push("项目存在未提交草稿：保存为 revision，或明确放弃草稿。" );
+  if (issues.some((issue) => issue.severity === "error")) actions.push("파일, 기록, 포즈 오류를 먼저 처리한 뒤 제작을 계속하세요.");
+  if (pendingEvidence > 0) actions.push(`${pendingEvidence}개의 검수 대기 revision 증거를 육안으로 확인하거나 거부하세요.`);
+  if (draftPresent) actions.push("커밋되지 않은 초안이 있습니다. revision으로 저장하거나 초안을 명시적으로 버리세요.");
   for (const issue of issues) if (issue.suggestion && !actions.includes(issue.suggestion)) actions.push(issue.suggestion);
-  if (actions.length === 0) actions.push("项目文件、历史、证据和运行能力均已就绪。" );
+  if (actions.length === 0) actions.push("프로젝트 파일, 기록, 증거, 런타임 기능이 모두 준비되었습니다.");
   return actions;
 }
 
@@ -142,10 +142,10 @@ export async function inspectProjectHealth(projectDirectory: string): Promise<Pr
   const unreviewed = sessions.filter((session) => session.evidenceStatus === "unreviewed").length;
   const rejected = sessions.filter((session) => session.evidenceStatus === "rejected").length;
   const accepted = sessions.filter((session) => session.evidenceStatus === "accepted").length;
-  if (unreviewed > 0) issues.push({ code: "pending-evidence", severity: "warning", category: "evidence", message: `${unreviewed} 条 revision 证据尚未目视验收。`, suggestion: "在编辑器的版本证据区逐条确认或标记无效。" });
-  if (rejected > 0) issues.push({ code: "rejected-evidence", severity: "info", category: "evidence", message: `${rejected} 条历史 revision 已标记无效；它们仍保留用于审计。` });
-  if (draft) issues.push({ code: "uncommitted-draft", severity: "warning", category: "history", message: "项目存在尚未提交的校准草稿。" });
-  if (performances.incompleteVideos > 0) issues.push({ code: "incomplete-recording", severity: "warning", category: "performance", message: `${performances.incompleteVideos} 个视频录制尚未完成收尾。`, suggestion: "在 Take 库中检查并恢复或归档 partial 录制。" });
+  if (unreviewed > 0) issues.push({ code: "pending-evidence", severity: "warning", category: "evidence", message: `${unreviewed}개의 revision 증거가 아직 육안 검수되지 않았습니다.`, suggestion: "편집기의 버전 증거 영역에서 항목별로 확인하거나 무효로 표시하세요." });
+  if (rejected > 0) issues.push({ code: "rejected-evidence", severity: "info", category: "evidence", message: `${rejected}개의 기록 revision이 무효로 표시되었습니다. 감사 용도로 계속 보관됩니다.` });
+  if (draft) issues.push({ code: "uncommitted-draft", severity: "warning", category: "history", message: "아직 커밋되지 않은 캘리브레이션 초안이 있습니다." });
+  if (performances.incompleteVideos > 0) issues.push({ code: "incomplete-recording", severity: "warning", category: "performance", message: `${performances.incompleteVideos}개의 비디오 녹화가 아직 마무리되지 않았습니다.`, suggestion: "Take 라이브러리에서 partial 녹화를 확인하고 복원하거나 보관하세요." });
   const recognizedLayers = project.layers.filter((layer) => layer.role !== "unknown").length;
   const availableExpressions = project.model.expressions.filter((expression) => isModelExpressionAvailable(project, expression)).length;
   const availableBehaviors = project.model.behaviors.filter((behavior) => isModelBehaviorAvailable(project, behavior)).length;

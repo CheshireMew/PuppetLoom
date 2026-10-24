@@ -69,20 +69,20 @@ function recordingError(cause: unknown): string {
 }
 
 function validateMetadata(value: PerformanceRecordingMetadata): PerformanceRecordingMetadata {
-  if (!value || typeof value !== "object") throw new Error("WebM 录制元数据无效。" );
-  if (typeof value.mimeType !== "string" || !value.mimeType.toLowerCase().startsWith("video/webm")) throw new Error("表演录制只接受 WebM。" );
-  if (!Number.isFinite(value.fps) || value.fps < 1 || value.fps > 60) throw new Error("录制帧率必须在 1 到 60 之间。" );
+  if (!value || typeof value !== "object") throw new Error("WebM 녹화 메타데이터가 올바르지 않습니다.");
+  if (typeof value.mimeType !== "string" || !value.mimeType.toLowerCase().startsWith("video/webm")) throw new Error("퍼포먼스 녹화는 WebM만 지원합니다.");
+  if (!Number.isFinite(value.fps) || value.fps < 1 || value.fps > 60) throw new Error("녹화 프레임 속도는 1에서 60 사이여야 합니다.");
   if (!Number.isInteger(value.width) || value.width < 1 || value.width > 16384 || !Number.isInteger(value.height) || value.height < 1 || value.height > 16384) {
-    throw new Error("录制画布尺寸无效。" );
+    throw new Error("녹화 캔버스 크기가 올바르지 않습니다.");
   }
   if (!Number.isInteger(value.sourceWidth) || value.sourceWidth < 1 || value.sourceWidth > 16384 || !Number.isInteger(value.sourceHeight) || value.sourceHeight < 1 || value.sourceHeight > 16384) {
-    throw new Error("录制来源画布尺寸无效。" );
+    throw new Error("녹화 원본 캔버스 크기가 올바르지 않습니다.");
   }
-  if (typeof value.hasAudio !== "boolean") throw new Error("录制音轨标记无效。" );
-  if (!value.background || (value.background.mode !== "transparent" && value.background.mode !== "solid")) throw new Error("录制背景设置无效。" );
-  if (value.background.mode === "solid" && (typeof value.background.color !== "string" || !/^#[0-9a-f]{6}$/i.test(value.background.color))) throw new Error("纯色录制背景必须是 #RRGGBB。" );
-  if (value.targetDurationMs !== undefined && (!Number.isFinite(value.targetDurationMs) || value.targetDurationMs <= 0 || value.targetDurationMs > 24 * 60 * 60 * 1000)) throw new Error("自动停止时长必须大于 0 且不超过 24 小时。" );
-  if (typeof value.startedAt !== "string" || !Number.isFinite(Date.parse(value.startedAt))) throw new Error("录制开始时间无效。" );
+  if (typeof value.hasAudio !== "boolean") throw new Error("녹화 오디오 트랙 표시가 올바르지 않습니다.");
+  if (!value.background || (value.background.mode !== "transparent" && value.background.mode !== "solid")) throw new Error("녹화 배경 설정이 올바르지 않습니다.");
+  if (value.background.mode === "solid" && (typeof value.background.color !== "string" || !/^#[0-9a-f]{6}$/i.test(value.background.color))) throw new Error("단색 녹화 배경은 #RRGGBB여야 합니다.");
+  if (value.targetDurationMs !== undefined && (!Number.isFinite(value.targetDurationMs) || value.targetDurationMs <= 0 || value.targetDurationMs > 24 * 60 * 60 * 1000)) throw new Error("자동 중지 시간은 0보다 크고 24시간을 넘을 수 없습니다.");
+  if (typeof value.startedAt !== "string" || !Number.isFinite(Date.parse(value.startedAt))) throw new Error("녹화 시작 시간이 올바르지 않습니다.");
   return { ...value, background: { ...value.background } };
 }
 
@@ -96,8 +96,8 @@ function relativeProjectPath(projectDirectory: string, target: string): string {
 
 function validateInputSession(value: PerformanceRecordingInputSession | undefined): PerformanceRecordingInputSession | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value.output !== "string" || value.output.length < 1) throw new Error("同步输入会话路径无效。" );
-  if (!Number.isFinite(value.durationMs) || value.durationMs < 0 || !Number.isInteger(value.events) || value.events < 0) throw new Error("同步输入会话摘要无效。" );
+  if (!value || typeof value.output !== "string" || value.output.length < 1) throw new Error("동기화 입력 세션 경로가 올바르지 않습니다.");
+  if (!Number.isFinite(value.durationMs) || value.durationMs < 0 || !Number.isInteger(value.events) || value.events < 0) throw new Error("동기화 입력 세션 요약이 올바르지 않습니다.");
   return { ...value };
 }
 
@@ -107,8 +107,8 @@ export class PerformanceRecordingService {
   private readonly activeByViewer = new Map<number, string>();
 
   start(request: PerformanceRecordingStartRequest): PerformanceRecordingSession {
-    if (!Number.isInteger(request.viewerId) || request.viewerId < 1) throw new Error("录制窗口编号无效。" );
-    if (this.activeByViewer.has(request.viewerId)) throw new Error("当前角色窗口已经在录制表演。" );
+    if (!Number.isInteger(request.viewerId) || request.viewerId < 1) throw new Error("녹화 창 번호가 올바르지 않습니다.");
+    if (this.activeByViewer.has(request.viewerId)) throw new Error("현재 캐릭터 창이 이미 퍼포먼스를 녹화 중입니다.");
     const projectDirectory = resolve(request.projectDirectory);
     const metadata = validateMetadata(request.metadata);
     const id = randomUUID();
@@ -119,7 +119,7 @@ export class PerformanceRecordingService {
     const output = join(directory, `${base}.webm`);
     const partial = join(directory, `${base}.partial.webm`);
     const report = join(directory, `${base}.performance.json`);
-    if (existsSync(output) || existsSync(partial) || existsSync(report)) throw new Error("录制输出路径发生冲突，请重新开始录制。" );
+    if (existsSync(output) || existsSync(partial) || existsSync(report)) throw new Error("녹화 출력 경로가 충돌합니다. 녹화를 다시 시작해 주세요.");
     const descriptor = openSync(partial, "wx");
     const active: ActiveRecording = {
       id, viewerId: request.viewerId, projectDirectory, projectName: request.projectName,
@@ -149,8 +149,8 @@ export class PerformanceRecordingService {
 
   append(viewerId: number, id: string, chunk: Uint8Array, position?: number): { id: string; bytes: number } {
     const active = this.owned(viewerId, id);
-    if (!(chunk instanceof Uint8Array) || chunk.byteLength < 1 || chunk.byteLength > MAX_CHUNK_BYTES) throw new Error("WebM 分块为空或超过 64 MiB 限制。" );
-    if (position !== undefined && (!Number.isInteger(position) || position < 0 || !Number.isSafeInteger(position + chunk.byteLength))) throw new Error("WebM 分块写入位置无效。" );
+    if (!(chunk instanceof Uint8Array) || chunk.byteLength < 1 || chunk.byteLength > MAX_CHUNK_BYTES) throw new Error("WebM 청크가 비어 있거나 64 MiB 제한을 초과합니다.");
+    if (position !== undefined && (!Number.isInteger(position) || position < 0 || !Number.isSafeInteger(position + chunk.byteLength))) throw new Error("WebM 청크 쓰기 위치가 올바르지 않습니다.");
     const buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
     const writePosition = position ?? active.bytes;
     let offset = 0;
@@ -161,11 +161,11 @@ export class PerformanceRecordingService {
 
   stop(viewerId: number, id: string, durationMs: number, inputSession?: PerformanceRecordingInputSession): PerformanceRecordingResult {
     const active = this.owned(viewerId, id);
-    if (!Number.isFinite(durationMs) || durationMs < 0) throw new Error("录制时长无效。" );
+    if (!Number.isFinite(durationMs) || durationMs < 0) throw new Error("녹화 길이가 올바르지 않습니다.");
     const linkedInput = validateInputSession(inputSession);
     if (active.bytes < 1) {
-      this.finish(active, "failed", { durationMs, error: "视频编码器没有产生数据。" });
-      throw new Error("录制没有产生视频数据，已保留空的 partial 文件和失败报告。" );
+      this.finish(active, "failed", { durationMs, error: "비디오 인코더가 데이터를 생성하지 않았습니다." });
+      throw new Error("녹화에서 비디오 데이터가 생성되지 않았습니다. 빈 partial 파일과 실패 보고서를 남겨 두었습니다.");
     }
     closeSync(active.descriptor);
     renameSync(active.partial, active.output);
@@ -204,7 +204,7 @@ export class PerformanceRecordingService {
 
   private owned(viewerId: number, id: string): ActiveRecording {
     const active = this.active.get(id);
-    if (!active || active.viewerId !== viewerId) throw new Error("找不到属于当前角色窗口的录制会话。" );
+    if (!active || active.viewerId !== viewerId) throw new Error("현재 캐릭터 창에 속한 녹화 세션을 찾을 수 없습니다.");
     return active;
   }
 

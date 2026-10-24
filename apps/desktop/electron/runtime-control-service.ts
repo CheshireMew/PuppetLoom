@@ -57,11 +57,11 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   for await (const rawChunk of request) {
     const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
     size += chunk.length;
-    if (size > MAX_REQUEST_BYTES) throw new Error("运行时控制请求超过 1 MiB。" );
+    if (size > MAX_REQUEST_BYTES) throw new Error("런타임 제어 요청이 1 MiB를 초과합니다.");
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString("utf8");
-  if (!text) throw new Error("请求正文不能为空。" );
+  if (!text) throw new Error("요청 본문은 비어 있을 수 없습니다.");
   return JSON.parse(text) as unknown;
 }
 
@@ -120,7 +120,7 @@ export class RuntimeControlService {
       });
     });
     const address = this.server.address();
-    if (!address || typeof address === "string") throw new Error("无法确定运行时控制服务端口。" );
+    if (!address || typeof address === "string") throw new Error("런타임 제어 서비스 포트를 확인할 수 없습니다.");
     const now = new Date().toISOString();
     this.manifest = { version: 1, status: "running", url: `http://127.0.0.1:${address.port}`, pid: process.pid, startedAt, updatedAt: now };
     this.writeManifest(this.manifest);
@@ -172,7 +172,7 @@ export class RuntimeControlService {
       return;
     }
     if (request.method !== "POST" || request.url !== "/v1/control") {
-      reply(response, 404, { ok: false, error: "只支持 GET /v1/health 和 POST /v1/control。" });
+      reply(response, 404, { ok: false, error: "GET /v1/health와 POST /v1/control만 지원합니다." });
       return;
     }
     let requestId = "invalid-request";
@@ -241,10 +241,10 @@ export class RuntimeControlService {
   }
 
   private startRecording(viewerId: number, nowMs: number): unknown {
-    if (this.recordings.has(viewerId)) throw new Error(`角色 ${viewerId} 已经在录制输入会话。`);
-    if (this.replays.has(viewerId)) throw new Error(`角色 ${viewerId} 正在回放动作数据，不能同时开始录制。`);
+    if (this.recordings.has(viewerId)) throw new Error(`캐릭터 ${viewerId}는 이미 입력 세션을 녹화 중입니다.`);
+    if (this.replays.has(viewerId)) throw new Error(`캐릭터 ${viewerId}가 모션 데이터를 재생 중이므로 동시에 녹화를 시작할 수 없습니다.`);
     const viewer = this.store.inspect().find((candidate) => candidate.id === viewerId);
-    if (!viewer) throw new Error(`找不到运行中的角色窗口：${viewerId}`);
+    if (!viewer) throw new Error(`실행 중인 캐릭터 창을 찾을 수 없습니다: ${viewerId}`);
     const events = this.store.snapshot(viewerId, nowMs).sources.flatMap((source): RuntimeInputSessionEvent[] => {
       const ttlMs = source.expiresAtMs === undefined ? undefined : Math.max(50, source.expiresAtMs - nowMs);
       const baseline: RuntimeInputSessionEvent[] = [];
@@ -281,7 +281,7 @@ export class RuntimeControlService {
 
   private stopRecording(viewerId: number, nowMs: number): { viewerId: number; recording: false; session: RuntimeInputSession } {
     const recording = this.recordings.get(viewerId);
-    if (!recording) throw new Error(`角色 ${viewerId} 没有正在录制的输入会话。`);
+    if (!recording) throw new Error(`캐릭터 ${viewerId}에 녹화 중인 입력 세션이 없습니다.`);
     this.recordings.delete(viewerId);
     const session: RuntimeInputSession = {
       version: 1,
@@ -316,13 +316,13 @@ export class RuntimeControlService {
   }
 
   private startReplay(viewerId: number, input: RuntimeInputSession, speed: number, loop: boolean, nowMs: number): unknown {
-    if (this.replays.has(viewerId)) throw new Error(`角色 ${viewerId} 已经在回放输入会话。`);
-    if (this.recordings.has(viewerId)) throw new Error(`角色 ${viewerId} 正在录制动作数据，不能同时开始回放。`);
+    if (this.replays.has(viewerId)) throw new Error(`캐릭터 ${viewerId}는 이미 입력 세션을 재생 중입니다.`);
+    if (this.recordings.has(viewerId)) throw new Error(`캐릭터 ${viewerId}가 모션 데이터를 녹화 중이므로 동시에 재생을 시작할 수 없습니다.`);
     const viewer = this.store.inspect().find((candidate) => candidate.id === viewerId);
-    if (!viewer) throw new Error(`找不到运行中的角色窗口：${viewerId}`);
-    if (viewer.projectName !== input.viewer.projectName) throw new Error(`输入会话属于“${input.viewer.projectName}”，当前角色是“${viewer.projectName}”。`);
+    if (!viewer) throw new Error(`실행 중인 캐릭터 창을 찾을 수 없습니다: ${viewerId}`);
+    if (viewer.projectName !== input.viewer.projectName) throw new Error(`입력 세션은 "${input.viewer.projectName}"에 속하고, 현재 캐릭터는 "${viewer.projectName}"입니다.`);
     if (input.viewer.revision !== undefined && viewer.revision !== input.viewer.revision) {
-      throw new Error(`输入会话属于 revision ${input.viewer.revision}，当前角色是 revision ${viewer.revision ?? "未知"}，不能可靠回放。`);
+      throw new Error(`입력 세션은 revision ${input.viewer.revision}에 속하고, 현재 캐릭터는 revision ${viewer.revision ?? "알 수 없음"}이므로 안정적으로 재생할 수 없습니다.`);
     }
     this.validateReplay(viewer, input, speed);
     const replay = { session: input, speed, loop, startedAtMs: nowMs, cursor: 0, sourceIds: new Set<string>(), timer: undefined as unknown as ReturnType<typeof setInterval> };

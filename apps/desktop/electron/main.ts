@@ -112,7 +112,7 @@ function queryRevisionArgument(commandLine = process.argv): number | undefined {
   const index = commandLine.indexOf("--revision");
   if (index < 0) return undefined;
   const revision = Number(commandLine[index + 1]);
-  if (!Number.isInteger(revision) || revision < 0) throw new Error("revision 必须是非负整数。" );
+  if (!Number.isInteger(revision) || revision < 0) throw new Error("revision은 0 이상의 정수여야 합니다.");
   return revision;
 }
 
@@ -383,7 +383,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
     ...(revision === undefined ? {} : { revision })
   });
   if (!capture) await projectIpc.rememberProject(resolvedProject, project);
-  const resolvedSourceLabel = sourceLabel ?? (revision === undefined ? "已保存项目" : `历史 revision ${revision}`);
+  const resolvedSourceLabel = sourceLabel ?? (revision === undefined ? "저장된 프로젝트" : `기록 revision ${revision}`);
   for (const [id, directory] of viewerProjects) {
     const existing = BrowserWindow.fromId(id);
     if (existing && samePath(directory, resolvedProject) && viewerRevisions.get(id) === revision) {
@@ -443,7 +443,7 @@ async function createViewer(projectDirectory: string, revision?: number, capture
   window.on("unresponsive", () => runtimeLog("viewer-unresponsive", { id: window.id }));
   window.once("closed", () => {
     runtimeLog("viewer-closed", { id: window.id });
-    performanceRecordingService.interruptViewer(window.id, "角色窗口在录制结束前关闭。" );
+    performanceRecordingService.interruptViewer(window.id, "녹화가 끝나기 전에 캐릭터 창이 닫혔습니다.");
     viewerStates.delete(window.id);
     viewerProjects.delete(window.id);
     viewerRevisions.delete(window.id);
@@ -496,7 +496,7 @@ function createControlWindow(projectDirectory?: string, editor = false): Browser
     closable: true,
     autoHideMenuBar: true,
     backgroundColor: "#11131a",
-    title: editor ? "PuppetLoom 编辑器" : "PuppetLoom",
+    title: editor ? "PuppetLoom 편집기" : "PuppetLoom",
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false }
   });
   const actualBounds = fitWindowInsideDisplay(window, { width: CONTROL_WINDOW_MIN_WIDTH, height: CONTROL_WINDOW_MIN_HEIGHT });
@@ -561,7 +561,7 @@ if (hasInstanceLock && !allowMultipleInstances) {
           if (edit) createControlWindow(project, true);
           else await createViewer(project, revision);
         } catch (cause) {
-          dialog.showErrorBox("无法启动角色", errorMessage(cause));
+          dialog.showErrorBox("캐릭터를 시작할 수 없습니다", errorMessage(cause));
         }
         return;
       }
@@ -603,11 +603,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     onMirrorCreated: (mirror, sourceViewerId) => {
       const projectDirectory = viewerProjects.get(sourceViewerId);
       const project = viewerProjectSnapshots.get(sourceViewerId);
-      if (!projectDirectory || !project) throw new Error("Spout2 来源窗口没有可用项目。");
+      if (!projectDirectory || !project) throw new Error("Spout2 원본 창에 사용할 수 있는 프로젝트가 없습니다.");
       viewerProjects.set(mirror.id, projectDirectory);
       viewerRevisions.set(mirror.id, viewerRevisions.get(sourceViewerId));
       viewerProjectSnapshots.set(mirror.id, structuredClone(project));
-      viewerSourceLabels.set(mirror.id, "Spout2 共享纹理输出");
+      viewerSourceLabels.set(mirror.id, "Spout2 공유 텍스처 출력");
       viewerAspectRatios.set(mirror.id, project.canvas.width / project.canvas.height);
       viewerStates.set(mirror.id, { paused: false, alwaysOnTop: false, clickThrough: false, mouseTracking: false, scale: 1 });
       spoutMirrorSources.set(mirror.id, sourceViewerId);
@@ -630,7 +630,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     const window = ownerWindow(event);
     if (!window) return false;
     if (enabled) {
-      if (!directory) throw new Error("进入编辑器时必须提供项目目录。" );
+      if (!directory) throw new Error("편집기를 열려면 프로젝트 디렉터리를 지정해야 합니다.");
       editorWindows.set(window.id, resolve(directory));
       if (window.isMinimized()) window.restore();
       if (!window.isVisible()) window.show();
@@ -641,7 +641,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       const targetWidth = Math.min(workArea.width, Math.max(width, Math.min(CONTROL_WINDOW_WIDTH, workArea.width)));
       const targetHeight = Math.min(workArea.height, Math.max(height, Math.min(CONTROL_WINDOW_HEIGHT, workArea.height)));
       if (width !== targetWidth || height !== targetHeight) window.setSize(targetWidth, targetHeight, true);
-      window.setTitle("PuppetLoom 编辑器");
+      window.setTitle("PuppetLoom 편집기");
     } else {
       editorWindows.delete(window.id);
       window.setMinimumSize(CONTROL_WINDOW_MIN_WIDTH, CONTROL_WINDOW_MIN_HEIGHT);
@@ -652,12 +652,12 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("window:shell-state", (event) => {
     const window = ownerWindow(event);
-    if (!window || viewerProjects.has(window.id)) throw new Error("当前窗口不使用应用标题栏。" );
+    if (!window || viewerProjects.has(window.id)) throw new Error("현재 창은 앱 제목 표시줄을 사용하지 않습니다.");
     return windowShellState(window);
   });
   ipcMain.handle("window:shell-action", (event, action: WindowShellAction) => {
     const window = ownerWindow(event);
-    if (!window || viewerProjects.has(window.id)) throw new Error("当前窗口不使用应用标题栏。" );
+    if (!window || viewerProjects.has(window.id)) throw new Error("현재 창은 앱 제목 표시줄을 사용하지 않습니다.");
     if (action === "minimize") window.minimize();
     else if (action === "toggle-maximize") {
       if (window.isMaximized()) window.unmaximize();
@@ -665,7 +665,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     } else if (action === "close") {
       window.close();
       return null;
-    } else throw new Error(`未知窗口操作：${String(action)}`);
+    } else throw new Error(`알 수 없는 창 작업: ${String(action)}`);
     publishWindowShellState(window);
     return windowShellState(window);
   });
@@ -687,8 +687,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("viewer:project", (event) => {
     const window = ownerWindow(event);
     const project = window ? viewerProjectSnapshots.get(window.id) : undefined;
-    if (!window || !project) throw new Error("当前窗口没有可显示的角色项目。");
-    return { project, sourceLabel: viewerSourceLabels.get(window.id) ?? "已保存项目" };
+    if (!window || !project) throw new Error("현재 창에 표시할 캐릭터 프로젝트가 없습니다.");
+    return { project, sourceLabel: viewerSourceLabels.get(window.id) ?? "저장된 프로젝트" };
   });
   ipcMain.handle("viewer:capabilities", () => ({ hotkeys: { ...runtimeHotkeys } }));
   ipcMain.handle("system:reveal-path", (_event, path: string) => {
@@ -708,7 +708,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     const window = ownerWindow(event);
     const project = viewerProjectSnapshots.get(window?.id ?? -1)
       ?? await runProjectWorker<PuppetLoomProject>({ operation: "load-project", directory: resolve(projectDirectory) });
-    const selection = window ? await dialog.showOpenDialog(window, { title: "选择导出位置", properties: ["openDirectory", "createDirectory"] }) : await dialog.showOpenDialog({ title: "选择导出位置", properties: ["openDirectory", "createDirectory"] });
+    const selection = window ? await dialog.showOpenDialog(window, { title: "내보내기 위치 선택", properties: ["openDirectory", "createDirectory"] }) : await dialog.showOpenDialog({ title: "내보내기 위치 선택", properties: ["openDirectory", "createDirectory"] });
     const parent = selection.filePaths[0]; if (selection.canceled || !parent) return undefined;
     const name = project.name.replace(/[<>:"/\\|?*]+/g, "-"); const output = join(parent, `${name}-${format}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
     if (format === "portable") return exportPortableProject({ project: resolve(projectDirectory), output });
@@ -757,14 +757,14 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:runtime-control", (event) => {
     const window = ownerWindow(event);
-    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口没有运行时控制状态。" );
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("현재 창에 런타임 제어 상태가 없습니다.");
     const sourceViewerId = spoutMirrorSources.get(window.id) ?? window.id;
     const snapshot = runtimeControlService.snapshot(sourceViewerId);
     return sourceViewerId === window.id ? snapshot : { ...snapshot, viewerId: window.id };
   });
   ipcMain.handle("viewer:runtime-descriptor", (event) => {
     const window = ownerWindow(event);
-    if (!window || !runtimeControlService) throw new Error("当前窗口没有运行时能力描述。" );
+    if (!window || !runtimeControlService) throw new Error("현재 창에 런타임 기능 설명이 없습니다.");
     const sourceViewerId = spoutMirrorSources.get(window.id) ?? window.id;
     const descriptor = runtimeControlService.store.inspect().find((viewer) => viewer.id === sourceViewerId);
     return descriptor && sourceViewerId !== window.id ? { ...descriptor, id: window.id } : descriptor;
@@ -772,7 +772,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle("runtime:assets", () => runtimeAssetLocations());
   ipcMain.handle("viewer:runtime-set", (event, source: RuntimeControlSetRequest["source"]) => {
     const window = ownerWindow(event);
-    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口不能接收运行时输入。" );
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("현재 창은 런타임 입력을 받을 수 없습니다.");
     return runtimeControlService.applyLocal(parseRuntimeControlRequest({ version: 1, requestId: randomUUID(), op: "set", viewerId: spoutMirrorSources.get(window.id) ?? window.id, source }));
   });
   ipcMain.handle("viewer:runtime-release", (event, sourceId: string) => {
@@ -782,7 +782,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:runtime-trigger", (event, target: { behaviorId?: string; expressionId?: string; durationMs?: number }) => {
     const window = ownerWindow(event);
-    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("当前窗口不能触发表情或动作。" );
+    if (!window || !viewerProjects.has(window.id) || !runtimeControlService) throw new Error("현재 창은 표정이나 동작을 트리거할 수 없습니다.");
     return runtimeControlService.applyLocal(parseRuntimeControlRequest({
       version: 1, requestId: randomUUID(), op: "trigger", viewerId: spoutMirrorSources.get(window.id) ?? window.id, sourceId: "viewer-action-panel",
       ...(target.behaviorId ? { behaviorId: target.behaviorId } : {}),
@@ -793,39 +793,39 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:spout-output", async (event, action: "status" | "start" | "stop", options?: SpoutOutputOptions) => {
     const window = ownerWindow(event);
-    if (!window || spoutMirrorSources.has(window.id) || !spoutOutputService) throw new Error("当前窗口不能管理 Spout2 输出。" );
+    if (!window || spoutMirrorSources.has(window.id) || !spoutOutputService) throw new Error("현재 창은 Spout2 출력을 관리할 수 없습니다.");
     if (action === "status") return spoutOutputService.status(window.id);
     if (action === "stop") return spoutOutputService.stop(window.id);
-    if (action !== "start") throw new Error(`未知 Spout2 操作：${String(action)}`);
+    if (action !== "start") throw new Error(`알 수 없는 Spout2 작업: ${String(action)}`);
     const projectDirectory = viewerProjects.get(window.id);
     const project = viewerProjectSnapshots.get(window.id);
-    if (!projectDirectory || !project) throw new Error("当前窗口没有角色项目。" );
+    if (!projectDirectory || !project) throw new Error("현재 창에 캐릭터 프로젝트가 없습니다." );
     const revision = viewerRevisions.get(window.id);
     return spoutOutputService.start({ sourceViewerId: window.id, projectDirectory, projectName: project.name, ...(revision === undefined ? {} : { revision }), ...(options ? { options } : {}) });
   });
   ipcMain.handle("viewer:input-recording", (event, action: "start" | "stop") => {
     const window = ownerWindow(event);
-    if (!window || !runtimeControlService) throw new Error("当前窗口不能录制运行时输入。" );
+    if (!window || !runtimeControlService) throw new Error("현재 창은 런타임 입력을 녹화할 수 없습니다.");
     const projectDirectory = viewerProjects.get(window.id);
-    if (!projectDirectory) throw new Error("当前窗口没有角色项目。" );
+    if (!projectDirectory) throw new Error("현재 창에 캐릭터 프로젝트가 없습니다." );
     if (action === "start") return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "record-start", viewerId: window.id }));
-    if (action !== "stop") throw new Error(`未知输入录制操作：${String(action)}`);
+    if (action !== "stop") throw new Error(`알 수 없는 입력 녹화 작업: ${String(action)}`);
     const result = runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "record-stop", viewerId: window.id })) as { session: RuntimeInputSession };
     const output = saveInputSession(projectDirectory, result.session);
     return { recording: false, output, durationMs: result.session.durationMs, events: result.session.events.length };
   });
   ipcMain.handle("viewer:input-replay", async (event, action: "start" | "stop") => {
     const window = ownerWindow(event);
-    if (!window || !runtimeControlService) throw new Error("当前窗口不能回放运行时输入。" );
+    if (!window || !runtimeControlService) throw new Error("현재 창은 런타임 입력을 재생할 수 없습니다.");
     const projectDirectory = viewerProjects.get(window.id);
-    if (!projectDirectory) throw new Error("当前窗口没有角色项目。" );
+    if (!projectDirectory) throw new Error("현재 창에 캐릭터 프로젝트가 없습니다." );
     if (action === "stop") return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "replay-stop", viewerId: window.id }));
-    if (action !== "start") throw new Error(`未知输入回放操作：${String(action)}`);
+    if (action !== "start") throw new Error(`알 수 없는 입력 재생 작업: ${String(action)}`);
     const selection = await dialog.showOpenDialog(window, {
-      title: "选择 PuppetLoom 动作数据",
+      title: "PuppetLoom 모션 데이터 선택",
       defaultPath: join(projectDirectory, "reports", "input-sessions"),
       properties: ["openFile"],
-      filters: [{ name: "PuppetLoom 动作数据", extensions: ["json"] }]
+      filters: [{ name: "PuppetLoom 모션 데이터", extensions: ["json"] }]
     });
     const path = selection.filePaths[0];
     if (selection.canceled || !path) return { replaying: false, canceled: true };
@@ -837,31 +837,31 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:take-list", (event) => {
     const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
-    if (!projectDirectory) throw new Error("当前窗口没有角色项目。"); return listPerformanceTakes(projectDirectory);
+    if (!projectDirectory) throw new Error("현재 창에 캐릭터 프로젝트가 없습니다."); return listPerformanceTakes(projectDirectory);
   });
   ipcMain.handle("viewer:take-import", async (event, options?: { name?: string; tags?: string[]; note?: string }) => {
     const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
-    if (!window || !projectDirectory) throw new Error("当前窗口没有角色项目。");
-    const selection = await dialog.showOpenDialog(window, { title: "导入动作会话为 Take", defaultPath: join(projectDirectory, "reports", "input-sessions"), properties: ["openFile"], filters: [{ name: "PuppetLoom 动作数据", extensions: ["json"] }] });
+    if (!window || !projectDirectory) throw new Error("현재 창에 캐릭터 프로젝트가 없습니다.");
+    const selection = await dialog.showOpenDialog(window, { title: "모션 세션을 Take로 가져오기", defaultPath: join(projectDirectory, "reports", "input-sessions"), properties: ["openFile"], filters: [{ name: "PuppetLoom 모션 데이터", extensions: ["json"] }] });
     const path = selection.filePaths[0]; if (selection.canceled || !path) return undefined;
     return importPerformanceTake(projectDirectory, JSON.parse(readFileSync(path, "utf8")) as unknown, options);
   });
   ipcMain.handle("viewer:take-edit", (event, takeId: string, operations: import("@puppetloom/core").TakeEditOperations) => {
     const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
-    if (!projectDirectory) throw new Error("当前窗口没有角色项目。"); return editPerformanceTake(projectDirectory, takeId, operations);
+    if (!projectDirectory) throw new Error("현재 창에 캐릭터 프로젝트가 없습니다."); return editPerformanceTake(projectDirectory, takeId, operations);
   });
   ipcMain.handle("viewer:take-replay", async (event, takeId: string, speed = 1, loop = false) => {
     const window = ownerWindow(event); const projectDirectory = window ? viewerProjects.get(window.id) : undefined;
-    if (!window || !projectDirectory || !runtimeControlService) throw new Error("当前窗口不能回放 Take。");
+    if (!window || !projectDirectory || !runtimeControlService) throw new Error("현재 창은 Take를 재생할 수 없습니다.");
     const take = await readPerformanceTake(projectDirectory, takeId);
     return runtimeControlService.applyLocal(parseRuntimeControlServiceRequest({ version: 1, requestId: randomUUID(), op: "replay-start", viewerId: window.id, session: take.session, speed, loop }));
   });
   ipcMain.handle("viewer:performance-recording-start", (event, metadata: import("./performance-recording-service.js").PerformanceRecordingMetadata) => {
     const window = ownerWindow(event);
-    if (!window) throw new Error("找不到发起录制的角色窗口。" );
+    if (!window) throw new Error("녹화를 시작한 캐릭터 창을 찾을 수 없습니다.");
     const projectDirectory = viewerProjects.get(window.id);
     const descriptor = runtimeControlService?.store.inspect().find((viewer) => viewer.id === window.id);
-    if (!projectDirectory || !descriptor) throw new Error("当前窗口没有可录制的角色项目。" );
+    if (!projectDirectory || !descriptor) throw new Error("현재 창에 녹화할 캐릭터 프로젝트가 없습니다.");
     const result = performanceRecordingService.start({
       viewerId: window.id,
       projectDirectory,
@@ -890,7 +890,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
           envelopeKeys: data && typeof data === "object" ? Object.keys(data) : [],
           bufferType: Object.prototype.toString.call(data?.buffer)
         });
-        if (Number.isInteger(sequence)) port.postMessage({ sequence, error: "录制分块格式无效。" });
+        if (Number.isInteger(sequence)) port.postMessage({ sequence, error: "녹화 청크 형식이 올바르지 않습니다." });
         return;
       }
       try {
@@ -904,14 +904,14 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle("viewer:performance-recording-stop", (event, id: string, durationMs: number, inputSession?: import("./performance-recording-service.js").PerformanceRecordingInputSession) => {
     const window = ownerWindow(event);
-    if (!window) throw new Error("找不到录制窗口。" );
+    if (!window) throw new Error("녹화 창을 찾을 수 없습니다.");
     const result = performanceRecordingService.stop(window.id, id, durationMs, inputSession);
     runtimeLog("performance-recording-complete", { viewerId: window.id, id, output: result.output, durationMs, bytes: result.bytes });
     return result;
   });
   ipcMain.handle("viewer:performance-recording-fail", (event, id: string, error: string) => {
     const window = ownerWindow(event);
-    if (!window) throw new Error("找不到录制窗口。" );
+    if (!window) throw new Error("녹화 창을 찾을 수 없습니다.");
     performanceRecordingService.fail(window.id, id, error);
     runtimeLog("performance-recording-failed", { viewerId: window.id, id, error });
     return true;
@@ -974,7 +974,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       if (initialEdit) createControlWindow(project, true);
       else await createViewer(project, initialRevision, initialCapture);
     } catch (cause) {
-      dialog.showErrorBox("无法启动角色", errorMessage(cause));
+      dialog.showErrorBox("캐릭터를 시작할 수 없습니다", errorMessage(cause));
       createControlWindow();
     }
   } else createControlWindow();
@@ -992,7 +992,7 @@ app.on("before-quit", (event) => {
   if (quitPreparationStarted) return;
   quitPreparationStarted = true;
   runtimeLog("app-before-quit");
-  performanceRecordingService.interruptAll("PuppetLoom 在录制结束前退出。" );
+  performanceRecordingService.interruptAll("녹화가 끝나기 전에 PuppetLoom이 종료되었습니다.");
   void (async () => {
     await spoutOutputService?.stopAll();
     await runtimeControlService?.stop();

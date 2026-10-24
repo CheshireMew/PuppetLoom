@@ -59,7 +59,7 @@ export function startProjectWorker<T>(request: ProjectWorkerRequest, onProgress?
     worker.once("exit", (code) => {
       if (settled) return;
       settled = true;
-      reject(new Error(`项目后台任务意外退出（code ${code}）。`));
+      reject(new Error(`프로젝트 백그라운드 작업이 예기치 않게 종료되었습니다(code ${code}).`));
     });
     worker.postMessage({ kind: "run", request });
   });
