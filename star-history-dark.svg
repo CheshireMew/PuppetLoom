@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="650" viewBox="0 0 1000 650" role="img" aria-labelledby="title description">
   <title id="title">Star history for CheshireMew/PuppetLoom</title>
-  <desc id="description">Cumulative GitHub stars through 2026-11-10. Total: 260.</desc>
+  <desc id="description">Cumulative GitHub stars through 2026-11-17. Total: 261.</desc>
   <rect width="100%" height="100%" rx="12" fill="#0d1117"/>
   <g data-style="hand-drawn" font-family="Comic Sans MS,Segoe Print,Bradley Hand,cursive" fill="#f0f6fc">
     <text x="500.0" y="58" text-anchor="middle" font-size="34" font-weight="700">Star History</text>
@@ -20,18 +20,18 @@
     <path d="M 98 106.00 L 109 105.00" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
     <text x="91" y="105.00" text-anchor="end" dominant-baseline="middle" font-size="17">500</text>
     <path d="M 105.00 557 L 106.00 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="105.00" y="594" text-anchor="start" font-size="17">08-14</text>
-    <path d="M 279.89 557 L 280.89 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="279.89" y="594" text-anchor="middle" font-size="17">09-01</text>
-    <path d="M 445.06 557 L 446.06 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="445.06" y="594" text-anchor="middle" font-size="17">09-18</text>
-    <path d="M 619.94 557 L 620.94 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="619.94" y="594" text-anchor="middle" font-size="17">10-06</text>
-    <path d="M 785.11 557 L 786.11 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="785.11" y="594" text-anchor="middle" font-size="17">10-23</text>
+    <text x="105.00" y="594" text-anchor="start" font-size="17">2026-08</text>
+    <path d="M 276.00 557 L 277.00 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="276.00" y="594" text-anchor="middle" font-size="17">2026-09</text>
+    <path d="M 447.00 557 L 448.00 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="447.00" y="594" text-anchor="middle" font-size="17">2026-09</text>
+    <path d="M 618.00 557 L 619.00 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="618.00" y="594" text-anchor="middle" font-size="17">2026-10</text>
+    <path d="M 789.00 557 L 790.00 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="789.00" y="594" text-anchor="middle" font-size="17">2026-10</text>
     <path d="M 960.00 557 L 961.00 567" fill="none" stroke="#f0f6fc" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="960.00" y="594" text-anchor="end" font-size="17">11-10</text>
-    <path data-role="star-line" d="M 105.00 560.00 L 173.01 559.09 L 211.88 558.18 L 231.31 556.36 L 241.02 555.45 L 250.74 554.54 L 347.90 459.90 L 357.61 367.08 L 367.33 357.07 L 377.05 356.16 L 386.76 353.43 L 415.91 352.52 L 435.34 351.61 L 445.06 349.79 L 454.77 348.88 L 464.49 347.97 L 522.78 346.15 L 551.93 345.24 L 561.65 344.33 L 590.80 343.42 L 600.51 342.51 L 610.23 341.60 L 619.94 340.69 L 726.82 339.78 L 746.25 337.96 L 765.68 336.14 L 775.40 334.32 L 785.11 333.41 L 794.83 332.50 L 823.98 331.59 L 843.41 329.77 L 862.84 327.04 L 911.42 326.13 L 940.57 325.22 L 960.00 323.40" fill="none" stroke="#ff5a36" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    <text x="960.00" y="594" text-anchor="end" font-size="17">2026-11</text>
+    <path data-role="star-line" d="M 105.00 560.00 L 168.00 559.09 L 204.00 558.18 L 222.00 556.36 L 231.00 555.45 L 240.00 554.54 L 330.00 459.90 L 339.00 367.08 L 348.00 357.07 L 357.00 356.16 L 366.00 353.43 L 393.00 352.52 L 411.00 351.61 L 420.00 349.79 L 429.00 348.88 L 438.00 347.97 L 492.00 346.15 L 519.00 345.24 L 528.00 344.33 L 555.00 343.42 L 564.00 342.51 L 573.00 341.60 L 582.00 340.69 L 681.00 339.78 L 699.00 337.96 L 717.00 336.14 L 726.00 334.32 L 735.00 333.41 L 744.00 332.50 L 771.00 331.59 L 789.00 329.77 L 807.00 327.04 L 852.00 326.13 L 879.00 325.22 L 897.00 323.40 L 960.00 322.49" fill="none" stroke="#ff5a36" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
     <g data-role="signature" transform="translate(786 608)">
       <path d="M 12 0 L 15 9 L 25 6 L 18 14 L 26 21 L 16 18 L 12 28 L 9 18 L 0 22 L 7 14 L 0 7 L 9 10 Z" fill="none" stroke="#39d353" stroke-width="2.5" stroke-linejoin="round"/>
       <text x="34" y="18" fill="#9da7b3" font-size="15">project-steward</text>
