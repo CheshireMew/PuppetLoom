@@ -384,7 +384,7 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
     } catch (cause) {
       setRecordingInput(false);
       setRecordingClock(undefined);
-      setSessionMessage({ text: `모션 데이터 녹화에 실패함: ${messageOf(cause)}` });
+      setSessionMessage({ text: `动作数据录制失败：${messageOf(cause)}` });
     }
   }
 
@@ -404,7 +404,7 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
       }
     } catch (cause) {
       setReplayingInput(false);
-      setSessionMessage({ text: `모션 데이터 재생에 실패함: ${messageOf(cause)}` });
+      setSessionMessage({ text: `动作数据回放失败：${messageOf(cause)}` });
     }
   }
 
@@ -452,7 +452,7 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
         const input = performanceOwnsInput.current ? await window.puppetloom.inputRecording("stop").catch(() => undefined) : undefined;
         performanceOwnsInput.current = false;
         setRecordingInput(false);
-        if (input?.output) setSessionMessage({ text: `영상을 시작하지 못함. 모션 데이터는 따로 저장됨: ${messageOf(cause)}`, path: input.output });
+        if (input?.output) setSessionMessage({ text: `视频未能开始；动作数据已单独保存：${messageOf(cause)}`, path: input.output });
         throw cause;
       }
       setRecordingPerformance(true);
@@ -466,7 +466,7 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
       if (!performanceRecorder.current) {
         setRecordingPerformance(false);
         setRecordingClock(undefined);
-        setSessionMessage((current) => current?.path ? current : { text: `영상 녹화에 실패함: ${messageOf(cause)}` });
+        setSessionMessage((current) => current?.path ? current : { text: `视频录制失败：${messageOf(cause)}` });
       }
     }
   }
@@ -487,7 +487,7 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
       if (performanceOwnsInput.current) {
         try {
           const input = await window.puppetloom.inputRecording("stop");
-          if (!input.output || input.durationMs === undefined || input.events === undefined) throw new Error("입력 서비스가 완전한 세션 요약을 반환하지 않았습니다.");
+          if (!input.output || input.durationMs === undefined || input.events === undefined) throw new Error("输入服务没有返回完整会话摘要。" );
           inputSession = { output: input.output, durationMs: input.durationMs, events: input.events };
         } catch (cause) {
           inputError = messageOf(cause);
@@ -503,18 +503,18 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
         setRecordingPreview({
           url,
           output: result.output,
-          ...(inputError ? { note: "영상은 저장됨. 모션 데이터는 완전히 저장되지 않음: " + inputError } : inputSession ? { note: "영상과 모션 데이터가 모두 저장됨." } : {})
+          ...(inputError ? { note: "视频已保存；动作数据未能完整保存：" + inputError } : inputSession ? { note: "视频和动作数据均已保存。" } : {})
         });
         setSessionMessage(undefined);
       } catch (cause) {
         previewFailure = messageOf(cause);
         setSessionMessage({
-          text: [inputError ? "영상은 저장됐지만 모션 데이터는 완전히 저장되지 않음: " + inputError : "영상이 저장됨", "미리보기를 읽지 못함: " + previewFailure].join(" · "),
+          text: [inputError ? "视频已保存，但动作数据未能完整保存：" + inputError : "视频已保存", "预览读取失败：" + previewFailure].join("；"),
           path: result.output
         });
       }
     } catch (cause) {
-      setSessionMessage({ text: `영상 녹화에 실패함: ${messageOf(cause)}` });
+      setSessionMessage({ text: `视频录制失败：${messageOf(cause)}` });
     } finally {
       finishingPerformance.current = false;
       setRecordingFinalizing(false);
@@ -536,9 +536,9 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
       const selected = target.behaviorId
         ? runtimeDescriptor?.behaviors.find((value) => value.id === target.behaviorId)?.name
         : runtimeDescriptor?.expressions.find((value) => value.id === target.expressionId)?.name;
-      setTransientMessage(`트리거됨: ${selected ?? target.behaviorId ?? target.expressionId}`);
+      setTransientMessage(`已触发：${selected ?? target.behaviorId ?? target.expressionId}`);
     } catch (cause) {
-      setSessionMessage({ text: `트리거에 실패함: ${messageOf(cause)}` });
+      setSessionMessage({ text: `触发失败：${messageOf(cause)}` });
     }
   }
 
@@ -566,7 +566,7 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
       setSpoutStatus(status);
       setTransientMessage(status.message);
     } catch (cause) {
-      setSessionMessage({ text: `Spout2 출력에 실패함: ${messageOf(cause)}` });
+      setSessionMessage({ text: `Spout2 输出失败：${messageOf(cause)}` });
     }
   }
 
@@ -574,17 +574,17 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
     try {
       await window.puppetloom.setRuntimeSource({ id: "viewer-character-state", priority: 45, blend: 1, characterState: next });
       setSelectedCharacterState(next);
-    } catch (cause) { setSessionMessage({ text: `상태 전환에 실패함: ${messageOf(cause)}` }); }
+    } catch (cause) { setSessionMessage({ text: `状态切换失败：${messageOf(cause)}` }); }
   }
 
-  async function refreshTakes(): Promise<void> { try { setTakes(await window.puppetloom.listTakes()); } catch (cause) { setSessionMessage({ text: `Take 목록을 읽지 못함: ${messageOf(cause)}` }); } }
-  async function importTake(): Promise<void> { try { const take = await window.puppetloom.importTake(); if (take) { await refreshTakes(); setTransientMessage(`Take를 가져옴: ${take.name}`); } } catch (cause) { setSessionMessage({ text: `Take 가져오기에 실패함: ${messageOf(cause)}` }); } }
+  async function refreshTakes(): Promise<void> { try { setTakes(await window.puppetloom.listTakes()); } catch (cause) { setSessionMessage({ text: `Take 列表读取失败：${messageOf(cause)}` }); } }
+  async function importTake(): Promise<void> { try { const take = await window.puppetloom.importTake(); if (take) { await refreshTakes(); setTransientMessage(`已导入 Take：${take.name}`); } } catch (cause) { setSessionMessage({ text: `Take 导入失败：${messageOf(cause)}` }); } }
   async function saveTakeEdit(): Promise<void> {
     if (!takeEdit) return;
     try {
       const edited = await window.puppetloom.editTake(takeEdit.id, { trim: { startMs: Math.round(takeEdit.startSeconds * 1000), endMs: Math.round(takeEdit.endSeconds * 1000) }, speed: takeEdit.speed, smoothWindow: takeEdit.smoothWindow });
-      await refreshTakes(); setTakeEdit(undefined); setTransientMessage(`편집본을 만듦: ${edited.name}`);
-    } catch (cause) { setSessionMessage({ text: `Take 편집에 실패함: ${messageOf(cause)}` }); }
+      await refreshTakes(); setTakeEdit(undefined); setTransientMessage(`已创建编辑版：${edited.name}`);
+    } catch (cause) { setSessionMessage({ text: `Take 编辑失败：${messageOf(cause)}` }); }
   }
 
   return (
@@ -610,52 +610,52 @@ function Viewer({ projectDirectory, revision, output = false }: { projectDirecto
       {showRecordingSettings && !recordingPerformance && <aside className="recording-panel" aria-label={t("recordingSettings")}>
         <div className="recording-panel-heading"><strong>{t("videoRecording")}</strong><button aria-label={t("closeRecordingSettings")} onClick={() => setShowRecordingSettings(false)}><X aria-hidden="true" /></button></div>
         <label><span>{t("background")}</span><select aria-label={t("recordingBackground")} value={recordingSettings.background} onChange={(event) => setRecordingSettings((current) => ({ ...current, background: event.target.value as RecordingBackgroundChoice }))}><option value="transparent">{t("transparent")}</option><option value="black">{t("black")}</option><option value="white">{t("white")}</option><option value="green">{t("greenScreen")}</option><option value="custom">{t("customSolid")}</option></select></label>
-        {recordingSettings.background === "custom" && <label><span>배경색</span><input aria-label="사용자 지정 녹화 배경색" type="color" value={recordingSettings.backgroundColor} onChange={(event) => setRecordingSettings((current) => ({ ...current, backgroundColor: event.target.value }))} /></label>}
+        {recordingSettings.background === "custom" && <label><span>背景颜色</span><input aria-label="自定义录制背景颜色" type="color" value={recordingSettings.backgroundColor} onChange={(event) => setRecordingSettings((current) => ({ ...current, backgroundColor: event.target.value }))} /></label>}
         <div className="recording-grid">
-          <label><span>너비</span><input aria-label="녹화 너비" type="number" min="64" max="4096" step="1" value={recordingSettings.width} onChange={(event) => setRecordingSettings((current) => ({ ...current, width: Number(event.target.value) }))} /></label>
-          <label><span>높이</span><input aria-label="녹화 높이" type="number" min="64" max="4096" step="1" value={recordingSettings.height} onChange={(event) => setRecordingSettings((current) => ({ ...current, height: Number(event.target.value) }))} /></label>
-          <label><span>프레임레이트</span><select aria-label="녹화 프레임레이트" value={recordingSettings.fps} onChange={(event) => setRecordingSettings((current) => ({ ...current, fps: Number(event.target.value) as ViewerRecordingSettings["fps"] }))}><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
-          <label><span>자동 정지</span><input aria-label="녹화 시간(초)" type="number" min="0" max="3600" step="1" value={recordingSettings.durationSeconds} onChange={(event) => setRecordingSettings((current) => ({ ...current, durationSeconds: Number(event.target.value) }))} /><small>초, 0은 수동</small></label>
+          <label><span>宽度</span><input aria-label="录制宽度" type="number" min="64" max="4096" step="1" value={recordingSettings.width} onChange={(event) => setRecordingSettings((current) => ({ ...current, width: Number(event.target.value) }))} /></label>
+          <label><span>高度</span><input aria-label="录制高度" type="number" min="64" max="4096" step="1" value={recordingSettings.height} onChange={(event) => setRecordingSettings((current) => ({ ...current, height: Number(event.target.value) }))} /></label>
+          <label><span>帧率</span><select aria-label="录制帧率" value={recordingSettings.fps} onChange={(event) => setRecordingSettings((current) => ({ ...current, fps: Number(event.target.value) as ViewerRecordingSettings["fps"] }))}><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
+          <label><span>自动停止</span><input aria-label="录制时长秒数" type="number" min="0" max="3600" step="1" value={recordingSettings.durationSeconds} onChange={(event) => setRecordingSettings((current) => ({ ...current, durationSeconds: Number(event.target.value) }))} /><small>秒，0 为手动</small></label>
         </div>
-        <label className="recording-checkbox"><input type="checkbox" checked={recordingSettings.includeAudio} disabled={!microphoneInput.current?.mediaStream} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeAudio: event.target.checked }))} /><span>{microphoneInput.current?.mediaStream ? "켜진 마이크 트랙을 녹음" : "마이크를 먼저 켜야 오디오를 녹음할 수 있음"}</span></label>
-        <label className="recording-checkbox recording-data-option"><input type="checkbox" checked={recordingSettings.includeMotionData} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeMotionData: event.target.checked }))} /><span><strong>모션 데이터도 함께 저장</strong><small>같은 프로젝트 버전에서 마우스 따라가기, 얼굴 추적, 립싱크, 표정, 동작, 외부 제어를 다시 재생합니다. 웹캠 원본이나 소리는 포함되지 않습니다.</small></span></label>
-        <p>영상은 선택한 크기에 맞춰 비율을 유지한 채 가운데 정렬되어 WebM으로 저장되며, 캐릭터는 늘어나지 않습니다. 모션 데이터는 선택적인 별도 JSON이며, 일반 녹화에는 켜지 않아도 됩니다.</p>
-        <button className="recording-start with-icon" disabled={recordingInput || replayingInput} onClick={() => void startConfiguredPerformanceRecording()}><Video aria-hidden="true" />영상 녹화 시작</button>
-        <section className="spout-output"><strong>Spout2 공유 텍스처</strong><p>위의 너비·높이와 프레임레이트로 D3D11을 통해 투명 화면을 공유합니다. OBS, TouchDesigner 등에서 센더 이름이 보입니다.</p><button className={`with-icon ${spoutStatus?.active ? "is-active" : ""}`} disabled={spoutStatus?.supported === false} onClick={() => void toggleSpoutOutput()}><RadioTower aria-hidden="true" />{spoutStatus?.active ? "Spout2 출력 중지" : "Spout2 출력 시작"}</button>{spoutStatus?.active && <small>{spoutStatus.senderName} · {spoutStatus.width}×{spoutStatus.height} · {spoutStatus.fps} FPS · {spoutStatus.frames ?? 0}프레임 전송됨{spoutStatus.droppedFrames ? ` · ${spoutStatus.droppedFrames}프레임 드롭` : ""}</small>}{spoutStatus?.supported === false && <small>{spoutStatus.message}</small>}</section>
+        <label className="recording-checkbox"><input type="checkbox" checked={recordingSettings.includeAudio} disabled={!microphoneInput.current?.mediaStream} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeAudio: event.target.checked }))} /><span>{microphoneInput.current?.mediaStream ? "录入已开启的麦克风音轨" : "先开启麦克风，才能录入音轨"}</span></label>
+        <label className="recording-checkbox recording-data-option"><input type="checkbox" checked={recordingSettings.includeMotionData} onChange={(event) => setRecordingSettings((current) => ({ ...current, includeMotionData: event.target.checked }))} /><span><strong>同时保存动作数据</strong><small>用于在同一项目版本上重放鼠标跟随、面捕、口型、表情、动作和外部控制；不包含摄像头原片或声音。</small></span></label>
+        <p>视频按所选尺寸等比居中保存为 WebM，不拉伸角色。动作数据是可选的独立 JSON，普通录制无需开启。</p>
+        <button className="recording-start with-icon" disabled={recordingInput || replayingInput} onClick={() => void startConfiguredPerformanceRecording()}><Video aria-hidden="true" />开始录制视频</button>
+        <section className="spout-output"><strong>Spout2 共享纹理</strong><p>使用上面的宽高与帧率，通过 D3D11 共享透明画面；OBS、TouchDesigner 等软件会看到发送器名称。</p><button className={`with-icon ${spoutStatus?.active ? "is-active" : ""}`} disabled={spoutStatus?.supported === false} onClick={() => void toggleSpoutOutput()}><RadioTower aria-hidden="true" />{spoutStatus?.active ? "停止 Spout2 输出" : "开始 Spout2 输出"}</button>{spoutStatus?.active && <small>{spoutStatus.senderName} · {spoutStatus.width}×{spoutStatus.height} · {spoutStatus.fps} FPS · 已发送 {spoutStatus.frames ?? 0} 帧{spoutStatus.droppedFrames ? ` · 丢弃 ${spoutStatus.droppedFrames} 帧` : ""}</small>}{spoutStatus?.supported === false && <small>{spoutStatus.message}</small>}</section>
         <details className="recording-advanced">
-          <summary><ChevronRight aria-hidden="true" />모션 데이터 도구</summary>
-          <p>모션 데이터만 따로 기록하거나 재생합니다. 캐릭터를 수정한 뒤 같은 입력으로 비교하거나 문제를 찾을 때 유용합니다. 재생 중에는 실시간 소스가 잠시 격리됩니다.</p>
+          <summary><ChevronRight aria-hidden="true" />动作数据工具</summary>
+          <p>单独记录或回放动作数据，适合修改角色后做同输入对比和排查问题。回放时实时来源会暂时隔离。</p>
           <div>
-            <button className={`with-icon ${recordingInput ? "is-recording" : ""}`} disabled={replayingInput} onClick={() => void toggleInputRecording()}>{recordingInput ? <Square aria-hidden="true" /> : <FileJson2 aria-hidden="true" />}{recordingInput ? "중지하고 모션 데이터 저장" : "모션 데이터만 녹화"}</button>
-            <button className={`with-icon ${replayingInput ? "is-active" : ""}`} disabled={recordingInput} onClick={() => void toggleInputReplay()}><Repeat2 aria-hidden="true" />{replayingInput ? "모션 데이터 재생 중지" : "모션 데이터 재생"}</button>
+            <button className={`with-icon ${recordingInput ? "is-recording" : ""}`} disabled={replayingInput} onClick={() => void toggleInputRecording()}>{recordingInput ? <Square aria-hidden="true" /> : <FileJson2 aria-hidden="true" />}{recordingInput ? "停止并保存动作数据" : "单独录制动作数据"}</button>
+            <button className={`with-icon ${replayingInput ? "is-active" : ""}`} disabled={recordingInput} onClick={() => void toggleInputReplay()}><Repeat2 aria-hidden="true" />{replayingInput ? "停止动作数据回放" : "回放动作数据"}</button>
           </div>
-          <section className="take-library"><header><strong>Take 라이브러리</strong><span><button onClick={() => void importTake()}>가져오기</button><button onClick={() => void refreshTakes()}>새로고침</button></span></header>{takes.length === 0 ? <p>가져온 Take가 없습니다. 원본 모션 세션과 각 편집본은 따로 보관됩니다.</p> : takes.map((take) => <article key={take.id}><div><strong>{take.name}</strong><small>{formatDuration(take.durationMs)} · {take.events}개 이벤트{take.parentTakeId ? " · 편집본" : ""}</small></div><span><button onClick={() => { void window.puppetloom.replayTake(take.id).then(() => setReplayingInput(true)).catch((cause) => setSessionMessage({ text: messageOf(cause) })); }}>재생</button><button onClick={() => setTakeEdit({ id: take.id, startSeconds: 0, endSeconds: take.durationMs / 1000, speed: 1, smoothWindow: 1 })}>편집</button></span></article>)}{takeEdit && <div className="take-editor"><strong>비파괴 편집본 만들기</strong><label>시작(초)<input type="number" min="0" step="0.1" value={takeEdit.startSeconds} onChange={(event) => setTakeEdit({ ...takeEdit, startSeconds: Number(event.target.value) })} /></label><label>끝(초)<input type="number" min="0.1" step="0.1" value={takeEdit.endSeconds} onChange={(event) => setTakeEdit({ ...takeEdit, endSeconds: Number(event.target.value) })} /></label><label>속도<select value={takeEdit.speed} onChange={(event) => setTakeEdit({ ...takeEdit, speed: Number(event.target.value) })}><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><label>스무딩 윈도우<input type="number" min="1" max="120" step="1" value={takeEdit.smoothWindow} onChange={(event) => setTakeEdit({ ...takeEdit, smoothWindow: Number(event.target.value) })} /></label><span><button onClick={() => setTakeEdit(undefined)}>취소</button><button className="primary" onClick={() => void saveTakeEdit()}>새 버전 저장</button></span></div>}</section>
+          <section className="take-library"><header><strong>Take 库</strong><span><button onClick={() => void importTake()}>导入</button><button onClick={() => void refreshTakes()}>刷新</button></span></header>{takes.length === 0 ? <p>尚未导入 Take。原始动作会话和每个编辑版都会独立保留。</p> : takes.map((take) => <article key={take.id}><div><strong>{take.name}</strong><small>{formatDuration(take.durationMs)} · {take.events} 个事件{take.parentTakeId ? " · 编辑版" : ""}</small></div><span><button onClick={() => { void window.puppetloom.replayTake(take.id).then(() => setReplayingInput(true)).catch((cause) => setSessionMessage({ text: messageOf(cause) })); }}>回放</button><button onClick={() => setTakeEdit({ id: take.id, startSeconds: 0, endSeconds: take.durationMs / 1000, speed: 1, smoothWindow: 1 })}>编辑</button></span></article>)}{takeEdit && <div className="take-editor"><strong>创建非破坏性编辑版</strong><label>开始（秒）<input type="number" min="0" step="0.1" value={takeEdit.startSeconds} onChange={(event) => setTakeEdit({ ...takeEdit, startSeconds: Number(event.target.value) })} /></label><label>结束（秒）<input type="number" min="0.1" step="0.1" value={takeEdit.endSeconds} onChange={(event) => setTakeEdit({ ...takeEdit, endSeconds: Number(event.target.value) })} /></label><label>速度<select value={takeEdit.speed} onChange={(event) => setTakeEdit({ ...takeEdit, speed: Number(event.target.value) })}><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><label>平滑窗口<input type="number" min="1" max="120" step="1" value={takeEdit.smoothWindow} onChange={(event) => setTakeEdit({ ...takeEdit, smoothWindow: Number(event.target.value) })} /></label><span><button onClick={() => setTakeEdit(undefined)}>取消</button><button className="primary" onClick={() => void saveTakeEdit()}>保存新版本</button></span></div>}</section>
         </details>
       </aside>}
-      {recordingPreview && <aside className="recording-preview" aria-label="영상 녹화 미리보기"><div><strong>방금 저장한 영상</strong><button aria-label="영상 녹화 미리보기 닫기" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="영상 녹화 미리보기" controls src={recordingPreview.url} />{recordingPreview.note && <p>{recordingPreview.note}</p>}<button className="with-icon" onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}><FolderOpen aria-hidden="true" />폴더에서 보기</button></aside>}
+      {recordingPreview && <aside className="recording-preview" aria-label="视频录制预览"><div><strong>刚刚保存的视频</strong><button aria-label="关闭视频录制预览" onClick={() => setRecordingPreview(undefined)}><X aria-hidden="true" /></button></div><video aria-label="视频录制预览" controls src={recordingPreview.url} />{recordingPreview.note && <p>{recordingPreview.note}</p>}<button className="with-icon" onClick={() => void window.puppetloom.revealPath(recordingPreview.output)}><FolderOpen aria-hidden="true" />在文件夹中显示</button></aside>}
       <nav className="viewer-controls" aria-label={t("viewerControls")}>
         <button className="icon-only" aria-label={t("shrinkViewer")} onClick={() => act("smaller")} title={t("shrinkViewer")}><Minus aria-hidden="true" /></button>
         <button className="icon-only" aria-label={t("enlargeViewer")} onClick={() => act("larger")} title={t("enlargeViewer")}><Plus aria-hidden="true" /></button>
         <button className={`icon-only ${state.paused ? "is-active" : ""}`} aria-label={state.paused ? t("resumePlayback") : t("pause")} aria-pressed={state.paused} onClick={() => act("pause")} title={state.paused ? t("resumePlayback") : t("pause")}>{state.paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}</button>
         <button className={`icon-only ${state.alwaysOnTop ? "is-active" : ""}`} aria-label={state.alwaysOnTop ? t("unpin") : t("pinTop")} aria-pressed={state.alwaysOnTop} onClick={() => act("top")} title={state.alwaysOnTop ? t("unpin") : t("pinTop")}><Pin aria-hidden="true" /></button>
-        <button className={`icon-only ${state.mouseTracking ? "is-active" : ""}`} aria-label={state.mouseTracking ? "자율 관찰로 전환" : "마우스 따라가기로 전환"} aria-pressed={state.mouseTracking} onClick={() => act("pointer-tracking")} title={state.mouseTracking ? "현재 마우스를 따라갑니다. 클릭하면 자율 관찰로 전환" : "현재 자율 관찰 중입니다. 클릭하면 마우스 따라가기로 전환"}>{state.mouseTracking ? <MousePointer2 aria-hidden="true" /> : <Sparkles aria-hidden="true" />}</button>
-        <button className={`icon-only ${cameraInput.current ? "is-active" : ""}`} aria-label={cameraInput.current ? "웹캠 얼굴 추적 끄기" : "웹캠 얼굴 추적 켜기"} aria-pressed={Boolean(cameraInput.current)} onClick={() => void toggleCamera()} title={cameraStatus.message}>{cameraInput.current ? <Camera aria-hidden="true" /> : <CameraOff aria-hidden="true" />}</button>
-        <button className={`icon-only ${microphoneInput.current ? "is-active" : ""}`} aria-label={microphoneInput.current ? "마이크 립싱크 끄기" : "마이크 립싱크 켜기"} aria-pressed={Boolean(microphoneInput.current)} onClick={() => void toggleMicrophone()} title={microphoneStatus.message}>{microphoneInput.current ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}</button>
-        <button disabled={recordingFinalizing} className={`icon-only ${recordingPerformance || recordingInput ? "is-recording" : showRecordingSettings || replayingInput || recordingFinalizing ? "is-active" : ""}`} aria-label={recordingFinalizing ? "영상 파일을 마무리하는 중" : recordingPerformance ? "중지하고 영상 저장" : "영상 녹화"} aria-pressed={recordingPerformance} onClick={() => void togglePerformanceRecording()} title={recordingFinalizing ? "영상 파일을 마무리하는 중입니다. 잠시만 기다리세요" : recordingPerformance ? "현재 캐릭터 영상을 중지하고 저장" : recordingInput ? "모션 데이터를 녹화 중입니다. 클릭하면 녹화 패널이 열립니다" : replayingInput ? "모션 데이터를 재생 중입니다. 클릭하면 녹화 패널이 열립니다" : "배경, 해상도, 프레임레이트, 길이, 오디오와 선택적 모션 데이터 설정"}>{recordingPerformance ? <Square aria-hidden="true" /> : <Video aria-hidden="true" />}</button>
-        <button className={`icon-only ${showActions ? "is-active" : ""}`} aria-label={showActions ? "표정·동작 패널 닫기" : "표정·동작 패널 열기"} aria-pressed={showActions} onClick={() => { setShowRecordingSettings(false); setShowActions((value) => !value); }} title={Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) ? "표정과 동작. 단축키가 사용 중이면 패널 버튼을 클릭하세요" : "표정과 동작. Ctrl+Shift+1…8로 빠르게 트리거"}><WandSparkles aria-hidden="true" /></button>
-        <button className={`icon-only ${state.clickThrough ? "is-active" : ""}`} disabled={!state.clickThrough && capabilities.hotkeys["CommandOrControl+Shift+P"] === false} aria-label={state.clickThrough ? "마우스 관통 끄기" : "마우스 관통 켜기"} aria-pressed={state.clickThrough} onClick={() => act("click-through")} title={state.clickThrough ? "마우스 관통 끄기" : capabilities.hotkeys["CommandOrControl+Shift+P"] ? "마우스 관통 켜기. Ctrl+Shift+P로 마우스를 되돌리세요" : "복원 단축키가 다른 프로그램에 사용 중이어서 마우스 관통이 비활성화됨"}>{state.clickThrough ? <PointerOff aria-hidden="true" /> : <MousePointerClick aria-hidden="true" />}</button>
-        <button className="icon-only viewer-close" aria-label="캐릭터 창 닫기" onClick={() => act("close")} title="캐릭터 창 닫기"><X aria-hidden="true" /></button>
+        <button className={`icon-only ${state.mouseTracking ? "is-active" : ""}`} aria-label={state.mouseTracking ? "切换为自主观察" : "切换为鼠标跟随"} aria-pressed={state.mouseTracking} onClick={() => act("pointer-tracking")} title={state.mouseTracking ? "当前跟随鼠标；点击切换为自主观察" : "当前自主观察；点击切换为鼠标跟随"}>{state.mouseTracking ? <MousePointer2 aria-hidden="true" /> : <Sparkles aria-hidden="true" />}</button>
+        <button className={`icon-only ${cameraInput.current ? "is-active" : ""}`} aria-label={cameraInput.current ? "关闭摄像头面捕" : "开启摄像头面捕"} aria-pressed={Boolean(cameraInput.current)} onClick={() => void toggleCamera()} title={cameraStatus.message}>{cameraInput.current ? <Camera aria-hidden="true" /> : <CameraOff aria-hidden="true" />}</button>
+        <button className={`icon-only ${microphoneInput.current ? "is-active" : ""}`} aria-label={microphoneInput.current ? "关闭麦克风口型" : "开启麦克风口型"} aria-pressed={Boolean(microphoneInput.current)} onClick={() => void toggleMicrophone()} title={microphoneStatus.message}>{microphoneInput.current ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}</button>
+        <button disabled={recordingFinalizing} className={`icon-only ${recordingPerformance || recordingInput ? "is-recording" : showRecordingSettings || replayingInput || recordingFinalizing ? "is-active" : ""}`} aria-label={recordingFinalizing ? "正在完成视频文件" : recordingPerformance ? "停止并保存视频" : "录制视频"} aria-pressed={recordingPerformance} onClick={() => void togglePerformanceRecording()} title={recordingFinalizing ? "正在完成视频文件，请稍候" : recordingPerformance ? "停止并保存当前角色视频" : recordingInput ? "动作数据正在录制；点击打开录制面板" : replayingInput ? "动作数据正在回放；点击打开录制面板" : "设置背景、分辨率、帧率、时长、音轨与可选动作数据"}>{recordingPerformance ? <Square aria-hidden="true" /> : <Video aria-hidden="true" />}</button>
+        <button className={`icon-only ${showActions ? "is-active" : ""}`} aria-label={showActions ? "关闭表情动作面板" : "打开表情动作面板"} aria-pressed={showActions} onClick={() => { setShowRecordingSettings(false); setShowActions((value) => !value); }} title={Object.entries(capabilities.hotkeys).some(([key, available]) => key !== "CommandOrControl+Shift+P" && !available) ? "表情与动作；快捷键被占用时请点击面板按钮" : "表情与动作；Ctrl+Shift+1…8 可快捷触发"}><WandSparkles aria-hidden="true" /></button>
+        <button className={`icon-only ${state.clickThrough ? "is-active" : ""}`} disabled={!state.clickThrough && capabilities.hotkeys["CommandOrControl+Shift+P"] === false} aria-label={state.clickThrough ? "关闭鼠标穿透" : "开启鼠标穿透"} aria-pressed={state.clickThrough} onClick={() => act("click-through")} title={state.clickThrough ? "关闭鼠标穿透" : capabilities.hotkeys["CommandOrControl+Shift+P"] ? "开启鼠标穿透；按 Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被其它软件占用，因此已停用鼠标穿透"}>{state.clickThrough ? <PointerOff aria-hidden="true" /> : <MousePointerClick aria-hidden="true" />}</button>
+        <button className="icon-only viewer-close" aria-label="关闭角色窗口" onClick={() => act("close")} title="关闭角色窗口"><X aria-hidden="true" /></button>
       </nav>
-      {state.clickThrough && <div className="shortcut-hint">{capabilities.hotkeys["CommandOrControl+Shift+P"] ? "Ctrl+Shift+P로 마우스 복원" : "복원 단축키가 사용 중입니다. 만들기 페이지의 원격 제어에서 마우스 관통을 끄세요"}</div>}
+      {state.clickThrough && <div className="shortcut-hint">{capabilities.hotkeys["CommandOrControl+Shift+P"] ? "Ctrl+Shift+P 恢复鼠标" : "恢复快捷键被占用；请从创建页的远程控制关闭鼠标穿透"}</div>}
       <div className="viewer-status-stack">
-      {spoutStatus?.active && <div className="spout-operation" role="status"><RadioTower aria-hidden="true" /><strong>Spout2 출력 중</strong><small>{spoutStatus.senderName} · {spoutStatus.width}×{spoutStatus.height}@{spoutStatus.fps}</small></div>}
-      {recordingClock && <div className="recording-operation" role="timer" aria-live="off"><span className="recording-dot" aria-hidden="true" /><strong>{recordingClock.kind === "video" ? "영상 녹화 중" : "모션 데이터 녹화 중"}</strong><time>{formatDuration(recordingElapsedMs)}</time>{recordingClock.targetDurationMs !== undefined && <small>남은 {formatDuration(Math.max(0, recordingClock.targetDurationMs - recordingElapsedMs))}</small>}</div>}
-      {recordingFinalizing && <div className="recording-operation is-finalizing" role="status"><strong>영상 파일을 마무리하는 중…</strong><small>마지막 데이터를 쓰고 미리보기를 준비 중입니다. 창을 닫지 마세요.</small></div>}
-      {replayingInput && <div className="replay-operation" role="status"><Repeat2 aria-hidden="true" /><strong>모션 데이터를 재생하는 중</strong><small>실시간 입력이 잠시 격리됨</small></div>}
-      {(cameraStatus.state === "starting" || cameraStatus.state === "calibrating" || cameraStatus.state === "lost" || cameraStatus.state === "error") && <div className={`input-status ${cameraStatus.state === "error" || cameraStatus.state === "lost" ? "is-error" : ""}`}><span>{cameraStatus.message}</span>{(cameraStatus.state === "error" || cameraStatus.state === "lost") && <button className="icon-only" aria-label="웹캠 알림 닫기" title="웹캠 알림 닫기" onClick={() => void dismissInputStatus("camera")}><X aria-hidden="true" /></button>}</div>}
-      {(microphoneStatus.state === "starting" || microphoneStatus.state === "error") && <div className={`input-status microphone-status ${microphoneStatus.state === "error" ? "is-error" : ""}`}><span>{microphoneStatus.message}</span>{microphoneStatus.state === "error" && <button className="icon-only" aria-label="마이크 알림 닫기" title="마이크 알림 닫기" onClick={() => void dismissInputStatus("microphone")}><X aria-hidden="true" /></button>}</div>}
+      {spoutStatus?.active && <div className="spout-operation" role="status"><RadioTower aria-hidden="true" /><strong>Spout2 输出中</strong><small>{spoutStatus.senderName} · {spoutStatus.width}×{spoutStatus.height}@{spoutStatus.fps}</small></div>}
+      {recordingClock && <div className="recording-operation" role="timer" aria-live="off"><span className="recording-dot" aria-hidden="true" /><strong>{recordingClock.kind === "video" ? "视频录制中" : "动作数据录制中"}</strong><time>{formatDuration(recordingElapsedMs)}</time>{recordingClock.targetDurationMs !== undefined && <small>剩余 {formatDuration(Math.max(0, recordingClock.targetDurationMs - recordingElapsedMs))}</small>}</div>}
+      {recordingFinalizing && <div className="recording-operation is-finalizing" role="status"><strong>正在完成视频文件…</strong><small>正在写入最后的数据并准备预览，请勿关闭窗口。</small></div>}
+      {replayingInput && <div className="replay-operation" role="status"><Repeat2 aria-hidden="true" /><strong>正在回放动作数据</strong><small>实时输入已暂时隔离</small></div>}
+      {(cameraStatus.state === "starting" || cameraStatus.state === "calibrating" || cameraStatus.state === "lost" || cameraStatus.state === "error") && <div className={`input-status ${cameraStatus.state === "error" || cameraStatus.state === "lost" ? "is-error" : ""}`}><span>{cameraStatus.message}</span>{(cameraStatus.state === "error" || cameraStatus.state === "lost") && <button className="icon-only" aria-label="关闭摄像头提示" title="关闭摄像头提示" onClick={() => void dismissInputStatus("camera")}><X aria-hidden="true" /></button>}</div>}
+      {(microphoneStatus.state === "starting" || microphoneStatus.state === "error") && <div className={`input-status microphone-status ${microphoneStatus.state === "error" ? "is-error" : ""}`}><span>{microphoneStatus.message}</span>{microphoneStatus.state === "error" && <button className="icon-only" aria-label="关闭麦克风提示" title="关闭麦克风提示" onClick={() => void dismissInputStatus("microphone")}><X aria-hidden="true" /></button>}</div>}
       {transientMessage && <div className="viewer-toast" role="status">{transientMessage}</div>}
-      {sessionMessage && <div className="session-status" role="status"><strong>{sessionMessage.text}</strong>{sessionMessage.path && <code title={sessionMessage.path}>{sessionMessage.path}</code>}<span>{sessionMessage.path && <><button className="with-icon" onClick={() => void window.puppetloom.revealPath(sessionMessage.path!)}><FolderOpen aria-hidden="true" />폴더에서 보기</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(sessionMessage.path!)}><ClipboardCopy aria-hidden="true" />경로 복사</button></>}<button className="icon-only" aria-label="알림 닫기" title="알림 닫기" onClick={() => setSessionMessage(undefined)}><X aria-hidden="true" /></button></span></div>}
+      {sessionMessage && <div className="session-status" role="status"><strong>{sessionMessage.text}</strong>{sessionMessage.path && <code title={sessionMessage.path}>{sessionMessage.path}</code>}<span>{sessionMessage.path && <><button className="with-icon" onClick={() => void window.puppetloom.revealPath(sessionMessage.path!)}><FolderOpen aria-hidden="true" />在文件夹中显示</button><button className="with-icon" onClick={() => void window.puppetloom.copyText(sessionMessage.path!)}><ClipboardCopy aria-hidden="true" />复制路径</button></>}<button className="icon-only" aria-label="关闭提示" title="关闭提示" onClick={() => setSessionMessage(undefined)}><X aria-hidden="true" /></button></span></div>}
       </div>
       {error && <div className="viewer-error">{error}</div>}
     </main>
@@ -908,7 +908,7 @@ function Creator({ onEdit }: { onEdit: (projectDirectory: string) => void }): Re
               <button className="primary with-icon" onClick={() => onEdit(projectDirectory)}><ExternalLink aria-hidden="true" />{t("openEditor")}</button>
               <button className="primary with-icon" onClick={() => void launch()}><Play aria-hidden="true" />{t("openViewer")}</button>
               <details className="export-center"><summary><FolderOutput aria-hidden="true" />{t("exportCenter")}</summary><p>{t("exportCenterHint")}</p><div><button disabled={exportBusy} onClick={() => void exportProject("portable")}>{t("portableProject")}</button><button disabled={exportBusy} onClick={() => void exportProject("web")}>{t("webObs")}</button></div>
-                <label>{t("cubismEditorVersion")} <select disabled={exportBusy} value={cubismEditorVersion} onChange={event=>setCubismEditorVersion(event.target.value as '5.3'|'5.4')}><option value="5.3">Cubism 5.3.01 이상</option><option value="5.4">Cubism 5.4</option></select></label>
+                <label>{t("cubismEditorVersion")} <select disabled={exportBusy} value={cubismEditorVersion} onChange={event=>setCubismEditorVersion(event.target.value as '5.3'|'5.4')}><option value="5.3">Cubism 5.3.01+</option><option value="5.4">Cubism 5.4</option></select></label>
                 <label>{t("cubismRuntimeVersion")} <select disabled={exportBusy} value={cubismRuntimeVersion} onChange={event=>setCubismRuntimeVersion(event.target.value as '4.2'|'5.0'|'5.3')}><option value="4.2">SDK 4.2</option><option value="5.0">SDK 5.0</option><option value="5.3">SDK 5.3</option></select></label>
                 <p>{t("cubismExportHint")}</p><button disabled={exportBusy} onClick={() => void exportProject("cubism")}>{exportBusy ? t("exporting") : t("exportCubism")}</button>
               </details>

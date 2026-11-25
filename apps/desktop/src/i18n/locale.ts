@@ -2,6 +2,7 @@ export const APP_LOCALES = ["ko", "zh", "en", "ja"] as const;
 
 export type AppLocale = (typeof APP_LOCALES)[number];
 
+export const DEFAULT_LOCALE: AppLocale = "zh";
 export const LOCALE_STORAGE_KEY = "puppetloom.locale";
 export const LOCALE_CHANGE_EVENT = "puppetloom:locale-change";
 
@@ -31,9 +32,9 @@ export function isAppLocale(value: string | null | undefined): value is AppLocal
 }
 
 export function readStoredLocale(): AppLocale {
-  if (typeof window === "undefined") return "ko";
+  if (typeof window === "undefined") return DEFAULT_LOCALE;
   const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-  return isAppLocale(stored) ? stored : "ko";
+  return isAppLocale(stored) ? stored : DEFAULT_LOCALE;
 }
 
 export function persistLocale(locale: AppLocale): void {

@@ -412,14 +412,14 @@ export interface InputStatusCopy {
 }
 
 const defaultInputCopy: InputStatusCopy = {
-  cameraStarting: "웹캠을 시작하고 얼굴 추적 모델을 불러오는 중…",
-  cameraCalibrating: "눈을 자연스럽게 뜨고 입을 다문 채 웹캠을 보세요. 캘리브레이션 중…",
-  cameraCalibrated: "웹캠 얼굴 추적이 캘리브레이션됨",
-  cameraLost: "얼굴을 잠시 감지하지 못해 캐릭터가 자율 동작으로 돌아감",
-  cameraStopped: "웹캠 얼굴 추적이 꺼짐",
-  microphoneStarting: "마이크를 시작하는 중…",
-  microphoneActive: "마이크 립싱크가 켜짐",
-  microphoneStopped: "마이크 립싱크가 꺼짐"
+  cameraStarting: "正在启动摄像头并加载面捕模型…",
+  cameraCalibrating: "请自然睁眼、闭口看向摄像头，正在校准…",
+  cameraCalibrated: "摄像头面捕已校准",
+  cameraLost: "暂时没有检测到面部，角色已回到自主动作",
+  cameraStopped: "摄像头面捕已关闭",
+  microphoneStarting: "正在启动麦克风…",
+  microphoneActive: "麦克风口型已启用",
+  microphoneStopped: "麦克风口型已关闭"
 };
 
 export async function startFaceInput(
