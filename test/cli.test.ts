@@ -273,6 +273,44 @@ describe("CLI contract", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ valid: true, rigLevel: "semantic" });
   });
 
+  it("keeps verify JSON diagnostics and exit codes compatible under a Korean locale", async () => {
+    const project = JSON.parse(await readFile(resolve(cliProject, "puppetloom.json"), "utf8")) as {
+      layers: Array<{ texture: string }>;
+      source: { psdPath: string };
+    };
+    const texturePath = resolve(cliProject, project.layers[0]!.texture);
+    const sourcePath = resolve(cliProject, project.source.psdPath);
+    const texture = await readFile(texturePath);
+    const source = await readFile(sourcePath);
+    try {
+      await writeFile(texturePath, "invalid-png");
+      await writeFile(sourcePath, "changed-source");
+      const result = await cli(["verify", "--project", cliProject, "--json"], { LANG: "ko_KR.UTF-8", LC_ALL: "ko_KR.UTF-8" });
+      expect(result.code).toBe(3);
+      expect(result.stderr).toBe("");
+      const verification = JSON.parse(result.stdout);
+      expect(Object.keys(verification).sort()).toEqual([
+        "valid", "project", "rigLevel", "textureCount", "missingTextures", "invalidTextures",
+        "sourceIssues", "historyIssues", "evidenceIssues", "quality", "warnings"
+      ].sort());
+      expect(verification).toMatchObject({
+        valid: false,
+        rigLevel: "semantic",
+        missingTextures: [],
+        invalidTextures: [{ path: project.layers[0]!.texture, reason: "纹理无法解码。" }],
+        sourceIssues: ["PSD 内容哈希与项目记录不一致。"],
+        historyIssues: [],
+        evidenceIssues: []
+      });
+      expect(verification.warnings).toEqual(expect.arrayContaining([
+        "1 个纹理无法用于渲染。", "PSD 内容哈希与项目记录不一致。"
+      ]));
+    } finally {
+      await writeFile(texturePath, texture);
+      await writeFile(sourcePath, source);
+    }
+  });
+
   it("describes, calibrates, renders and compares through Agent-facing commands", async () => {
     const described = await cli(["describe", "--project", cliProject, "--json"]);
     expect(described.code).toBe(0);

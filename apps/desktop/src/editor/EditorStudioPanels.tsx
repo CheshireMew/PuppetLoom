@@ -2,16 +2,18 @@ import type React from "react";
 import type { CalibrationSessionSummary, ModelPhysics, MotionState, PuppetLoomProject, SecondaryMotionPart } from "@puppetloom/core";
 import { isModelBehaviorAvailable, isModelExpressionAvailable, isMotionSemanticAvailable } from "@puppetloom/core/browser";
 import { Activity, ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpDown, ArrowUpLeft, ArrowUpRight, Ban, Boxes, CheckCircle2, CircleAlert, CircleMinus, Drama, ExternalLink, Eye, EyeOff, Focus, Grid2X2, Heart, LayoutDashboard, Maximize2, Minimize2, Moon, Move3d, Pause, Play, Repeat2, RotateCcw, RotateCw, ScanEye, SlidersHorizontal, Smile, Sparkles, Sun, TriangleAlert, Waves, Workflow, type LucideIcon } from "lucide-react";
+import { useLocale } from "../i18n/index.js";
+import type { MessageKey } from "../i18n/index.js";
 
 export type StudioSection = "overview" | "rig" | "parameters" | "dynamics" | "preview";
 export type PreviewBackground = "checker" | "dark" | "light";
 
-const studioSections: Array<{ id: StudioSection; index: string; label: string; detail: string; icon: LucideIcon }> = [
-  { id: "overview", index: "01", label: "项目总览", detail: "完成度与下一步", icon: LayoutDashboard },
-  { id: "rig", index: "02", label: "结构与网格", detail: "层级、轴心和权重", icon: Boxes },
-  { id: "parameters", index: "03", label: "参数与姿态", detail: "直接检查可动范围", icon: SlidersHorizontal },
-  { id: "dynamics", index: "04", label: "表情与物理", detail: "表情、行为和次级运动", icon: Activity },
-  { id: "preview", index: "05", label: "预览与验收", detail: "干净画面与版本证据", icon: ScanEye }
+const studioSections: Array<{ id: StudioSection; index: string; labelKey: MessageKey; detailKey: MessageKey; icon: LucideIcon }> = [
+  { id: "overview", index: "01", labelKey: "studioOverview", detailKey: "studioOverviewDetail", icon: LayoutDashboard },
+  { id: "rig", index: "02", labelKey: "studioRig", detailKey: "studioRigDetail", icon: Boxes },
+  { id: "parameters", index: "03", labelKey: "studioParameters", detailKey: "studioParametersDetail", icon: SlidersHorizontal },
+  { id: "dynamics", index: "04", labelKey: "studioDynamics", detailKey: "studioDynamicsDetail", icon: Activity },
+  { id: "preview", index: "05", labelKey: "studioPreview", detailKey: "studioPreviewDetail", icon: ScanEye }
 ];
 
 const semanticLabels: Record<string, string> = {
@@ -85,9 +87,10 @@ function systemStatus(count: number, readyLabel = "已生成"): { tone: string; 
 }
 
 export function StudioNavigation({ section, onSection }: { section: StudioSection; onSection: (section: StudioSection) => void }): React.JSX.Element {
-  return <nav className="studio-navigation" aria-label="编辑工作区">
-    {studioSections.map((item) => { const Icon = item.icon; return <button key={item.id} aria-label={`${item.index} ${item.label}：${item.detail}`} className={section === item.id ? "active" : ""} onClick={() => onSection(item.id)}>
-      <Icon aria-hidden="true" /><span><strong>{item.label}</strong><small>{item.detail}</small></span>
+  const { t } = useLocale();
+  return <nav className="studio-navigation" aria-label={t("studioNav")}>
+    {studioSections.map((item) => { const Icon = item.icon; const label = t(item.labelKey); const detail = t(item.detailKey); return <button key={item.id} aria-label={`${item.index} ${label}: ${detail}`} className={section === item.id ? "active" : ""} onClick={() => onSection(item.id)}>
+      <Icon aria-hidden="true" /><span><strong>{label}</strong><small>{detail}</small></span>
     </button>; })}
   </nav>;
 }

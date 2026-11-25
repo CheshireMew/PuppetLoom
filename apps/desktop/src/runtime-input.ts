@@ -400,12 +400,35 @@ function blendshapes(result: { faceBlendshapes?: Array<{ categories: Array<{ cat
   return Object.fromEntries((result.faceBlendshapes?.[0]?.categories ?? []).flatMap((category) => category.categoryName ? [[category.categoryName, category.score] as const] : []));
 }
 
+export interface InputStatusCopy {
+  cameraStarting: string;
+  cameraCalibrating: string;
+  cameraCalibrated: string;
+  cameraLost: string;
+  cameraStopped: string;
+  microphoneStarting: string;
+  microphoneActive: string;
+  microphoneStopped: string;
+}
+
+const defaultInputCopy: InputStatusCopy = {
+  cameraStarting: "正在启动摄像头并加载面捕模型…",
+  cameraCalibrating: "请自然睁眼、闭口看向摄像头，正在校准…",
+  cameraCalibrated: "摄像头面捕已校准",
+  cameraLost: "暂时没有检测到面部，角色已回到自主动作",
+  cameraStopped: "摄像头面捕已关闭",
+  microphoneStarting: "正在启动麦克风…",
+  microphoneActive: "麦克风口型已启用",
+  microphoneStopped: "麦克风口型已关闭"
+};
+
 export async function startFaceInput(
   assets: { wasmBaseUrl: string; faceLandmarkerModelUrl: string; poseLandmarkerModelUrl?: string; handLandmarkerModelUrl?: string },
   onMotion: (motion: RuntimeMotionInput) => void,
-  onStatus: (status: InputAdapterStatus) => void
+  onStatus: (status: InputAdapterStatus) => void,
+  copy: InputStatusCopy = defaultInputCopy
 ): Promise<RuntimeInputAdapter> {
-  onStatus({ state: "starting", message: "正在启动摄像头并加载面捕模型…" });
+  onStatus({ state: "starting", message: copy.cameraStarting });
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
   const video = document.createElement("video");
   video.muted = true;
@@ -472,10 +495,10 @@ export async function startFaceInput(
         });
         const upperBody = upperBodyMapper.sample(pose ? { poseLandmarks: pose, hands } : undefined);
         onMotion({ ...motion, ...(upperBody ?? {}) });
-        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? "摄像头面捕已校准" : "请自然睁眼、闭口看向摄像头，正在校准…" });
+        if (!hadFace || mapper.calibrated) onStatus({ state: mapper.calibrated ? "active" : "calibrating", message: mapper.calibrated ? copy.cameraCalibrated : copy.cameraCalibrating });
         hadFace = true;
       } else if (hadFace) {
-        onStatus({ state: "lost", message: "暂时没有检测到面部，角色已回到自主动作" });
+        onStatus({ state: "lost", message: copy.cameraLost });
         hadFace = false;
       }
     }
@@ -492,16 +515,17 @@ export async function startFaceInput(
       handLandmarker?.close();
       stream.getTracks().forEach((track) => track.stop());
       video.srcObject = null;
-      onStatus({ state: "stopped", message: "摄像头面捕已关闭" });
+      onStatus({ state: "stopped", message: copy.cameraStopped });
     }
   };
 }
 
 export async function startMicrophoneInput(
   onMotion: (motion: RuntimeMotionInput) => void,
-  onStatus: (status: InputAdapterStatus) => void
+  onStatus: (status: InputAdapterStatus) => void,
+  copy: InputStatusCopy = defaultInputCopy
 ): Promise<RuntimeInputAdapter> {
-  onStatus({ state: "starting", message: "正在启动麦克风…" });
+  onStatus({ state: "starting", message: copy.microphoneStarting });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }, video: false });
   let context: AudioContext | undefined;
   let source: MediaStreamAudioSourceNode | undefined;
@@ -532,7 +556,7 @@ export async function startMicrophoneInput(
     previous = now;
     frame = requestAnimationFrame(tick);
   };
-  onStatus({ state: "active", message: "麦克风口型已启用" });
+  onStatus({ state: "active", message: copy.microphoneActive });
   frame = requestAnimationFrame(tick);
   return {
     mediaStream: stream,
@@ -543,7 +567,7 @@ export async function startMicrophoneInput(
       analyser?.disconnect();
       stream.getTracks().forEach((track) => track.stop());
       await context?.close();
-      onStatus({ state: "stopped", message: "麦克风口型已关闭" });
+      onStatus({ state: "stopped", message: copy.microphoneStopped });
     }
   };
 }

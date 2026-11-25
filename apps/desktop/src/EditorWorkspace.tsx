@@ -45,8 +45,10 @@ import {
 } from "./editor/EditorStudioPanels.js";
 import { useEditorDraftPersistence } from "./editor/useEditorDraftPersistence.js";
 import { useEditorValidation } from "./editor/useEditorValidation.js";
+import { useLocale } from "./i18n/index.js";
 
 export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory: string; onBack: () => void }): React.JSX.Element {
+  const { t } = useLocale();
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<PuppetRenderer | undefined>(undefined);
   const operationLock = useRef(false);
@@ -492,7 +494,7 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
     }
   }
 
-  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />返回</button><p>{error || "正在加载编辑器…"}</p></main>;
+  if (!workspace || !project) return <main className="editor-loading"><button className="with-icon" onClick={onBack}><ArrowLeft aria-hidden="true" />{t("editorBack")}</button><p>{error || t("editorLoading")}</p></main>;
 
   const sessions = [...workspace.sessions].reverse();
   const selectedTuning = { amplitude: 1, response: 0.5, stability: 0.5, ...(project.runtime.secondaryMotionTuning?.[secondaryPart] ?? {}) };
@@ -511,15 +513,15 @@ export function EditorWorkspace({ projectDirectory, onBack }: { projectDirectory
       {(error || notice) && <div className={`editor-feedback ${error ? "is-error" : "is-notice"}`} role={error ? "alert" : "status"}><span>{error || notice}</span><button className="icon-only" aria-label="关闭提示" title="关闭提示" onClick={() => { setError(""); setNotice(""); }}><X aria-hidden="true" /></button></div>}
       {interactionLocked && <div className="editor-operation-shield" role="status" aria-live="polite"><div className="spinner"/><strong>{meshUpgrading ? "正在生成并验证轮廓网格…" : "正在完成校准事务…"}</strong><span>完成前编辑已暂时锁定，当前草稿不会被覆盖。</span></div>}
       <header className="editor-header">
-        <button className="icon-only editor-back" aria-label="返回主页" title="返回主页" disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
-        <div><h1>{project.name}</h1><p>版本 {workspace.calibration.revision} · {project.rigLevel === "semantic" ? "完整语义绑定" : project.rigLevel === "grouped" ? "分组绑定" : "基础绑定"} · {project.layers.length} 层 · 已保存安全系数 {workspace.project.quality.safetyScale.toFixed(2)}{draftSafetyChecks.length ? ` · 草稿${draftSafetyPassed ? "通过全姿态检查" : "存在不安全姿态"}` : ""}</p></div>
+        <button className="icon-only editor-back" aria-label={t("goHome")} title={t("goHome")} disabled={interactionLocked} onClick={() => void leaveEditor()}><ArrowLeft aria-hidden="true" /></button>
+        <div><h1>{project.name}</h1><p>{t("revisionMeta", { revision: workspace.calibration.revision, rig: project.rigLevel === "semantic" ? t("rigSemantic") : project.rigLevel === "grouped" ? t("rigGrouped") : t("rigBasic"), layers: project.layers.length, safety: workspace.project.quality.safetyScale.toFixed(2) })}{draftSafetyChecks.length ? (draftSafetyPassed ? t("draftAllPassed") : t("draftUnsafe")) : ""}</p></div>
         <div className="editor-history-actions">
-          <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? "正在自动保存" : draftStatus === "saved" ? "草稿已保存" : draftStatus === "error" ? "草稿保存失败" : draftStatus === "waiting" ? "等待自动保存" : ""}</span>
-          <button className="icon-only" aria-label="撤销" aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title="撤销（Ctrl+Z）"><Undo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="重做" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title="重做（Ctrl+Y / Ctrl+Shift+Z）"><Redo2 aria-hidden="true" /></button>
-          <button className="icon-only" aria-label="恢复全部自动绑定" title={canRestoreAll ? "恢复全部自动绑定" : "当前没有已保存的人工校准可恢复"} onClick={() => void restoreRevision(0, "恢复全部自动绑定")} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
-          <button className="header-save with-icon" aria-label="保存更改" disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "正在验证…" : "保存"}</button>
-          <button className="with-icon" aria-label="运行角色窗口" disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />运行</button>
+          <span className={`draft-state ${draftStatus}`}>{draftStatus === "saving" ? t("autoSaving") : draftStatus === "saved" ? t("draftSaved") : draftStatus === "error" ? t("draftSaveFailed") : draftStatus === "waiting" ? t("autoSaveWaiting") : ""}</span>
+          <button className="icon-only" aria-label={t("undo")} aria-keyshortcuts="Control+Z Meta+Z" disabled={interactionLocked || undoStack.length === 0} onClick={undo} title={t("undoShortcut")}><Undo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label={t("redo")} aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" disabled={interactionLocked || redoStack.length === 0} onClick={redo} title={t("redoShortcut")}><Redo2 aria-hidden="true" /></button>
+          <button className="icon-only" aria-label={t("restoreAllBinding")} title={canRestoreAll ? t("restoreAllBinding") : t("noManualCalibration")} onClick={() => void restoreRevision(0, t("restoreAllBinding"))} disabled={interactionLocked || hasPending || !canRestoreAll}><RotateCcw aria-hidden="true" /></button>
+          <button className="header-save with-icon" aria-label={t("saveChanges")} disabled={!hasPending || interactionLocked} onClick={() => void save()}><Save aria-hidden="true" />{busy ? t("validating") : t("save")}</button>
+          <button className="with-icon" aria-label={t("launchCharacter")} disabled={interactionLocked} onClick={() => void launchViewer()}><ExternalLink aria-hidden="true" />{t("launch")}</button>
         </div>
       </header>
 
